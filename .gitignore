@@ -1,0 +1,24 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+.env
+
+# Angular
+node_modules/
+dist/
+.angular/
+
+# IDE
+.vscode/
+
+# OS
+Thumbs.db
+
+# 敏感配置
+config.py
+*.key.json
+
+# 上传的测试文件
+auditlens-backend/uploads/*
+!auditlens-backend/uploads/.gitkeep

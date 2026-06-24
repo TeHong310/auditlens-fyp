@@ -1,0 +1,204 @@
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <h1 class="page-title">Auditor Home</h1>
+      <p class="page-subtitle">Review OCR-matched records, investigate exceptions, and close audit checks</p>
+    </div>
+    <div class="header-right">
+      <button class="btn-export">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+          <path d="M2 12v2h12v-2M8 2v8M5 7l3 3 3-3" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        Export
+      </button>
+    </div>
+  </div>
+
+  <!-- Stats Cards -->
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-dot blue"></span>
+        <span class="stat-label">Records Checked</span>
+        <span class="stat-tag">Daily</span>
+      </div>
+      <p class="stat-value">{{ totalRecords }}</p>
+      <p class="stat-sub">Total in queue</p>
+      <div class="stat-bar"><div class="stat-bar-fill blue" [style.width]="'100%'"></div></div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-dot green"></span>
+        <span class="stat-label">Full Match</span>
+        <span class="stat-tag safe">Safe</span>
+      </div>
+      <p class="stat-value">{{ fullMatch }}</p>
+      <p class="stat-sub">{{ totalRecords > 0 ? ((fullMatch / totalRecords) * 100).toFixed(1) : 0 }}% of checks</p>
+      <div class="stat-bar"><div class="stat-bar-fill green"
+        [style.width]="totalRecords > 0 ? ((fullMatch/totalRecords)*100) + '%' : '0%'"></div></div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-dot orange"></span>
+        <span class="stat-label">Need Review</span>
+        <span class="stat-tag action">Action</span>
+      </div>
+      <p class="stat-value">{{ needReview }}</p>
+      <p class="stat-sub">{{ totalRecords > 0 ? ((needReview / totalRecords) * 100).toFixed(1) : 0 }}% of checks</p>
+      <div class="stat-bar"><div class="stat-bar-fill orange"
+        [style.width]="totalRecords > 0 ? ((needReview/totalRecords)*100) + '%' : '0%'"></div></div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-dot red"></span>
+        <span class="stat-label">Missing GR</span>
+        <span class="stat-tag risk">Risk</span>
+      </div>
+      <p class="stat-value">{{ exceptions }}</p>
+      <p class="stat-sub">{{ totalRecords > 0 ? ((exceptions / totalRecords) * 100).toFixed(1) : 0 }}% missing docs</p>
+      <div class="stat-bar"><div class="stat-bar-fill red"
+        [style.width]="totalRecords > 0 ? ((exceptions/totalRecords)*100) + '%' : '0%'"></div></div>
+    </div>
+  </div>
+
+  <!-- Middle Row -->
+  <div class="middle-row">
+
+    <!-- Risk Overview -->
+    <div class="risk-card">
+      <h2 class="section-title">Risk Overview</h2>
+      <p class="section-subtitle">Document status breakdown</p>
+
+      <div class="risk-item">
+        <span class="risk-label">Ready to Review</span>
+        <div class="risk-bar-wrap">
+          <div class="risk-bar blue"
+            [style.width]="totalRecords > 0 ? ((needReview/totalRecords)*100) + '%' : '0%'"></div>
+        </div>
+        <span class="risk-count">{{ needReview }} items</span>
+      </div>
+
+      <div class="risk-item">
+        <span class="risk-label">Approved</span>
+        <div class="risk-bar-wrap">
+          <div class="risk-bar green"
+            [style.width]="totalRecords > 0 ? ((fullMatch/totalRecords)*100) + '%' : '0%'"></div>
+        </div>
+        <span class="risk-count">{{ fullMatch }} items</span>
+      </div>
+
+      <div class="risk-item">
+        <span class="risk-label">Missing GR/PO</span>
+        <div class="risk-bar-wrap">
+          <div class="risk-bar red"
+            [style.width]="totalRecords > 0 ? ((exceptions/totalRecords)*100) + '%' : '0%'"></div>
+        </div>
+        <span class="risk-count">{{ exceptions }} items</span>
+      </div>
+
+      <div class="donut-center-wrap">
+        <div class="donut-circle">
+          <p class="donut-num">{{ totalRecords }}</p>
+          <p class="donut-lbl">Total</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Priority Review Queue -->
+    <div class="priority-card">
+      <h2 class="section-title">Priority Review Queue</h2>
+      <p class="section-subtitle">Most urgent items that need auditor attention</p>
+
+      <div class="priority-tags">
+        <span class="tag red">High Risk</span>
+        <span class="tag orange">Low OCR</span>
+        <span class="tag blue">Missing Doc</span>
+      </div>
+
+      <div class="priority-list">
+        <div *ngIf="documents.length === 0" class="empty-priority">
+          <p>No documents pending review</p>
+        </div>
+        <div class="priority-item" *ngFor="let doc of documents.slice(0, 3)">
+          <div class="priority-item-left">
+            <p class="priority-inv">{{ doc.invoice_number || doc.file_name }}</p>
+            <p class="priority-vendor">{{ doc.vendor_name || 'Unknown vendor' }}</p>
+          </div>
+          <div class="priority-item-right">
+            <span class="badge" [ngClass]="getStatusClass(doc.status)">
+              {{ getStatusLabel(doc.status) }}
+            </span>
+            <span class="has-doc" *ngIf="!doc.has_gr" style="color:#EF4444; font-size:11px;">No GR</span>
+            <span class="has-doc" *ngIf="!doc.has_po" style="color:#F59E0B; font-size:11px;">No PO</span>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn-open-queue" (click)="goToReviewQueue()">Open Queue</button>
+    </div>
+
+  </div>
+
+  <!-- Recent Audit Items Table -->
+  <div class="table-card">
+    <div class="table-header">
+      <div>
+        <h2 class="section-title">Recent Audit Items</h2>
+        <p class="section-subtitle">Auditor-facing document list and review status</p>
+      </div>
+    </div>
+
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Invoice ID</th>
+            <th>Vendor</th>
+            <th>Amount</th>
+            <th>Has PO</th>
+            <th>Has GR</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngIf="isLoading">
+            <td colspan="7" class="loading-row">Loading...</td>
+          </tr>
+          <tr *ngIf="!isLoading && documents.length === 0">
+            <td colspan="7" class="empty-row">No documents in review queue</td>
+          </tr>
+          <tr *ngFor="let doc of documents">
+            <td class="inv-id">{{ doc.invoice_number || '-' }}</td>
+            <td>{{ doc.vendor_name || '-' }}</td>
+            <td>{{ formatAmount(doc.total_amount) }}</td>
+            <td>
+              <span [style.color]="doc.has_po ? '#10B981' : '#EF4444'">
+                {{ doc.has_po ? '✓' : '✗' }}
+              </span>
+            </td>
+            <td>
+              <span [style.color]="doc.has_gr ? '#10B981' : '#EF4444'">
+                {{ doc.has_gr ? '✓' : '✗' }}
+              </span>
+            </td>
+            <td>
+              <span class="badge" [ngClass]="getStatusClass(doc.status)">
+                {{ getStatusLabel(doc.status) }}
+              </span>
+            </td>
+            <td>
+              <button class="btn-open" (click)="goToRecord(doc)">Open</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>

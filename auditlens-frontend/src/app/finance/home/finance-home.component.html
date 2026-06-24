@@ -1,0 +1,205 @@
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <h1 class="page-title">Finance Home</h1>
+      <p class="page-subtitle">Document upload and OCR processing overview</p>
+    </div>
+    <div class="header-right">
+      <div class="search-bar">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+          <circle cx="7" cy="7" r="5" stroke="#9CA3AF" stroke-width="1.5"/>
+          <path d="M11 11l3 3" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <input type="text" placeholder="Search files, vendors..." class="search-input"/>
+      </div>
+      <div class="avatar-btn">F</div>
+      <button class="btn-upload" (click)="goToUpload()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+          <path d="M8 2v8M5 5l3-3 3 3" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M2 12v2h12v-2" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        + Upload
+      </button>
+    </div>
+  </div>
+
+  <!-- Stats Cards -->
+  <div class="stats-row">
+    <div class="stat-card" style="--card-color:#4A90D9; --card-bg:#EBF4FF;">
+      <div class="stat-icon-wrap">
+        <svg width="20" height="20" viewBox="0 0 22 22" fill="none">
+          <path d="M3 14v4h16v-4M11 2v12M8 6l3-4 3 4" stroke="#4A90D9" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="stat-info">
+        <p class="stat-label">Total Uploaded</p>
+        <p class="stat-value" style="color:#4A90D9">{{ totalUploaded }}</p>
+        <p class="stat-sub">All documents</p>
+      </div>
+    </div>
+
+    <div class="stat-card" style="--card-color:#10B981; --card-bg:#ECFDF5;">
+      <div class="stat-icon-wrap">
+        <svg width="20" height="20" viewBox="0 0 22 22" fill="none">
+          <circle cx="11" cy="11" r="9" stroke="#10B981" stroke-width="1.5"/>
+          <path d="M7 11l3 3 5-5" stroke="#10B981" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="stat-info">
+        <p class="stat-label">OCR Processed</p>
+        <p class="stat-value" style="color:#10B981">{{ totalOcrProcessed }}</p>
+        <p class="stat-sub">Successfully extracted</p>
+      </div>
+    </div>
+
+    <div class="stat-card" style="--card-color:#F59E0B; --card-bg:#FFFBEB;">
+      <div class="stat-icon-wrap">
+        <svg width="20" height="20" viewBox="0 0 22 22" fill="none">
+          <path d="M3 6h16M3 11h11M3 16h8" stroke="#F59E0B" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="stat-info">
+        <p class="stat-label">Under Review</p>
+        <p class="stat-value" style="color:#F59E0B">{{ totalUnderReview }}</p>
+        <p class="stat-sub">Pending auditor</p>
+      </div>
+    </div>
+
+    <div class="stat-card" style="--card-color:#6366F1; --card-bg:#EEF2FF;">
+      <div class="stat-icon-wrap">
+        <svg width="20" height="20" viewBox="0 0 22 22" fill="none">
+          <path d="M9 12l2 2 4-4" stroke="#6366F1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <rect x="3" y="3" width="16" height="16" rx="3" stroke="#6366F1" stroke-width="1.5"/>
+        </svg>
+      </div>
+      <div class="stat-info">
+        <p class="stat-label">Approved</p>
+        <p class="stat-value" style="color:#6366F1">{{ totalApproved }}</p>
+        <p class="stat-sub">Matched & verified</p>
+      </div>
+    </div>
+
+    <div class="stat-card" style="--card-color:#EF4444; --card-bg:#FEF2F2;">
+      <div class="stat-icon-wrap">
+        <svg width="20" height="20" viewBox="0 0 22 22" fill="none">
+          <circle cx="11" cy="11" r="9" stroke="#EF4444" stroke-width="1.5"/>
+          <path d="M11 7v5M11 15v.5" stroke="#EF4444" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="stat-info">
+        <p class="stat-label">Returned</p>
+        <p class="stat-value" style="color:#EF4444">{{ totalReturned }}</p>
+        <p class="stat-sub">Needs correction</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Charts Row -->
+  <div class="charts-row">
+
+    <!-- Bar+Line Chart -->
+    <div class="chart-card">
+      <div class="chart-header">
+        <div>
+          <h2 class="section-title">Monthly Upload Trend</h2>
+          <p class="section-subtitle">Uploaded vs Approved per month</p>
+        </div>
+      </div>
+      <div class="chart-body">
+        <canvas #barChart></canvas>
+      </div>
+    </div>
+
+    <!-- Donut Chart -->
+    <div class="chart-card">
+      <div class="chart-header">
+        <div>
+          <h2 class="section-title">Status Breakdown</h2>
+          <p class="section-subtitle">Document status overview</p>
+        </div>
+      </div>
+      <div class="chart-body donut-body">
+        <canvas #donutChart></canvas>
+        <div class="donut-center">
+          <p class="donut-total">{{ totalUploaded }}</p>
+          <p class="donut-label">Total</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Line Chart -->
+    <div class="chart-card">
+      <div class="chart-header">
+        <div>
+          <h2 class="section-title">OCR Confidence Trend</h2>
+          <p class="section-subtitle">Score per document (last 10)</p>
+        </div>
+        <div class="avg-badge">Avg: {{ avgConfidence }}%</div>
+      </div>
+      <div class="chart-body">
+        <canvas #lineChart></canvas>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Recent Uploads Table -->
+  <div class="table-card">
+    <div class="table-header">
+      <div>
+        <h2 class="section-title">Recent Uploads</h2>
+        <p class="section-subtitle">Latest 5 documents and their processing status</p>
+      </div>
+      <div class="table-actions">
+        <button class="btn-filter">Filter</button>
+        <button class="btn-export">Export</button>
+      </div>
+    </div>
+
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Document</th>
+            <th>Upload Date</th>
+            <th>Type</th>
+            <th>OCR Status</th>
+            <th>Match</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngIf="isLoading">
+            <td colspan="6" class="loading-row">Loading...</td>
+          </tr>
+          <tr *ngIf="!isLoading && documents.length === 0">
+            <td colspan="6" class="empty-row">No documents uploaded yet</td>
+          </tr>
+          <tr *ngFor="let doc of documents">
+            <td class="doc-name">{{ doc.file_name }}</td>
+            <td>{{ formatDate(doc.uploaded_at) }}</td>
+            <td><span class="type-badge">{{ doc.file_type?.toUpperCase() }}</span></td>
+            <td>
+              <span class="badge" [ngClass]="getStatusClass(doc.status)">
+                {{ getStatusLabel(doc.status) }}
+              </span>
+            </td>
+            <td>
+              <span class="badge badge-matched"  *ngIf="doc.status === 'approved'">Matched</span>
+              <span class="badge badge-review"   *ngIf="doc.status === 'under_review'">Pending Match</span>
+              <span class="badge badge-returned" *ngIf="doc.status === 'returned'">Returned</span>
+              <span class="badge badge-pending"  *ngIf="doc.status === 'ocr_done'">Not Submitted</span>
+              <span class="badge badge-pending"  *ngIf="doc.status === 'ocr_processing'">-</span>
+            </td>
+            <td>
+              <button class="btn-open" (click)="viewDocument(doc)">Open</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>

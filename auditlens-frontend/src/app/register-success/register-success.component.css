@@ -1,0 +1,86 @@
+.page-wrapper {
+  display: flex;
+  min-height: 100vh;
+  background: #EFF5FB;
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  align-items: center;
+  justify-content: center;
+}
+
+.success-container {
+  background: white;
+  border-radius: 24px;
+  padding: 56px 48px;
+  max-width: 480px;
+  width: 100%;
+  text-align: center;
+  box-shadow: 0 4px 32px rgba(26, 95, 171, 0.08);
+}
+
+.check-circle {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 28px;
+}
+
+.success-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: #111827;
+  margin: 0 0 16px 0;
+}
+
+.success-desc {
+  font-size: 14px;
+  color: #6B7280;
+  margin: 0 0 8px 0;
+  line-height: 1.6;
+}
+
+.info-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #EFF5FB;
+  border: 1px solid #BFDBFE;
+  border-radius: 10px;
+  padding: 12px 20px;
+  margin: 24px 0 32px 0;
+  font-size: 13px;
+  color: #4A90D9;
+}
+
+.btn-row {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.btn-back {
+  padding: 12px 28px;
+  background: white;
+  color: #4A90D9;
+  border: 1.5px solid #4A90D9;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-back:hover { background: #EFF5FB; }
+
+.btn-signin {
+  padding: 12px 28px;
+  background: linear-gradient(135deg, #4A90D9, #1A5FAB);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.btn-signin:hover { opacity: 0.9; }

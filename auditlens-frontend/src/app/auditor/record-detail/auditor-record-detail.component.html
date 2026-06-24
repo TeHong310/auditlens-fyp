@@ -1,0 +1,249 @@
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <button class="btn-back" (click)="goBack()">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        Back
+      </button>
+      <div>
+        <p class="page-label">Record Detail</p>
+        <p class="page-subtitle">Review OCR result, compare against supporting documents, and decide the next action</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div class="loading-wrap" *ngIf="isLoading">
+    <div class="spinner"></div>
+    <p>Loading document...</p>
+  </div>
+
+  <!-- No document selected -->
+  <div class="empty-wrap" *ngIf="!isLoading && !document">
+    <p>No document selected. Please go back and select a document.</p>
+    <button class="btn-back" (click)="goBack()">← Back to Queue</button>
+  </div>
+
+  <ng-container *ngIf="document">
+
+    <!-- Invoice Info Bar -->
+    <div class="info-bar">
+      <div class="info-left">
+        <p class="inv-number">{{ document.invoice_number || document.file_name }}</p>
+        <p class="inv-vendor">{{ document.vendor_name || '-' }}</p>
+        <p class="inv-meta">
+          Uploaded {{ formatDate(document.uploaded_at) }}
+        </p>
+      </div>
+      <div class="info-right">
+        <div class="match-score-badge" *ngIf="matchResult">
+          <span class="score-num">{{ matchResult.overall_match_score }}%</span>
+          <span class="score-label">match</span>
+        </div>
+        <span class="overall-badge" *ngIf="matchResult"
+              [ngClass]="getOverallClass(matchResult.overall_status)">
+          {{ matchResult.overall_status?.replace('_', ' ') | titlecase }}
+        </span>
+        <span class="match-type-badge" *ngIf="matchType">{{ matchType }} Match</span>
+      </div>
+    </div>
+
+    <!-- Success / Error -->
+    <div class="success-box" *ngIf="successMessage">✓ {{ successMessage }}</div>
+    <div class="error-box" *ngIf="errorMessage">✗ {{ errorMessage }}</div>
+
+    <!-- Main Content -->
+    <div class="content-row">
+
+      <!-- Left: Field Comparison -->
+      <div class="main-card">
+
+        <!-- Run Matching Button -->
+        <div class="match-header">
+          <div>
+            <h2 class="section-title">Field Comparison</h2>
+            <p class="section-subtitle">
+              Invoice vs
+              {{ supporting?.po_uploaded ? 'PO + ' : '' }}
+              {{ supporting?.gr_uploaded ? 'GR' : '' }}
+              {{ !supporting?.po_uploaded && !supporting?.gr_uploaded ? 'No supporting docs' : '' }}
+            </p>
+          </div>
+          <button class="btn-run-match" (click)="runMatching()" [disabled]="isRunningMatch">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M8 2v4l3 3" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+              <circle cx="8" cy="8" r="6" stroke="white" stroke-width="1.5"/>
+            </svg>
+            {{ isRunningMatch ? 'Running...' : 'Run Matching' }}
+          </button>
+        </div>
+
+        <!-- Supporting docs status -->
+        <div class="docs-status">
+          <div class="doc-status-item" [class.has-doc]="supporting?.po_uploaded" [class.no-doc]="!supporting?.po_uploaded">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <rect x="2" y="1" width="10" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+              <path d="M4 4h6M4 6.5h6M4 9h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            </svg>
+            PO {{ supporting?.po_uploaded ? '✓ Uploaded' : '✗ Not uploaded' }}
+          </div>
+          <div class="doc-status-item" [class.has-doc]="supporting?.gr_uploaded" [class.no-doc]="!supporting?.gr_uploaded">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.2"/>
+              <path d="M4.5 7l2 2 3-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            </svg>
+            GR {{ supporting?.gr_uploaded ? '✓ Uploaded' : '✗ Not uploaded' }}
+          </div>
+        </div>
+
+        <!-- Comparison Table -->
+        <div class="comparison-table" *ngIf="matchResult">
+          <table class="field-table">
+            <thead>
+              <tr>
+                <th>Field</th>
+                <th>Invoice</th>
+                <th *ngIf="supporting?.po_uploaded">PO</th>
+                <th *ngIf="supporting?.gr_uploaded">GR</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="field-name">Vendor</td>
+                <td>{{ document.vendor_name || '-' }}</td>
+                <td *ngIf="supporting?.po_uploaded">{{ supporting.purchase_order?.vendor_name || '-' }}</td>
+                <td *ngIf="supporting?.gr_uploaded">{{ supporting.goods_receipt?.vendor_name || '-' }}</td>
+                <td>
+                  <span class="match-badge" [ngClass]="getMatchClass(matchResult.invoice_gr_match)">
+                    {{ getMatchLabel(matchResult.invoice_gr_match) }}
+                  </span>
+                </td>
+              </tr>
+              <tr>
+                <td class="field-name">Amount</td>
+                <td>{{ formatAmount(document.total_amount) }}</td>
+                <td *ngIf="supporting?.po_uploaded">{{ formatAmount(supporting.purchase_order?.total_amount) }}</td>
+                <td *ngIf="supporting?.gr_uploaded">{{ formatAmount(supporting.goods_receipt?.total_amount) }}</td>
+                <td>
+                  <span class="match-badge" [ngClass]="getMatchClass(matchResult.invoice_gr_match)">
+                    {{ getMatchLabel(matchResult.invoice_gr_match) }}
+                  </span>
+                </td>
+              </tr>
+              <tr>
+                <td class="field-name">Date</td>
+                <td>{{ formatDate(document.invoice_date) }}</td>
+                <td *ngIf="supporting?.po_uploaded">{{ formatDate(supporting.purchase_order?.po_date) }}</td>
+                <td *ngIf="supporting?.gr_uploaded">{{ formatDate(supporting.goods_receipt?.receipt_date) }}</td>
+                <td>-</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- No match yet -->
+        <div class="no-match-yet" *ngIf="!matchResult">
+          <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+            <circle cx="20" cy="20" r="18" stroke="#E5E7EB" stroke-width="2"/>
+            <path d="M20 12v10M20 26v2" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <p>No matching result yet.</p>
+          <p style="font-size:12px; color:#9CA3AF">Click "Run Matching" to compare documents</p>
+        </div>
+
+        <!-- Exceptions -->
+        <div class="exceptions-section" *ngIf="exceptions.length > 0">
+          <h3 class="exceptions-title">Exceptions Found ({{ exceptions.length }})</h3>
+          <div class="exception-item" *ngFor="let exc of exceptions">
+            <span class="sev-badge" [ngClass]="getSeverityClass(exc.severity)">
+              {{ exc.severity | titlecase }}
+            </span>
+            <span class="exc-desc">{{ exc.description }}</span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Right: Audit Decision -->
+      <div class="decision-card">
+        <h2 class="section-title">Audit Decision & Notes</h2>
+        <p class="section-subtitle">Add remarks, assign follow-up, or send back to Finance</p>
+
+        <!-- OCR Confidence -->
+        <div class="confidence-wrap" *ngIf="document.ocr_confidence">
+          <div class="conf-label-row">
+            <span class="conf-label">OCR Confidence</span>
+            <span class="conf-value"
+                  [style.color]="document.ocr_confidence >= 80 ? '#10B981' :
+                                 document.ocr_confidence >= 60 ? '#F59E0B' : '#EF4444'">
+              {{ document.ocr_confidence }}%
+            </span>
+          </div>
+          <div class="conf-bar">
+            <div class="conf-fill"
+                 [style.width]="document.ocr_confidence + '%'"
+                 [style.background]="document.ocr_confidence >= 80 ? '#10B981' :
+                                     document.ocr_confidence >= 60 ? '#F59E0B' : '#EF4444'">
+            </div>
+          </div>
+        </div>
+
+        <!-- Document Info -->
+        <div class="doc-info-list">
+          <div class="doc-info-item">
+            <span class="doc-info-label">Invoice No</span>
+            <span class="doc-info-value">{{ document.invoice_number || '-' }}</span>
+          </div>
+          <div class="doc-info-item">
+            <span class="doc-info-label">Vendor</span>
+            <span class="doc-info-value">{{ document.vendor_name || '-' }}</span>
+          </div>
+          <div class="doc-info-item">
+            <span class="doc-info-label">Amount</span>
+            <span class="doc-info-value">{{ formatAmount(document.total_amount) }}</span>
+          </div>
+          <div class="doc-info-item">
+            <span class="doc-info-label">Date</span>
+            <span class="doc-info-value">{{ formatDate(document.invoice_date) }}</span>
+          </div>
+          <div class="doc-info-item">
+            <span class="doc-info-label">Status</span>
+            <span class="doc-info-value">{{ document.status }}</span>
+          </div>
+        </div>
+
+        <!-- Audit Note -->
+        <div class="note-section">
+          <label class="note-label">Remarks / Notes</label>
+          <textarea class="note-input" [(ngModel)]="auditNote" rows="4"
+            placeholder="Add audit remarks, findings, or follow-up instructions..."></textarea>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="action-buttons">
+          <button class="btn-need-review" [disabled]="isSubmitting">
+            Need Review
+          </button>
+          <button class="btn-return" (click)="returnDocument()" [disabled]="isSubmitting">
+            Send Back
+          </button>
+          <button class="btn-approve" (click)="approveDocument()" [disabled]="isSubmitting">
+            {{ isSubmitting ? 'Processing...' : 'Approve' }}
+          </button>
+        </div>
+
+        <p class="audit-trail-note">
+          Last updated by auditor • Audit trail recorded automatically
+        </p>
+      </div>
+
+    </div>
+
+  </ng-container>
+
+</div>

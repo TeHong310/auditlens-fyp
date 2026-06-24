@@ -1,0 +1,387 @@
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <h1 class="page-title">OCR Review Queue</h1>
+      <p class="page-subtitle">Review and correct OCR extracted data for Invoice, PO and GR</p>
+    </div>
+    <div class="header-right">
+      <button class="btn-refresh" (click)="loadDocuments(); loadPOList(); loadGRList()">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M14 8A6 6 0 112 8" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M14 4v4h-4" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Refresh
+      </button>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-row">
+    <div class="stat-card red">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+        <circle cx="10" cy="10" r="8" stroke="#EF4444" stroke-width="1.5"/>
+        <line x1="10" y1="6" x2="10" y2="11" stroke="#EF4444" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="10" cy="13.5" r="0.75" fill="#EF4444"/>
+      </svg>
+      <div>
+        <p class="stat-label">Need Correction</p>
+        <p class="stat-value red">{{ documents.filter(d => getErrorType(d) !== 'Ready').length }}</p>
+      </div>
+    </div>
+    <div class="stat-card yellow">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+        <path d="M3 5h14M3 10h10M3 15h7" stroke="#F59E0B" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <p class="stat-label">Waiting Review</p>
+        <p class="stat-value yellow">{{ documents.length }}</p>
+      </div>
+    </div>
+    <div class="stat-card green">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+        <circle cx="10" cy="10" r="8" stroke="#10B981" stroke-width="1.5"/>
+        <path d="M6 10l3 3 5-5" stroke="#10B981" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div>
+        <p class="stat-label">Ready to Submit</p>
+        <p class="stat-value green">{{ documents.filter(d => getErrorType(d) === 'Ready').length }}</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs-row">
+    <button class="tab-btn" [class.active]="activeTab === 'invoice'" (click)="setTab('invoice')">
+      📄 Invoice
+      <span class="tab-count">{{ documents.length }}</span>
+    </button>
+    <button class="tab-btn" [class.active]="activeTab === 'po'" (click)="setTab('po')">
+      📋 Purchase Order
+      <span class="tab-count">{{ poList.length }}</span>
+    </button>
+    <button class="tab-btn" [class.active]="activeTab === 'gr'" (click)="setTab('gr')">
+      📦 Goods Receipt
+      <span class="tab-count">{{ grList.length }}</span>
+    </button>
+  </div>
+
+  <!-- ── INVOICE TAB ── -->
+  <div class="content-row" *ngIf="activeTab === 'invoice'">
+    <div class="list-card">
+      <h2 class="section-title">Invoices Requiring Review</h2>
+      <p class="section-subtitle">Click to view and edit OCR extracted fields</p>
+      <div class="search-bar">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+          <circle cx="7" cy="7" r="5" stroke="#9CA3AF" stroke-width="1.5"/>
+          <path d="M11 11l3 3" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <input type="text" placeholder="Search invoice file or invoice number..."
+               class="search-input" [(ngModel)]="searchText"/>
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>File Link</th>
+              <th>Invoice No</th>
+              <th>Error Type</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngIf="isLoading"><td colspan="5" class="loading-row">Loading...</td></tr>
+            <tr *ngIf="!isLoading && filteredDocuments.length === 0">
+              <td colspan="5" class="empty-row">
+                <p style="color:#10B981;font-weight:600">All documents submitted!</p>
+              </td>
+            </tr>
+            <tr *ngFor="let doc of filteredDocuments"
+                [class.selected-row]="selectedDoc?.document_id === doc.document_id"
+                (click)="selectDocument(doc)">
+              <td>
+                <span class="status-dot"
+                      [class.dot-error]="getErrorType(doc) !== 'Ready'"
+                      [class.dot-ok]="getErrorType(doc) === 'Ready'"></span>
+              </td>
+              <td class="file-link">{{ doc.file_name }}</td>
+              <td class="invoice-no">{{ doc.invoice_number || '-' }}</td>
+              <td><span class="badge" [ngClass]="getErrorClass(doc)">{{ getErrorType(doc) }}</span></td>
+              <td style="display:flex; gap:6px;">
+                <button class="btn-review" (click)="selectDocument(doc); $event.stopPropagation()">Review</button>
+                <button class="btn-delete" (click)="deleteDocument(doc); $event.stopPropagation()">Delete</button>
+                <button class="btn-open" (click)="viewDocument(doc); $event.stopPropagation()">Open</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Invoice Detail Panel -->
+    <div class="detail-card" *ngIf="selectedDoc">
+      <h2 class="section-title">OCR Extracted Fields</h2>
+      <p class="section-subtitle">{{ selectedDoc.file_name }}</p>
+      <div class="confidence-bar-wrapper">
+        <div class="confidence-label-row">
+          <span class="confidence-label-text">OCR Confidence</span>
+          <span class="confidence-value" [ngClass]="getConfidenceClass(selectedDoc.ocr_confidence)">
+            {{ selectedDoc.ocr_confidence }}% — {{ getConfidenceLabel(selectedDoc.ocr_confidence) }}
+          </span>
+        </div>
+        <div class="confidence-bar">
+          <div class="confidence-fill" [style.width]="selectedDoc.ocr_confidence + '%'"
+               [ngClass]="getConfidenceClass(selectedDoc.ocr_confidence)"></div>
+        </div>
+      </div>
+      <div class="success-box" *ngIf="successMessage">✓ {{ successMessage }}</div>
+      <div class="error-box" *ngIf="errorMessage">✗ {{ errorMessage }}</div>
+      <div class="fields-list">
+        <div class="field-item">
+          <label class="field-label">Invoice Number</label>
+          <input class="field-input" type="text" [(ngModel)]="editFields.invoice_number"
+                 [class.field-missing]="!editFields.invoice_number" placeholder="Not detected"/>
+        </div>
+        <div class="field-item">
+          <label class="field-label">Vendor Name</label>
+          <input class="field-input" type="text" [(ngModel)]="editFields.vendor_name"
+                 [class.field-missing]="!editFields.vendor_name" placeholder="Not detected"/>
+        </div>
+        <div class="field-item">
+          <label class="field-label">Invoice Date</label>
+          <input class="field-input" type="text" [(ngModel)]="editFields.invoice_date"
+                 [class.field-missing]="!editFields.invoice_date" placeholder="Not detected"/>
+        </div>
+        <div class="field-item">
+          <label class="field-label">Total Amount (RM)</label>
+          <input class="field-input" type="number" [(ngModel)]="editFields.total_amount"
+                 [class.field-missing]="!editFields.total_amount" placeholder="Not detected"/>
+        </div>
+        <div class="field-item">
+          <label class="field-label">Tax Amount (RM)</label>
+          <input class="field-input" type="number" [(ngModel)]="editFields.tax_amount" placeholder="Not detected"/>
+        </div>
+      </div>
+      <div class="submit-section">
+        <button class="btn-save" (click)="saveChanges()" [disabled]="isSaving">
+          {{ isSaving ? 'Saving...' : 'Save Changes' }}
+        </button>
+        <p class="prototype-note">Save any corrections first, then submit to Auditor when ready.</p>
+        <button class="btn-submit" (click)="submitToAuditor()" [disabled]="isSubmitting || !canSubmit()">
+          {{ isSubmitting ? 'Submitting...' : selectedDoc?.status === 'returned' ? 'Resubmit to Auditor' : 'Submit to Auditor' }}
+        </button>
+        <p class="submit-note" *ngIf="!canSubmit()">
+          ⚠ Fill in Invoice Number, Vendor, Date and Amount before submitting.
+        </p>
+      </div>
+    </div>
+
+    <div class="detail-card empty-detail" *ngIf="!selectedDoc">
+      <svg width="60" height="60" viewBox="0 0 60 60" fill="none">
+        <circle cx="30" cy="30" r="28" stroke="#E5E7EB" stroke-width="2"/>
+        <path d="M20 30h20M30 20v20" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <p class="empty-title">Select an invoice to review</p>
+      <p class="empty-desc">Click any invoice from the list on the left to view and edit OCR extracted fields</p>
+    </div>
+  </div>
+
+  <!-- ── PO TAB ── -->
+  <div class="content-row" *ngIf="activeTab === 'po'">
+    <div class="list-card">
+      <h2 class="section-title">Purchase Orders</h2>
+      <p class="section-subtitle">Review and correct OCR extracted PO data</p>
+      <div class="search-bar">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+          <circle cx="7" cy="7" r="5" stroke="#9CA3AF" stroke-width="1.5"/>
+          <path d="M11 11l3 3" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <input type="text" placeholder="Search PO file or PO number..."
+               class="search-input" [(ngModel)]="searchPO"/>
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>File Name</th>
+              <th>PO Number</th>
+              <th>Vendor</th>
+              <th>Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngIf="isLoadingPO"><td colspan="4" class="loading-row">Loading...</td></tr>
+            <tr *ngIf="!isLoadingPO && filteredPO.length === 0">
+              <td colspan="4" class="empty-row">No PO uploaded yet</td>
+            </tr>
+            <tr *ngFor="let po of filteredPO"
+                [class.selected-row]="selectedPO?.po_id === po.po_id"
+                (click)="selectPO(po)">
+              <td class="file-link">{{ po.file_name }}</td>
+              <td class="invoice-no">{{ po.po_number || '-' }}</td>
+              <td>{{ po.vendor_name || '-' }}</td>
+              <td>{{ po.total_amount ? 'RM ' + po.total_amount : '-' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- PO Detail Panel -->
+    <div class="detail-card" *ngIf="selectedPO">
+      <h2 class="section-title">PO Extracted Fields</h2>
+      <p class="section-subtitle">{{ selectedPO.file_name }}</p>
+      <div class="confidence-bar-wrapper">
+        <div class="confidence-label-row">
+          <span class="confidence-label-text">OCR Confidence</span>
+          <span class="confidence-value" [ngClass]="getConfidenceClass(selectedPO.ocr_confidence)">
+            {{ selectedPO.ocr_confidence }}% — {{ getConfidenceLabel(selectedPO.ocr_confidence) }}
+          </span>
+        </div>
+        <div class="confidence-bar">
+          <div class="confidence-fill" [style.width]="selectedPO.ocr_confidence + '%'"
+               [ngClass]="getConfidenceClass(selectedPO.ocr_confidence)"></div>
+        </div>
+      </div>
+      <div class="success-box" *ngIf="successPO">✓ {{ successPO }}</div>
+      <div class="error-box" *ngIf="errorPO">✗ {{ errorPO }}</div>
+      <div class="fields-list">
+        <div class="field-item">
+          <label class="field-label">PO Number</label>
+          <input class="field-input" type="text" [(ngModel)]="editPOFields.po_number"
+                 [class.field-missing]="!editPOFields.po_number" placeholder="Not detected"/>
+        </div>
+        <div class="field-item">
+          <label class="field-label">Vendor Name</label>
+          <input class="field-input" type="text" [(ngModel)]="editPOFields.vendor_name"
+                 [class.field-missing]="!editPOFields.vendor_name" placeholder="Not detected"/>
+        </div>
+        <div class="field-item">
+          <label class="field-label">PO Date</label>
+          <input class="field-input" type="text" [(ngModel)]="editPOFields.po_date"
+                 placeholder="Not detected"/>
+        </div>
+        <div class="field-item">
+          <label class="field-label">Total Amount (RM)</label>
+          <input class="field-input" type="number" [(ngModel)]="editPOFields.total_amount"
+                 [class.field-missing]="!editPOFields.total_amount" placeholder="Not detected"/>
+        </div>
+      </div>
+      <div class="submit-section">
+        <button class="btn-save" (click)="savePO()" [disabled]="isSavingPO">
+          {{ isSavingPO ? 'Saving...' : 'Save PO Changes' }}
+        </button>
+      </div>
+    </div>
+
+    <div class="detail-card empty-detail" *ngIf="!selectedPO">
+      <svg width="60" height="60" viewBox="0 0 60 60" fill="none">
+        <circle cx="30" cy="30" r="28" stroke="#E5E7EB" stroke-width="2"/>
+        <path d="M20 30h20M30 20v20" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <p class="empty-title">Select a PO to review</p>
+      <p class="empty-desc">Click any PO from the list on the left to view and edit OCR extracted fields</p>
+    </div>
+  </div>
+
+  <!-- ── GR TAB ── -->
+  <div class="content-row" *ngIf="activeTab === 'gr'">
+    <div class="list-card">
+      <h2 class="section-title">Goods Receipts</h2>
+      <p class="section-subtitle">Review and correct OCR extracted GR data</p>
+      <div class="search-bar">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+          <circle cx="7" cy="7" r="5" stroke="#9CA3AF" stroke-width="1.5"/>
+          <path d="M11 11l3 3" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <input type="text" placeholder="Search GR file or GR number..."
+               class="search-input" [(ngModel)]="searchGR"/>
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>File Name</th>
+              <th>GR Number</th>
+              <th>Vendor</th>
+              <th>Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngIf="isLoadingGR"><td colspan="4" class="loading-row">Loading...</td></tr>
+            <tr *ngIf="!isLoadingGR && filteredGR.length === 0">
+              <td colspan="4" class="empty-row">No GR uploaded yet</td>
+            </tr>
+            <tr *ngFor="let gr of filteredGR"
+                [class.selected-row]="selectedGR?.gr_id === gr.gr_id"
+                (click)="selectGR(gr)">
+              <td class="file-link">{{ gr.file_name }}</td>
+              <td class="invoice-no">{{ gr.gr_number || '-' }}</td>
+              <td>{{ gr.vendor_name || '-' }}</td>
+              <td>{{ gr.total_amount ? 'RM ' + gr.total_amount : '-' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- GR Detail Panel -->
+    <div class="detail-card" *ngIf="selectedGR">
+      <h2 class="section-title">GR Extracted Fields</h2>
+      <p class="section-subtitle">{{ selectedGR.file_name }}</p>
+      <div class="confidence-bar-wrapper">
+        <div class="confidence-label-row">
+          <span class="confidence-label-text">OCR Confidence</span>
+          <span class="confidence-value" [ngClass]="getConfidenceClass(selectedGR.ocr_confidence)">
+            {{ selectedGR.ocr_confidence }}% — {{ getConfidenceLabel(selectedGR.ocr_confidence) }}
+          </span>
+        </div>
+        <div class="confidence-bar">
+          <div class="confidence-fill" [style.width]="selectedGR.ocr_confidence + '%'"
+               [ngClass]="getConfidenceClass(selectedGR.ocr_confidence)"></div>
+        </div>
+      </div>
+      <div class="success-box" *ngIf="successGR">✓ {{ successGR }}</div>
+      <div class="error-box" *ngIf="errorGR">✗ {{ errorGR }}</div>
+      <div class="fields-list">
+        <div class="field-item">
+          <label class="field-label">GR Number</label>
+          <input class="field-input" type="text" [(ngModel)]="editGRFields.gr_number"
+                 [class.field-missing]="!editGRFields.gr_number" placeholder="Not detected"/>
+        </div>
+        <div class="field-item">
+          <label class="field-label">Vendor Name</label>
+          <input class="field-input" type="text" [(ngModel)]="editGRFields.vendor_name"
+                 [class.field-missing]="!editGRFields.vendor_name" placeholder="Not detected"/>
+        </div>
+        <div class="field-item">
+          <label class="field-label">Receipt Date</label>
+          <input class="field-input" type="text" [(ngModel)]="editGRFields.receipt_date"
+                 placeholder="Not detected"/>
+        </div>
+        <div class="field-item">
+          <label class="field-label">Total Amount (RM)</label>
+          <input class="field-input" type="number" [(ngModel)]="editGRFields.total_amount"
+                 [class.field-missing]="!editGRFields.total_amount" placeholder="Not detected"/>
+        </div>
+      </div>
+      <div class="submit-section">
+        <button class="btn-save" (click)="saveGR()" [disabled]="isSavingGR">
+          {{ isSavingGR ? 'Saving...' : 'Save GR Changes' }}
+        </button>
+      </div>
+    </div>
+
+    <div class="detail-card empty-detail" *ngIf="!selectedGR">
+      <svg width="60" height="60" viewBox="0 0 60 60" fill="none">
+        <circle cx="30" cy="30" r="28" stroke="#E5E7EB" stroke-width="2"/>
+        <path d="M20 30h20M30 20v20" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <p class="empty-title">Select a GR to review</p>
+      <p class="empty-desc">Click any GR from the list on the left to view and edit OCR extracted fields</p>
+    </div>
+  </div>
+
+</div>

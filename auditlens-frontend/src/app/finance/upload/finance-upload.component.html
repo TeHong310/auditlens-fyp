@@ -1,0 +1,318 @@
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <h1 class="page-title">Upload Document</h1>
+      <p class="page-subtitle">Add invoices, receipts, or PDFs for OCR processing</p>
+    </div>
+    <div class="header-right">
+      <div class="search-bar">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <circle cx="7" cy="7" r="5" stroke="#9CA3AF" stroke-width="1.5" />
+          <path d="M11 11l3 3" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round" />
+        </svg>
+        <input type="text" placeholder="Search upload history..." class="search-input" />
+      </div>
+      <div class="avatar-btn">F</div>
+    </div>
+  </div>
+
+  <div class="content-row">
+    <!-- Left: Dropzone -->
+    <div class="upload-card">
+      <h2 class="section-title">Dropzone</h2>
+      <p class="section-subtitle">Upload new files for finance review and OCR extraction</p>
+
+      <div class="success-box" *ngIf="successMessage">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <circle cx="8" cy="8" r="7" stroke="#16a34a" stroke-width="1.5" />
+          <polyline points="4.5,8 7,10.5 11.5,5.5" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round" />
+        </svg>
+        {{ successMessage }}
+      </div>
+
+      <div class="error-box" *ngIf="errorMessage">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <circle cx="8" cy="8" r="7" stroke="#e53e3e" stroke-width="1.5" />
+          <line x1="8" y1="5" x2="8" y2="9" stroke="#e53e3e" stroke-width="1.5" stroke-linecap="round" />
+          <circle cx="8" cy="11.5" r="0.75" fill="#e53e3e" />
+        </svg>
+        {{ errorMessage }}
+      </div>
+
+      <div class="dropzone" [class.drag-over]="isDragOver" [class.uploading]="isUploading"
+        (dragover)="onDragOver($event)" (dragleave)="onDragLeave($event)" (drop)="onDrop($event)"
+        (click)="!isUploading && onBrowseFiles()">
+        <div *ngIf="!isUploading">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <path d="M24 8v24M16 16l8-8 8 8" stroke="#4A90D9" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M8 36v6h32v-6" stroke="#4A90D9" stroke-width="2.5" stroke-linecap="round" />
+          </svg>
+          <p class="dropzone-title">Drop files here to upload</p>
+          <p class="dropzone-subtitle">Supports multiple files — PDF, JPG, JPEG, PNG</p>
+        </div>
+        <div *ngIf="isUploading" class="uploading-state">
+          <div class="spinner"></div>
+          <p class="uploading-text">Processing OCR...</p>
+          <p class="uploading-note">Please wait, this may take a moment</p>
+        </div>
+      </div>
+
+      <input #fileInput type="file" accept=".pdf,.jpg,.jpeg,.png" multiple style="display:none"
+        (change)="onFileSelected($event)" />
+
+      <div class="upload-actions">
+        <button class="btn-browse" (click)="onBrowseFiles()" [disabled]="isUploading">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M8 2v8M5 5l3-3 3 3" stroke="white" stroke-width="1.5" stroke-linecap="round" />
+            <path d="M2 12v2h12v-2" stroke="white" stroke-width="1.5" stroke-linecap="round" />
+          </svg>
+          Browse Files
+        </button>
+      </div>
+    </div>
+
+    <!-- Right: Upload Rules -->
+    <div class="rules-card">
+      <h2 class="section-title">Upload Rules</h2>
+      <p class="section-subtitle">Recommended file guidelines</p>
+      <div class="rules-list">
+        <div class="rule-item">
+          <div class="rule-dot blue"></div>
+          <div>
+            <p class="rule-title">Accepted formats</p>
+            <p class="rule-desc">PDF, JPG, JPEG, PNG only</p>
+          </div>
+        </div>
+        <div class="rule-item">
+          <div class="rule-dot green"></div>
+          <div>
+            <p class="rule-title">File size</p>
+            <p class="rule-desc">Maximum 10MB per file</p>
+          </div>
+        </div>
+        <div class="rule-item">
+          <div class="rule-dot orange"></div>
+          <div>
+            <p class="rule-title">Document quality</p>
+            <p class="rule-desc">Clear, high-resolution scans for better OCR accuracy</p>
+          </div>
+        </div>
+        <div class="rule-item">
+          <div class="rule-dot purple"></div>
+          <div>
+            <p class="rule-title">Required fields</p>
+            <p class="rule-desc">Invoice must contain invoice number, vendor, date and amount</p>
+          </div>
+        </div>
+      </div>
+      <div class="file-types">
+        <div class="file-type-badge pdf">PDF</div>
+        <div class="file-type-badge jpg">JPG</div>
+        <div class="file-type-badge png">PNG</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload Queue Status -->
+  <div class="table-card" *ngIf="uploadQueue.length > 0">
+    <div class="table-header">
+      <div>
+        <h2 class="section-title">Upload Queue</h2>
+        <p class="section-subtitle">{{ uploadQueue.length }} file(s) in queue</p>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn-browse" (click)="retryFailed()" [disabled]="isUploading || !hasRetryableErrors()"
+          style="font-size:13px; padding: 6px 14px;">🔄 Retry Failed</button>
+        <button class="btn-filter" (click)="clearDoneItems()" [disabled]="isUploading">Clear Done</button>
+        <button class="btn-filter" (click)="clearQueue()" [disabled]="isUploading">Clear All</button>
+      </div>
+    </div>
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>File Name</th>
+            <th>Size</th>
+            <th>Status</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let item of uploadQueue">
+            <td class="doc-name">
+              <div class="doc-name-wrapper">
+                <div class="doc-icon">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <rect x="2" y="1" width="10" height="12" rx="1.5" stroke="#4A90D9" stroke-width="1.2" />
+                    <path d="M4 4h6M4 6.5h6M4 9h4" stroke="#4A90D9" stroke-width="1.2" stroke-linecap="round" />
+                  </svg>
+                </div>
+                {{ item.file.name }}
+              </div>
+            </td>
+            <td>{{ (item.file.size / 1024 / 1024).toFixed(2) }} MB</td>
+            <td>
+              <span class="badge" [ngClass]="{
+                'badge-pending':   item.status === 'pending',
+                'badge-review':    item.status === 'uploading',
+                'badge-processed': item.status === 'done',
+                'badge-returned':  item.status === 'error'
+              }">
+                {{ item.status === 'pending' ? 'Pending' :
+                   item.status === 'uploading' ? 'Uploading...' :
+                   item.status === 'done' ? 'Done ✓' : 'Failed ✗' }}
+              </span>
+            </td>
+            <td [style.color]="item.status === 'error' ? '#EF4444' : item.status === 'done' ? '#10B981' : '#6B7280'"
+              style="font-size:12px;">{{ item.message }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Recent Upload Queue -->
+  <div class="table-card">
+    <div class="table-header">
+      <div>
+        <h2 class="section-title">Recent Upload Queue</h2>
+        <p class="section-subtitle">Click "Attach PO/GR" on any invoice to upload supporting documents</p>
+      </div>
+      <div class="table-actions">
+        <button class="btn-filter">Filter</button>
+        <button class="btn-export">Export</button>
+      </div>
+    </div>
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>File Name</th>
+            <th>Upload Date</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngIf="isLoading">
+            <td colspan="5" class="loading-row">Loading...</td>
+          </tr>
+          <tr *ngIf="!isLoading && documents.length === 0">
+            <td colspan="5" class="empty-row">
+              <p>No documents uploaded yet</p>
+            </td>
+          </tr>
+          <tr *ngFor="let doc of paginatedDocuments"
+            [class.selected-row]="selectedDocumentId === doc.document_id">
+            <td class="doc-name">
+              <div class="doc-name-wrapper">
+                <div class="doc-icon">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <rect x="2" y="1" width="10" height="12" rx="1.5" stroke="#4A90D9" stroke-width="1.2" />
+                    <path d="M4 4h6M4 6.5h6M4 9h4" stroke="#4A90D9" stroke-width="1.2" stroke-linecap="round" />
+                  </svg>
+                </div>
+                {{ doc.file_name }}
+              </div>
+            </td>
+            <td>{{ formatDate(doc.uploaded_at) }}</td>
+            <td><span class="type-badge">{{ doc.file_type?.toUpperCase() }}</span></td>
+            <td>
+              <span class="badge" [ngClass]="getStatusClass(doc.status)">
+                {{ getStatusLabel(doc.status) }}
+              </span>
+            </td>
+            <td>
+              <div style="display:flex; gap:6px;">
+                <button class="btn-view" (click)="viewDocument(doc)">View</button>
+                <button class="btn-delete" (click)="deleteDocument(doc)">Delete</button>
+                <button class="btn-attach" (click)="selectDocumentForSupporting(doc)">
+                  Attach PO/GR
+                </button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="pagination" *ngIf="totalPages > 1">
+        <button class="page-btn" (click)="goToPage(currentPage - 1)" [disabled]="currentPage === 1">← Prev</button>
+        <button class="page-btn" *ngFor="let page of pageNumbers" (click)="goToPage(page)"
+          [class.active]="page === currentPage">{{ page }}</button>
+        <button class="page-btn" (click)="goToPage(currentPage + 1)" [disabled]="currentPage === totalPages">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Supporting Documents Section -->
+  <div class="table-card" id="supporting-section" *ngIf="selectedDocumentId">
+    <div class="table-header">
+      <div>
+        <h2 class="section-title">Supporting Documents</h2>
+        <p class="section-subtitle">Attach PO and GR for: <strong>{{ selectedDocumentName }}</strong></p>
+      </div>
+      <button class="btn-filter" (click)="selectedDocumentId = null">✕ Close</button>
+    </div>
+
+    <div class="supporting-grid">
+
+      <!-- PO Upload -->
+      <div class="supporting-card">
+        <div class="supporting-header">
+          <div class="supporting-icon po">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <rect x="3" y="2" width="14" height="16" rx="2" stroke="#1A5FAB" stroke-width="1.5"/>
+              <path d="M6 6h8M6 9h8M6 12h5" stroke="#1A5FAB" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div>
+            <p class="supporting-title">Purchase Order (PO)</p>
+            <p class="supporting-desc">Upload the PO document for this invoice</p>
+          </div>
+        </div>
+
+        <div class="success-box" *ngIf="poSuccess && poMessage">{{ poMessage }}</div>
+        <div class="error-box" *ngIf="!poSuccess && poMessage">{{ poMessage }}</div>
+
+        <input #poInput type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none"
+          (change)="onPOFileSelected($event)" />
+
+        <button class="btn-supporting" (click)="poInput.click()" [disabled]="isUploadingPO">
+          <span *ngIf="!isUploadingPO">📄 Upload PO</span>
+          <span *ngIf="isUploadingPO">⏳ Processing OCR...</span>
+        </button>
+      </div>
+
+      <!-- GR Upload -->
+      <div class="supporting-card">
+        <div class="supporting-header">
+          <div class="supporting-icon gr">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <rect x="3" y="2" width="14" height="16" rx="2" stroke="#059669" stroke-width="1.5"/>
+              <path d="M7 10l2 2 4-4" stroke="#059669" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div>
+            <p class="supporting-title">Goods Receipt (GR)</p>
+            <p class="supporting-desc">Upload the GR document for this invoice</p>
+          </div>
+        </div>
+
+        <div class="success-box" *ngIf="grSuccess && grMessage">{{ grMessage }}</div>
+        <div class="error-box" *ngIf="!grSuccess && grMessage">{{ grMessage }}</div>
+
+        <input #grInput type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none"
+          (change)="onGRFileSelected($event)" />
+
+        <button class="btn-supporting btn-gr" (click)="grInput.click()" [disabled]="isUploadingGR">
+          <span *ngIf="!isUploadingGR">📦 Upload GR</span>
+          <span *ngIf="isUploadingGR">⏳ Processing OCR...</span>
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+</div>
