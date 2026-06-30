@@ -4,6 +4,7 @@ import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Chart, registerables } from 'chart.js';
 import { FormsModule } from '@angular/forms';
+import { environment } from '../../../environments/environment';
 
 Chart.register(...registerables);
 
@@ -35,7 +36,7 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
   private vendorChartInstance: any = null;
   private matchChartInstance: any = null;
 
-  private apiUrl = 'http://localhost:5000';
+  private apiUrl = environment.apiUrl;
 
   constructor(
     private http: HttpClient,
