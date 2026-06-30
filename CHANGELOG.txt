@@ -91,3 +91,25 @@ Setup/config needed:
   None — re-push and Render's Blueprint auto-syncs on push (or use
   "Manual sync" on the Blueprint page if it doesn't pick it up
   automatically).
+
+----------------------------------------------------------------------
+
+Date: 2026-06-30
+What was changed:
+  - Removed "config.py" from .gitignore (auditlens-backend/.gitignore
+    rule, originally under "# 敏感配置").
+  - Committed auditlens-backend/config.py to the repo for the first time.
+
+Why:
+  Container built successfully but crashed on startup with
+  "ModuleNotFoundError: No module named 'config'" at app.py's
+  "from config import Config". Root cause: config.py was gitignored back
+  when it held hardcoded secrets, and that rule was never removed when
+  config.py was refactored (earlier in this deployment work) to read
+  everything from environment variables instead. Since config.py is now
+  just import logic (os.environ.get calls) with zero secrets in it, it's
+  safe to commit — Render's git clone never had the file at all, so
+  `COPY . .` in the Dockerfile had nothing to copy.
+
+Setup/config needed:
+  None.
