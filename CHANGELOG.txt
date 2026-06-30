@@ -113,3 +113,23 @@ Why:
 
 Setup/config needed:
   None.
+
+----------------------------------------------------------------------
+
+Date: 2026-06-30
+What was changed:
+  - No code changes. Migrated local PostgreSQL data (the "auditlens"
+    database, including existing test accounts) to the Render
+    "auditlens-db" production database via pg_dump (custom format,
+    schema + data) and pg_restore (--no-owner --no-acl --clean
+    --if-exists, against Render's External Database URL).
+
+Why:
+  Earlier deploy steps only created an empty Render database; this
+  migration carries over existing test accounts/data so the live app
+  doesn't start from scratch. This also resolves the "schema must be
+  loaded manually" step flagged in the first CHANGELOG entry above.
+
+Setup/config needed:
+  None. Verified by querying the `users` table on Render and logging into
+  the live app successfully.
