@@ -70,3 +70,24 @@ Setup/config needed (manual, on Render dashboard / your machine):
      files will be lost on every redeploy/restart. Needs a paid persistent
      disk or external object storage (e.g. S3) to fix — flag if you want
      this addressed next.
+
+----------------------------------------------------------------------
+
+Date: 2026-06-30
+What was changed:
+  - auditlens-backend/requirements.txt re-saved as plain UTF-8 (no BOM).
+
+Why:
+  The first Render Blueprint sync failed on the auditlens-backend web
+  service. Deploy logs showed null bytes between every character
+  (e.g. "F\x00l\x00a\x00s\x00k\x00=\x00=\x00..."), meaning the file was
+  UTF-16 — it was already UTF-16 before this deployment work started, and
+  the previous edit (trimming it down to 9 packages) preserved that
+  encoding instead of converting it. pip cannot parse a UTF-16
+  requirements.txt, so the Docker build failed before installing any
+  packages.
+
+Setup/config needed:
+  None — re-push and Render's Blueprint auto-syncs on push (or use
+  "Manual sync" on the Blueprint page if it doesn't pick it up
+  automatically).
