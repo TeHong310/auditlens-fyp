@@ -87,14 +87,16 @@
               <th>Status</th>
               <th>File Link</th>
               <th>Invoice No</th>
+              <th>PO Status</th>
+              <th>GR Status</th>
               <th>Error Type</th>
               <th>Action</th>
             </tr>
           </thead>
           <tbody>
-            <tr *ngIf="isLoading"><td colspan="5" class="loading-row">Loading...</td></tr>
+            <tr *ngIf="isLoading"><td colspan="7" class="loading-row">Loading...</td></tr>
             <tr *ngIf="!isLoading && filteredDocuments.length === 0">
-              <td colspan="5" class="empty-row">
+              <td colspan="7" class="empty-row">
                 <p style="color:#10B981;font-weight:600">All documents submitted!</p>
               </td>
             </tr>
@@ -108,6 +110,16 @@
               </td>
               <td class="file-link">{{ doc.file_name }}</td>
               <td class="invoice-no">{{ doc.invoice_number || '-' }}</td>
+              <td>
+                <span class="badge" [ngClass]="getPOStatusClass(doc)" [title]="getPOTooltip(doc)">
+                  {{ getPOStatusLabel(doc) }}
+                </span>
+              </td>
+              <td>
+                <span class="badge" [ngClass]="getGRStatusClass(doc)" [title]="getGRTooltip(doc)">
+                  {{ getGRStatusLabel(doc) }}
+                </span>
+              </td>
               <td><span class="badge" [ngClass]="getErrorClass(doc)">{{ getErrorType(doc) }}</span></td>
               <td style="display:flex; gap:6px;">
                 <button class="btn-review" (click)="selectDocument(doc); $event.stopPropagation()">Review</button>
@@ -124,6 +136,14 @@
     <div class="detail-card" *ngIf="selectedDoc">
       <h2 class="section-title">OCR Extracted Fields</h2>
       <p class="section-subtitle">{{ selectedDoc.file_name }}</p>
+      <div class="related-docs-row">
+        <span class="badge" [ngClass]="getPOStatusClass(selectedDoc)" [title]="getPOTooltip(selectedDoc)">
+          {{ getPOStatusLabel(selectedDoc) }}
+        </span>
+        <span class="badge" [ngClass]="getGRStatusClass(selectedDoc)" [title]="getGRTooltip(selectedDoc)">
+          {{ getGRStatusLabel(selectedDoc) }}
+        </span>
+      </div>
       <div class="confidence-bar-wrapper">
         <div class="confidence-label-row">
           <span class="confidence-label-text">OCR Confidence</span>

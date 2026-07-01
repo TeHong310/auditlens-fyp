@@ -175,6 +175,15 @@
 
 .badge-error { background: #FEF2F2; color: #DC2626; }
 .badge-ready { background: #ECFDF5; color: #059669; }
+.badge-missing { background: #FFF7ED; color: #D97706; }
+.badge-pending { background: #F3F4F6; color: #9CA3AF; }
+
+.related-docs-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
 
 .btn-review {
   padding: 5px 12px;

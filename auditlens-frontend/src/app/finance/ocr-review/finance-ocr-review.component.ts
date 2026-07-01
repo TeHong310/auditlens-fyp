@@ -3,6 +3,8 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { forkJoin, of } from 'rxjs';
+import { catchError } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 
 @Component({
@@ -101,8 +103,40 @@ export class FinanceOcrReviewComponent implements OnInit {
         this.cdr.detectChanges();
         this.loadGRList(); // ← 加这行
         this.loadPOList();
+        this.loadRelatedDocsForAll();
       },
       error: () => { this.isLoading = false; }
+    });
+  }
+
+  // Calls GET /ocr-review/invoice/<document_id>/related-docs for every
+  // loaded invoice in parallel (not sequentially), then attaches the
+  // returned po/gr status onto each document row.
+  loadRelatedDocsForAll() {
+    if (!this.documents.length) return;
+
+    const requests: { [documentId: number]: any } = {};
+    for (const doc of this.documents) {
+      requests[doc.document_id] = this.http.get<any>(
+        `${this.apiUrl}/ocr-review/invoice/${doc.document_id}/related-docs`,
+        { headers: this.getHeaders() }
+      ).pipe(catchError(() => of(null)));
+    }
+
+    forkJoin(requests).subscribe((results: any) => {
+      this.documents = this.documents.map(doc => {
+        const related = results[doc.document_id];
+        return {
+          ...doc,
+          po: related?.po ?? null,
+          gr: related?.gr ?? null
+        };
+      });
+      if (this.selectedDoc) {
+        const updated = this.documents.find(d => d.document_id === this.selectedDoc.document_id);
+        if (updated) this.selectedDoc = updated;
+      }
+      this.cdr.detectChanges();
     });
   }
 
@@ -410,5 +444,37 @@ export class FinanceOcrReviewComponent implements OnInit {
     if (err === 'Ready') return 'badge-ready';
     if (err === 'Returned') return 'badge-returned';
     return 'badge-error';
+  }
+
+  // ── PO / GR related-doc status pills ─────────────────────
+
+  getPOStatusClass(doc: any): string {
+    if (!doc || doc.po === undefined || doc.po === null) return 'badge-pending';
+    return doc.po.uploaded ? 'badge-ready' : 'badge-missing';
+  }
+
+  getPOStatusLabel(doc: any): string {
+    if (!doc || doc.po === undefined || doc.po === null) return 'Checking...';
+    return doc.po.uploaded ? '✅ PO Uploaded' : '⚠️ PO Missing';
+  }
+
+  getPOTooltip(doc: any): string {
+    if (!doc?.po?.uploaded) return 'No matching PO uploaded yet';
+    return `Matched PO: ${doc.po.po_no || doc.po.filename || '-'}`;
+  }
+
+  getGRStatusClass(doc: any): string {
+    if (!doc || doc.gr === undefined || doc.gr === null) return 'badge-pending';
+    return doc.gr.uploaded ? 'badge-ready' : 'badge-missing';
+  }
+
+  getGRStatusLabel(doc: any): string {
+    if (!doc || doc.gr === undefined || doc.gr === null) return 'Checking...';
+    return doc.gr.uploaded ? '✅ GR Uploaded' : '⚠️ GR Missing';
+  }
+
+  getGRTooltip(doc: any): string {
+    if (!doc?.gr?.uploaded) return 'No matching GR uploaded yet';
+    return `Matched GR: ${doc.gr.gr_no || doc.gr.filename || '-'}`;
   }
 }

@@ -162,3 +162,40 @@ Why:
 
 Setup/config needed:
   None — no new dependencies, no schema change, no new env vars.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-01
+What was changed:
+  Frontend (auditlens-frontend/src/app/finance/ocr-review/):
+    - finance-ocr-review.component.ts: added loadRelatedDocsForAll(),
+      called right after loadDocuments() populates the invoice list. It
+      fires GET /ocr-review/invoice/<document_id>/related-docs for every
+      loaded invoice in parallel via forkJoin (each request wrapped with
+      catchError so one failing lookup doesn't blank out the rest), then
+      attaches the returned po/gr status onto each document row. Added
+      getPOStatusClass/Label/Tooltip and getGRStatusClass/Label/Tooltip
+      helpers for the template.
+    - finance-ocr-review.component.html: added "PO Status" and "GR
+      Status" columns to the Invoices Requiring Review table, between
+      "Invoice No" and "Error Type" (colspan on loading/empty rows
+      updated 5 -> 7 to match). Added a related-docs-row badge pair
+      (PO/GR status) to the OCR Extracted Fields detail panel for the
+      currently selected invoice.
+    - finance-ocr-review.component.css: added .badge-missing (orange,
+      "uploaded pending" state) and .badge-pending (grey, "checking...")
+      pill styles alongside the existing .badge-ready/.badge-error, plus
+      .related-docs-row for the detail-panel badge row.
+
+Why:
+  Lets Finance see at a glance, without leaving the Invoice tab, whether
+  an invoice's matching PO and GR have already been uploaded (green
+  "Uploaded" pill) or are still missing (orange "Missing" pill), reusing
+  the /ocr-review/invoice/<id>/related-docs endpoint added in the prior
+  entry. Parallel forkJoin requests avoid an N-request waterfall when the
+  invoice list is opened/refreshed.
+
+Setup/config needed:
+  None — no new dependencies, no schema/env changes. Requires the Render
+  frontend static site to redeploy so the built bundle picks up these
+  changes.
