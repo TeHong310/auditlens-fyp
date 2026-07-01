@@ -315,3 +315,62 @@ Setup/config needed:
      session's live test (see security note above) before relying on
      the old value in production.
   3. Redeploy the Render backend service after pushing.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-01
+What was changed:
+  Backend (auditlens-backend/helpers/ocr_helper.py):
+    - extract_po_fields() and extract_gr_fields(): replaced the
+      "Gemini fills only if regex left the field None" fallback block
+      (added in the previous entry) with a "Gemini primary, regex
+      secondary" strategy. Gemini is now always called for PO/GR, and
+      its result overrides regex for po_number/vendor_name/po_date/
+      total_amount (PO) and gr_number/vendor_name/receipt_date (GR)
+      whenever Gemini returns a non-null value for that field. Regex
+      values are kept only if Gemini returns {} or raises.
+    - extract_fields() (invoice) is UNCHANGED: still regex-primary,
+      Gemini only fills fields regex left None.
+    - helpers/gemini_extractor.py untouched — its PO/GR prompts already
+      encode the buyer-vs-vendor distinction, which is exactly why they
+      can be trusted as primary for these two document types.
+
+Why:
+  Real-world testing on PO-2025-0512.pdf and GR-2025-0520.pdf showed
+  regex reliably fills PO/GR fields with a WRONG but non-null value
+  rather than leaving them None, because PO/GR flip the semantic role
+  of the header company (header = buyer, not vendor) in a way regex
+  pattern-matching cannot reason about. The previous "fill only if
+  None" rule (correctly implemented per the prior request, but flagged
+  at the time as a known gap) never had a chance to correct these,
+  since the fields were never actually None. Concretely: regex returned
+  po_number "2025-0512" (stripped the "PO-" prefix from a bare
+  "PO-2025-0512" line) and vendor_name "KDU TECH SDN. BHD" (the buyer,
+  read from the document header) instead of the actual vendor
+  "ZITRON ENTERPRISE SDN. BHD."; the same buyer-as-vendor and
+  prefix-stripping pattern showed up on the GR. Invoice extraction
+  keeps regex as primary because there the header genuinely is the
+  seller/vendor, which regex already handles reliably (confirmed
+  unchanged: Zitron invoice still fully regex-extracted with Gemini
+  never called; INV-ZE-2025-0587 still correctly filled via the
+  regex-primary/Gemini-fallback path).
+
+  Verified with mocked Gemini responses reproducing the reported
+  failure: reconstructed OCR text that makes regex alone return
+  po_number "2025-0512" / vendor_name "KDU TECH SDN. BHD" (PO) and
+  gr_number "2025-0520" / vendor_name "KDU TECH SDN. BHD" (GR) —
+  confirming the bug is real and not fixed by the previous None-only
+  fallback — then confirmed Gemini-as-primary correctly overrides all
+  of them to the expected values. Also verified regex values are kept
+  as a safety net when the Gemini call raises an exception.
+
+Cost impact:
+  Gemini is now called on every PO/GR upload (not just on a regex
+  miss), roughly doubling call volume for those two document types.
+  At Gemini 2.0 Flash's free tier (1500 requests/day), this stays well
+  within limits for demo and typical SME upload volume.
+
+Setup/config needed:
+  None beyond the previous entry (GEMINI_API_KEY still required in both
+  local .env and Render). Redeploy the Render backend service after
+  pushing.

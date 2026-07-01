@@ -521,19 +521,29 @@ def extract_po_fields(ocr_text):
             if val:
                 fields['total_amount'] = val
 
-    # ── Gemini semantic fallback for missed fields ──
-    missing = [k for k, v in fields.items() if v is None and k != 'currency']
-    if missing:
-        print(f"DEBUG Regex missed po fields: {missing}, calling Gemini fallback")
-        try:
-            from helpers.gemini_extractor import gemini_extract_po
-            g = gemini_extract_po(ocr_text)
-            for k in missing:
-                if g.get(k) is not None:
-                    fields[k] = g[k]
-                    print(f"DEBUG Gemini filled po.{k} = {g[k]}")
-        except Exception as e:
-            print(f"DEBUG Gemini po fallback error: {e}")
+    # PO/GR use Gemini as PRIMARY source because these documents flip the
+    # semantic role of the header company (buyer, not vendor), which regex
+    # cannot reason about. Regex values are kept only as fallback if Gemini
+    # fails or returns empty. Invoice extraction remains regex-primary since
+    # header = seller there and regex handles it reliably.
+    try:
+        from helpers.gemini_extractor import gemini_extract_po
+        g = gemini_extract_po(ocr_text)
+        if g:  # Gemini returned something
+            print(f"DEBUG Gemini primary PO result: {g}")
+            # Gemini wins for these semantically-sensitive fields
+            for key in ['po_number', 'vendor_name', 'po_date', 'total_amount']:
+                if g.get(key) is not None:
+                    old_val = fields.get(key)
+                    fields[key] = g[key]
+                    if old_val != g[key]:
+                        print(f"DEBUG Gemini overrode PO.{key}: '{old_val}' -> '{g[key]}'")
+        else:
+            print("DEBUG Gemini returned empty for PO, keeping regex values")
+    except Exception as e:
+        print(f"DEBUG Gemini PO extraction failed: {e}, keeping regex values")
+
+    # Regex values remain as fallback if Gemini returned None or failed
 
     print(f"DEBUG PO extracted fields: {fields}")
     return fields
@@ -625,19 +635,28 @@ def extract_gr_fields(ocr_text):
             if val:
                 fields['total_amount'] = val
 
-    # ── Gemini semantic fallback for missed fields ──
-    missing = [k for k, v in fields.items() if v is None and k != 'currency']
-    if missing:
-        print(f"DEBUG Regex missed gr fields: {missing}, calling Gemini fallback")
-        try:
-            from helpers.gemini_extractor import gemini_extract_gr
-            g = gemini_extract_gr(ocr_text)
-            for k in missing:
-                if g.get(k) is not None:
-                    fields[k] = g[k]
-                    print(f"DEBUG Gemini filled gr.{k} = {g[k]}")
-        except Exception as e:
-            print(f"DEBUG Gemini gr fallback error: {e}")
+    # PO/GR use Gemini as PRIMARY source because these documents flip the
+    # semantic role of the header company (buyer, not vendor), which regex
+    # cannot reason about. Regex values are kept only as fallback if Gemini
+    # fails or returns empty. Invoice extraction remains regex-primary since
+    # header = seller there and regex handles it reliably.
+    try:
+        from helpers.gemini_extractor import gemini_extract_gr
+        g = gemini_extract_gr(ocr_text)
+        if g:
+            print(f"DEBUG Gemini primary GR result: {g}")
+            for key in ['gr_number', 'vendor_name', 'receipt_date']:
+                if g.get(key) is not None:
+                    old_val = fields.get(key)
+                    fields[key] = g[key]
+                    if old_val != g[key]:
+                        print(f"DEBUG Gemini overrode GR.{key}: '{old_val}' -> '{g[key]}'")
+        else:
+            print("DEBUG Gemini returned empty for GR, keeping regex values")
+    except Exception as e:
+        print(f"DEBUG Gemini GR extraction failed: {e}, keeping regex values")
+
+    # Regex values remain as fallback if Gemini returned None or failed
 
     print(f"DEBUG GR extracted fields: {fields}")
     return fields
