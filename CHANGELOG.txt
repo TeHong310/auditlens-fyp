@@ -374,3 +374,92 @@ Setup/config needed:
   None beyond the previous entry (GEMINI_API_KEY still required in both
   local .env and Render). Redeploy the Render backend service after
   pushing.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-02
+What was changed:
+  Frontend (auditlens-frontend/src/app/finance/ocr-review/):
+    - finance-ocr-review.component.html:
+      * GR tab list table: replaced the "Amount" column with "Date"
+        (bound to formatDate(gr.receipt_date)) — columns are now File
+        Name, GR Number, Vendor, Date.
+      * GR detail panel: removed the "Total Amount (RM)" field entirely.
+      * Invoice detail panel: "Tax Amount (RM)" field is now wrapped in
+        *ngIf="showTaxAmount" (hidden, no "Not detected" placeholder,
+        when the invoice has no tax). Added a "+ Add Tax Amount" button
+        shown when the field is hidden, which reveals it for manual
+        entry. Total Amount is unchanged (still always shown, still
+        shows "Not detected" when missing).
+    - finance-ocr-review.component.ts: added showTaxAmount boolean and
+      addTaxAmount() method; selectDocument() now sets showTaxAmount
+      based on whether the selected invoice's tax_amount is non-null.
+    - finance-ocr-review.component.css: added .btn-add-tax pill-button
+      style (light blue, dashed border, matches existing theme).
+    - editGRFields.total_amount (component state) and the GR save
+      request payload were deliberately left unchanged/still populated
+      from the loaded GR record, even though the input is gone from the
+      UI — see rationale below.
+  Backend (auditlens-backend/helpers/ocr_helper.py), extract_fields():
+    - Fixed invoice-number truncation: the post-match cleanup
+      `val = re.sub(r'\s*-\s*\d+$', '', val).strip()` stripped ANY
+      trailing "-<digits>", including one that's part of the actual
+      invoice number (e.g. "INV-SE-2025-1001" -> "INV-SE-2025"). Changed
+      to `re.sub(r'\s+-\s+\d+$', '', val)`, which only strips a trailing
+      "- N" when there's whitespace on both sides of the hyphen (a
+      page-number-style suffix like "INV12345 - 3"), leaving
+      whitespace-free hyphens that are part of the number itself alone.
+
+Why:
+  UI change: GR documents don't carry a monetary total (that's on
+  Invoices/POs), so showing "Total Amount (RM): Not detected" on every
+  GR made users think OCR had failed when the field simply doesn't
+  exist on that document type. Many Malaysian SME invoices are
+  SST-exempt or from non-registered vendors and have no tax line, so
+  the same "Not detected" placeholder was misleading there too — hiding
+  it when null (with a manual "+ Add Tax Amount" escape hatch) removes
+  the false-failure signal while keeping the field available when
+  actually needed. Total Amount keeps "Not detected" since every
+  invoice is expected to have one, so a missing value there is a real
+  OCR miss worth flagging.
+
+  IMPLEMENTATION NOTE on the GR total_amount removal: the PUT
+  /documents/gr/<id>/update backend route (documents.py) unconditionally
+  writes `total_amount = data.get('total_amount') or None` on every
+  save. If the frontend had stopped sending total_amount in the payload
+  entirely, every "Save GR Changes" click would have silently wiped any
+  total_amount already stored from OCR/Gemini extraction — even though
+  the task explicitly said the field should stay in the model
+  ("optional/nullable for backward compatibility") rather than be
+  destroyed. So editGRFields.total_amount and the save payload were
+  left as-is; only the visible input and its label were removed. Net
+  effect: no editable/visible Total Amount on GR, but no silent data
+  loss on save. Flagging this judgment call in case a stricter
+  interpretation (also strip the field from the save payload) was
+  intended instead.
+
+  Bug fix: reported on invoice "INV-SE-2025-1001.pdf" — regex correctly
+  captured the full "INV-SE-2025-1001" via
+  `([A-Za-z0-9\-\/]+)`, but a subsequent cleanup line meant to strip
+  page-number artifacts like "INV12345 - 3" used a regex with optional
+  (`\s*`) whitespace around the hyphen, so it also matched and removed
+  the legitimate "-1001" segment. Requiring at least one space on each
+  side of the hyphen distinguishes an artifact suffix from a hyphen
+  that's actually part of the invoice number.
+
+  Verified (mocked Gemini, dependencies stubbed as in prior entries):
+  "INV-SE-2025-1001" style text now extracts invoice_number
+  "INV-SE-2025-1001" in full; the original Zitron invoice
+  (INZEPG047575, no hyphens) is unaffected; a synthetic
+  "INV12345 - 3" (space-hyphen-space-digit suffix) still correctly
+  strips down to "INV12345".
+
+Setup/config needed:
+  None — no new dependencies, no schema/env changes.
+  1. Redeploy the Render frontend (static site) to pick up the GR/Tax
+     UI changes.
+  2. Redeploy the Render backend to pick up the invoice-number regex
+     fix.
+  3. Delete the existing truncated "INV-SE-2025-1001" document (it has
+     invoice_number "INV-SE-2025" stored) and re-upload the same PDF to
+     confirm it now extracts the full number.

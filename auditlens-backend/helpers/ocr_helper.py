@@ -258,7 +258,11 @@ def extract_fields(ocr_text):
                     match = re.search(p, line_clean, re.IGNORECASE)
                     if match:
                         val = match.group(1).strip().rstrip('-').strip()
-                        val = re.sub(r'\s*-\s*\d+$', '', val).strip()
+                        # Only strip a trailing "- N" as a page-suffix artifact
+                        # (e.g. "INV12345 - 3") when it's whitespace-separated -
+                        # a hyphen with no surrounding spaces is part of the
+                        # invoice number itself (e.g. "INV-SE-2025-1001").
+                        val = re.sub(r'\s+-\s+\d+$', '', val).strip()
                         if is_valid_invoice_number(val):
                             fields['invoice_number'] = val
                             break

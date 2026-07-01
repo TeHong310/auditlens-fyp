@@ -179,10 +179,13 @@
           <input class="field-input" type="number" [(ngModel)]="editFields.total_amount"
                  [class.field-missing]="!editFields.total_amount" placeholder="Not detected"/>
         </div>
-        <div class="field-item">
+        <div class="field-item" *ngIf="showTaxAmount">
           <label class="field-label">Tax Amount (RM)</label>
-          <input class="field-input" type="number" [(ngModel)]="editFields.tax_amount" placeholder="Not detected"/>
+          <input class="field-input" type="number" [(ngModel)]="editFields.tax_amount" placeholder="0.00"/>
         </div>
+        <button type="button" class="btn-add-tax" *ngIf="!showTaxAmount" (click)="addTaxAmount()">
+          + Add Tax Amount
+        </button>
       </div>
       <div class="submit-section">
         <button class="btn-save" (click)="saveChanges()" [disabled]="isSaving">
@@ -326,7 +329,7 @@
               <th>File Name</th>
               <th>GR Number</th>
               <th>Vendor</th>
-              <th>Amount</th>
+              <th>Date</th>
             </tr>
           </thead>
           <tbody>
@@ -340,7 +343,7 @@
               <td class="file-link">{{ gr.file_name }}</td>
               <td class="invoice-no">{{ gr.gr_number || '-' }}</td>
               <td>{{ gr.vendor_name || '-' }}</td>
-              <td>{{ gr.total_amount ? 'RM ' + gr.total_amount : '-' }}</td>
+              <td>{{ formatDate(gr.receipt_date) }}</td>
             </tr>
           </tbody>
         </table>
@@ -380,11 +383,6 @@
           <label class="field-label">Receipt Date</label>
           <input class="field-input" type="text" [(ngModel)]="editGRFields.receipt_date"
                  placeholder="Not detected"/>
-        </div>
-        <div class="field-item">
-          <label class="field-label">Total Amount (RM)</label>
-          <input class="field-input" type="number" [(ngModel)]="editGRFields.total_amount"
-                 [class.field-missing]="!editGRFields.total_amount" placeholder="Not detected"/>
         </div>
       </div>
       <div class="submit-section">

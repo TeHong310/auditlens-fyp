@@ -30,6 +30,7 @@ export class FinanceOcrReviewComponent implements OnInit {
     invoice_number: '', vendor_name: '',
     invoice_date: '', total_amount: '', tax_amount: ''
   };
+  showTaxAmount: boolean = false;
 
   // PO
   poList: any[] = [];
@@ -157,8 +158,14 @@ export class FinanceOcrReviewComponent implements OnInit {
       total_amount: doc.total_amount || '',
       tax_amount: doc.tax_amount || ''
     };
+    this.showTaxAmount = doc.tax_amount !== null && doc.tax_amount !== undefined && doc.tax_amount !== '';
     this.successMessage = '';
     this.errorMessage = '';
+    this.cdr.detectChanges();
+  }
+
+  addTaxAmount() {
+    this.showTaxAmount = true;
     this.cdr.detectChanges();
   }
 
