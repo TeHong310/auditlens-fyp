@@ -567,3 +567,61 @@ Setup/config needed:
   4. Test with a record missing its PO or GR — should show a yellow
      PARTIAL banner, with the missing document's column showing "Not
      Uploaded" and its View button disabled.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-02
+What was changed:
+  Frontend (auditlens-frontend/src/app/auditor/record-detail/) — visual
+  polish only, no functional/backend changes:
+    - Status banner: bigger (32px icon, two-line title/subtitle plus a
+      meta line), gradient backgrounds per status with a 4px left
+      accent border (green/amber/red), and rewritten copy ("All Fields
+      Match" / "Documents Incomplete" / "Mismatch Detected" with a
+      dynamic subtitle e.g. "Awaiting PO upload" vs "...GR upload" vs
+      "...PO and GR upload").
+    - Comparison table wrapped in its own card (rounded 12px, subtle
+      shadow, 3px blue left accent, 24px padding) with a "⚖️ Field
+      Comparison" header. Column headers are now small/uppercase/
+      letter-spaced with a status badge underneath (blue "Source" for
+      Invoice, green "Uploaded" / grey "Not Uploaded" for PO/GR).
+    - Each field row gets an icon (🏢 Vendor, 💰 Amount, 🔗 PO Ref, 📅
+      Date, 📄 Doc No), alternating row backgrounds, a light-blue hover
+      state, and a red left border + red background on mismatch rows.
+    - Replaced the old tiny inline "=" / "≠" / "—" symbols with proper
+      rounded pill badges (✓ Match / ✗ Differ / — N/A / < Before),
+      colored per status, shown above the compared value in each PO/GR
+      cell.
+    - Values switched from monospace to regular sans-serif (14px,
+      #0f172a) for readability; monospace is now reserved for the Doc
+      No row only. Amounts use tabular-nums for aligned digits.
+    - Missing-document columns (PO/GR not uploaded) now render as a
+      diagonal-striped grey cell with an upload icon, "Not Uploaded"
+      text, and a static "+ Upload PO"/"+ Upload GR" hint (non-
+      functional placeholder — no upload action wired up here).
+    - Source Documents buttons switched from plain outlined to filled
+      blue gradient buttons showing the label and the actual filename
+      underneath; disabled state unchanged (greyed, "Not uploaded"
+      tooltip).
+    - Page font stack changed to 'Inter', system-ui, -apple-system,
+      'Segoe UI', sans-serif (falls back to the same system font as
+      before on Windows/most browsers since no Inter font file is
+      loaded — no new dependency, no visible regression, just a more
+      explicit stack per the requested "one font family" consistency).
+    - Rewrote most of the component's .css: .main-card was a duplicate
+      card wrapper around the new .comparison-card, which would have
+      produced a double shadow/padding, so .main-card was flattened to
+      a plain layout container and .comparison-card became the actual
+      visible card.
+
+Why:
+  Purely a presentation-readiness pass on the record-detail page shipped
+  in the previous entry — the match/PASS-PARTIAL-FAIL logic and API
+  payload are unchanged. Requested to make the comparison table read
+  like a polished audit tool rather than debug output: bigger visual
+  hierarchy on match/mismatch, clearer missing-document states, and
+  consistent typography.
+
+Setup/config needed:
+  None — no new dependencies, no backend changes.
+  1. Redeploy the Render frontend to pick up the visual polish.

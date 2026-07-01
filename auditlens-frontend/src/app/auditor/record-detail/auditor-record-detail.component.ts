@@ -160,9 +160,18 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   }
 
   getBannerText(): string {
-    if (this.overallStatus === 'PASS') return 'ALL FIELDS MATCH';
-    if (this.overallStatus === 'FAIL') return 'MISMATCH DETECTED — REVIEW REQUIRED';
-    return 'SOME DOCUMENTS MISSING';
+    if (this.overallStatus === 'PASS') return 'All Fields Match';
+    if (this.overallStatus === 'FAIL') return 'Mismatch Detected';
+    return 'Documents Incomplete';
+  }
+
+  getBannerSubtitle(): string {
+    if (this.overallStatus === 'PASS') return 'Ready for approval';
+    if (this.overallStatus === 'FAIL') return 'Review required — see highlighted rows';
+    if (this.comparison && !this.comparison.po && !this.comparison.gr) return 'Awaiting PO and GR upload';
+    if (this.comparison && !this.comparison.po) return 'Awaiting PO upload';
+    if (this.comparison && !this.comparison.gr) return 'Awaiting GR upload';
+    return 'Some documents missing';
   }
 
   // ── Field comparison table helpers ──────────────────────
@@ -197,6 +206,24 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
 
   rowClass(symbols: ('eq' | 'neq' | 'na')[]): string {
     return symbols.includes('neq') ? 'row-mismatch' : '';
+  }
+
+  matchPillClass(sym: 'eq' | 'neq' | 'na'): string {
+    if (sym === 'eq') return 'pill-match';
+    if (sym === 'neq') return 'pill-differ';
+    return 'pill-na';
+  }
+
+  matchPillIcon(sym: 'eq' | 'neq' | 'na'): string {
+    if (sym === 'eq') return '✓';
+    if (sym === 'neq') return '✗';
+    return '—';
+  }
+
+  matchPillText(sym: 'eq' | 'neq' | 'na'): string {
+    if (sym === 'eq') return 'Match';
+    if (sym === 'neq') return 'Differ';
+    return 'N/A';
   }
 
   // ── Formatting ───────────────────────────────────────────

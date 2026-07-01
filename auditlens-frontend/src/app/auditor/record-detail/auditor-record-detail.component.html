@@ -35,6 +35,7 @@
       <span class="banner-icon">{{ getBannerIcon() }}</span>
       <div class="banner-text">
         <p class="banner-title">{{ getBannerText() }}</p>
+        <p class="banner-subtitle">{{ getBannerSubtitle() }}</p>
         <p class="banner-meta">
           Uploaded {{ formatDate(comparison.invoice.uploaded_at) }}
           <span *ngIf="comparison.invoice.ocr_confidence !== null"> • OCR Confidence {{ comparison.invoice.ocr_confidence }}%</span>
@@ -51,108 +52,194 @@
 
       <!-- Left: Field Comparison -->
       <div class="main-card">
-        <h2 class="section-title">📊 Field-by-Field Comparison</h2>
-        <p class="section-subtitle">Invoice vs {{ comparison.po ? 'PO' : 'no PO' }} vs {{ comparison.gr ? 'GR' : 'no GR' }}</p>
 
-        <div class="comparison-table">
-          <table class="field-table">
-            <thead>
-              <tr>
-                <th>Field</th>
-                <th>Invoice</th>
-                <th>PO</th>
-                <th>GR</th>
-              </tr>
-            </thead>
-            <tbody>
-              <!-- Vendor -->
-              <tr [ngClass]="rowClass([vendorSymbol(comparison.invoice.vendor_name, comparison.po?.vendor_name), vendorSymbol(comparison.po?.vendor_name, comparison.gr?.vendor_name)])">
-                <td class="field-name">Vendor</td>
-                <td class="mono">{{ comparison.invoice.vendor_name || '-' }}</td>
-                <td class="mono" *ngIf="comparison.po">
-                  <span class="sym" [ngClass]="'sym-' + vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name)">
-                    {{ vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name) === 'eq' ? '=' : '≠' }}
-                  </span> {{ comparison.po.vendor_name || '-' }}
-                </td>
-                <td class="not-uploaded" *ngIf="!comparison.po">Not Uploaded</td>
-                <td class="mono" *ngIf="comparison.gr">
-                  <span class="sym" [ngClass]="'sym-' + vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name)">
-                    {{ vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name) === 'eq' ? '=' : '≠' }}
-                  </span> {{ comparison.gr.vendor_name || '-' }}
-                </td>
-                <td class="not-uploaded" *ngIf="!comparison.gr">Not Uploaded</td>
-              </tr>
+        <!-- Comparison Card -->
+        <div class="comparison-card">
+          <div class="comparison-card-header">
+            <h2 class="comparison-title">⚖️ Field Comparison</h2>
+            <p class="comparison-subtitle">Invoice vs PO vs GR</p>
+          </div>
 
-              <!-- Amount -->
-              <tr [ngClass]="rowClass([amountSymbol(comparison.invoice.total_amount, comparison.po?.total_amount)])">
-                <td class="field-name">Amount</td>
-                <td class="mono">{{ formatAmount(comparison.invoice.total_amount) }}</td>
-                <td class="mono" *ngIf="comparison.po">
-                  <span class="sym" [ngClass]="'sym-' + amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount)">
-                    {{ amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount) === 'eq' ? '=' : '≠' }}
-                  </span> {{ formatAmount(comparison.po.total_amount) }}
-                </td>
-                <td class="not-uploaded" *ngIf="!comparison.po">Not Uploaded</td>
-                <td class="mono na" *ngIf="comparison.gr">
-                  <span class="sym sym-na">—</span> n/a
-                </td>
-                <td class="not-uploaded" *ngIf="!comparison.gr">Not Uploaded</td>
-              </tr>
+          <div class="comparison-table-wrap">
+            <table class="field-table">
+              <thead>
+                <tr>
+                  <th class="col-field">Field</th>
+                  <th>
+                    <div class="col-head">Invoice</div>
+                    <span class="col-badge col-badge-source">Source</span>
+                  </th>
+                  <th>
+                    <div class="col-head">PO</div>
+                    <span class="col-badge" [ngClass]="comparison.po ? 'col-badge-uploaded' : 'col-badge-missing'">
+                      {{ comparison.po ? 'Uploaded' : 'Not Uploaded' }}
+                    </span>
+                  </th>
+                  <th>
+                    <div class="col-head">GR</div>
+                    <span class="col-badge" [ngClass]="comparison.gr ? 'col-badge-uploaded' : 'col-badge-missing'">
+                      {{ comparison.gr ? 'Uploaded' : 'Not Uploaded' }}
+                    </span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <!-- Vendor -->
+                <tr [ngClass]="rowClass([vendorSymbol(comparison.invoice.vendor_name, comparison.po?.vendor_name), vendorSymbol(comparison.po?.vendor_name, comparison.gr?.vendor_name)])">
+                  <td class="field-name"><span class="field-icon">🏢</span> Vendor</td>
+                  <td class="cell-value">{{ comparison.invoice.vendor_name || '-' }}</td>
+                  <td class="cell-value" *ngIf="comparison.po">
+                    <span class="match-pill" [ngClass]="matchPillClass(vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name))">
+                      {{ matchPillIcon(vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name)) }}
+                      {{ matchPillText(vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name)) }}
+                    </span>
+                    <div class="cell-main-value">{{ comparison.po.vendor_name || '-' }}</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload PO</span>
+                  </td>
+                  <td class="cell-value" *ngIf="comparison.gr">
+                    <span class="match-pill" [ngClass]="matchPillClass(vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name))">
+                      {{ matchPillIcon(vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name)) }}
+                      {{ matchPillText(vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name)) }}
+                    </span>
+                    <div class="cell-main-value">{{ comparison.gr.vendor_name || '-' }}</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload GR</span>
+                  </td>
+                </tr>
 
-              <!-- PO Ref -->
-              <tr>
-                <td class="field-name">PO Ref</td>
-                <td class="mono na">—</td>
-                <td class="mono" *ngIf="comparison.po">{{ comparison.po.po_no || '-' }}</td>
-                <td class="not-uploaded" *ngIf="!comparison.po">Not Uploaded</td>
-                <td class="mono na" *ngIf="comparison.gr">—</td>
-                <td class="not-uploaded" *ngIf="!comparison.gr">Not Uploaded</td>
-              </tr>
+                <!-- Amount -->
+                <tr [ngClass]="rowClass([amountSymbol(comparison.invoice.total_amount, comparison.po?.total_amount)])">
+                  <td class="field-name"><span class="field-icon">💰</span> Amount</td>
+                  <td class="cell-value cell-amount">{{ formatAmount(comparison.invoice.total_amount) }}</td>
+                  <td class="cell-value" *ngIf="comparison.po">
+                    <span class="match-pill" [ngClass]="matchPillClass(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount))">
+                      {{ matchPillIcon(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount)) }}
+                      {{ matchPillText(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount)) }}
+                    </span>
+                    <div class="cell-main-value cell-amount">{{ formatAmount(comparison.po.total_amount) }}</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload PO</span>
+                  </td>
+                  <td class="cell-value" *ngIf="comparison.gr">
+                    <span class="match-pill pill-na">— N/A</span>
+                    <div class="cell-main-value cell-muted">No amount on GR</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload GR</span>
+                  </td>
+                </tr>
 
-              <!-- Date -->
-              <tr>
-                <td class="field-name">Date</td>
-                <td class="mono">{{ formatDate(comparison.invoice.invoice_date) }}</td>
-                <td class="mono" *ngIf="comparison.po">
-                  <span class="sym sym-na">&lt;</span> {{ formatDate(comparison.po.po_date) }}
-                </td>
-                <td class="not-uploaded" *ngIf="!comparison.po">Not Uploaded</td>
-                <td class="mono" *ngIf="comparison.gr">
-                  <span class="sym sym-na">&lt;</span> {{ formatDate(comparison.gr.receipt_date) }}
-                </td>
-                <td class="not-uploaded" *ngIf="!comparison.gr">Not Uploaded</td>
-              </tr>
+                <!-- PO Ref -->
+                <tr>
+                  <td class="field-name"><span class="field-icon">🔗</span> PO Ref</td>
+                  <td class="cell-value cell-muted">—</td>
+                  <td class="cell-value" *ngIf="comparison.po">
+                    <div class="cell-main-value">{{ comparison.po.po_no || '-' }}</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload PO</span>
+                  </td>
+                  <td class="cell-value cell-muted" *ngIf="comparison.gr">—</td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload GR</span>
+                  </td>
+                </tr>
 
-              <!-- Doc No -->
-              <tr>
-                <td class="field-name">Doc No</td>
-                <td class="mono">{{ comparison.invoice.invoice_no || '-' }}</td>
-                <td class="mono" *ngIf="comparison.po">{{ comparison.po.po_no || '-' }}</td>
-                <td class="not-uploaded" *ngIf="!comparison.po">Not Uploaded</td>
-                <td class="mono" *ngIf="comparison.gr">{{ comparison.gr.gr_no || '-' }}</td>
-                <td class="not-uploaded" *ngIf="!comparison.gr">Not Uploaded</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+                <!-- Date -->
+                <tr>
+                  <td class="field-name"><span class="field-icon">📅</span> Date</td>
+                  <td class="cell-value">{{ formatDate(comparison.invoice.invoice_date) }}</td>
+                  <td class="cell-value" *ngIf="comparison.po">
+                    <span class="match-pill pill-before">&lt; Before</span>
+                    <div class="cell-main-value">{{ formatDate(comparison.po.po_date) }}</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload PO</span>
+                  </td>
+                  <td class="cell-value" *ngIf="comparison.gr">
+                    <span class="match-pill pill-before">&lt; Before</span>
+                    <div class="cell-main-value">{{ formatDate(comparison.gr.receipt_date) }}</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload GR</span>
+                  </td>
+                </tr>
 
-        <!-- Source Documents -->
-        <div class="source-docs-section">
-          <h3 class="source-docs-title">📄 Source Documents</h3>
-          <div class="source-docs-buttons">
-            <button class="btn-view-doc" (click)="openDocModal('invoice')">
-              👁 View Invoice
-            </button>
-            <button class="btn-view-doc" [disabled]="!isDocAvailable('po')"
-                    [title]="!isDocAvailable('po') ? 'Not uploaded' : ''"
-                    (click)="openDocModal('po')">
-              👁 View PO
-            </button>
-            <button class="btn-view-doc" [disabled]="!isDocAvailable('gr')"
-                    [title]="!isDocAvailable('gr') ? 'Not uploaded' : ''"
-                    (click)="openDocModal('gr')">
-              👁 View GR
-            </button>
+                <!-- Doc No -->
+                <tr>
+                  <td class="field-name"><span class="field-icon">📄</span> Doc No</td>
+                  <td class="cell-value cell-docno">{{ comparison.invoice.invoice_no || '-' }}</td>
+                  <td class="cell-value" *ngIf="comparison.po">
+                    <div class="cell-main-value cell-docno">{{ comparison.po.po_no || '-' }}</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload PO</span>
+                  </td>
+                  <td class="cell-value" *ngIf="comparison.gr">
+                    <div class="cell-main-value cell-docno">{{ comparison.gr.gr_no || '-' }}</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload GR</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Source Documents -->
+          <div class="source-docs-section">
+            <h3 class="source-docs-title">📄 Source Documents</h3>
+            <div class="source-docs-buttons">
+              <button class="btn-view-doc" (click)="openDocModal('invoice')">
+                <span class="btn-view-doc-icon">👁</span>
+                <span class="btn-view-doc-text">
+                  <span class="btn-view-doc-label">View Invoice</span>
+                  <span class="btn-view-doc-filename">{{ comparison.invoice.filename }}</span>
+                </span>
+              </button>
+              <button class="btn-view-doc" [disabled]="!isDocAvailable('po')"
+                      [title]="!isDocAvailable('po') ? 'Not uploaded' : ''"
+                      (click)="openDocModal('po')">
+                <span class="btn-view-doc-icon">👁</span>
+                <span class="btn-view-doc-text">
+                  <span class="btn-view-doc-label">View PO</span>
+                  <span class="btn-view-doc-filename">{{ comparison.po?.filename || 'Not uploaded' }}</span>
+                </span>
+              </button>
+              <button class="btn-view-doc" [disabled]="!isDocAvailable('gr')"
+                      [title]="!isDocAvailable('gr') ? 'Not uploaded' : ''"
+                      (click)="openDocModal('gr')">
+                <span class="btn-view-doc-icon">👁</span>
+                <span class="btn-view-doc-text">
+                  <span class="btn-view-doc-label">View GR</span>
+                  <span class="btn-view-doc-filename">{{ comparison.gr?.filename || 'Not uploaded' }}</span>
+                </span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
