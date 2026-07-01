@@ -792,3 +792,52 @@ Setup/config needed:
   4. Confirm the Exceptions page shows sent-back records and any
      mismatched/incomplete records, with working filter chips and
      Investigate links back to record detail.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-02
+What was changed:
+  - auditlens-frontend/src/app/auditor/record-detail/
+    auditor-record-detail.component.ts: approveDocument() and
+    returnDocument() now POST { remarks: this.auditNote } instead of
+    { note: this.auditNote } to /reviews/approve/<id> and
+    /reviews/return/<id>.
+
+Why:
+  Bug report: typing text into the Remarks/Notes textarea and clicking
+  "Send Back" still produced "Remarks are required when returning a
+  document" even though the textarea visibly had text. The reported
+  hypothesis was a broken [(ngModel)] binding or a handler reading the
+  wrong component property — investigated and that part was actually
+  fine: the textarea's [(ngModel)]="auditNote" and both handlers'
+  `this.auditNote` reads already matched consistently, and
+  returnDocument()'s own client-side check (`if (!this.auditNote)`)
+  would have caught a truly empty value before ever calling the API.
+
+  The real bug was one layer further out, at the frontend/backend API
+  contract: reviews.py's approve_document()/return_document() read
+  `data.get('remarks', ...)` from the POST body, but the frontend was
+  sending the value under the key `note`, not `remarks`. So the
+  backend's `remarks` was always empty regardless of what the user
+  typed, and return_document() correctly (from its own point of view)
+  rejected it as missing.
+
+  Verified without mutating any real data: called
+  POST /reviews/return/<nonexistent_id> directly against the real
+  Flask app (a real auditor JWT, generated in-process, no login
+  needed) — the remarks check runs before the document lookup, so a
+  nonexistent document_id isolates the bug cleanly. Confirmed
+  {"note": "..."} still produces "Remarks are required" (reproducing
+  the exact reported bug) and {"remarks": "..."} passes that check and
+  fails later at "Document not found" instead (as expected for a
+  document that doesn't exist) — proving the fix without writing
+  anything to the database. Also confirmed {"remarks": ""} is still
+  correctly rejected, so the validation itself still works.
+
+  "Need Review" was not touched — it has no click handler at all
+  (pre-existing, unrelated to this bug), so there's no remarks-reading
+  code there to fix.
+
+Setup/config needed:
+  None — no backend changes, no new dependencies.
+  1. Redeploy the Render frontend to pick up the fix.

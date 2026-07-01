@@ -90,7 +90,7 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     if (!this.documentId) return;
     this.isSubmitting = true;
     this.http.post<any>(`${this.apiUrl}/reviews/approve/${this.documentId}`,
-      { note: this.auditNote },
+      { remarks: this.auditNote },
       { headers: this.getHeaders() }
     ).subscribe({
       next: () => {
@@ -118,7 +118,7 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     }
     this.isSubmitting = true;
     this.http.post<any>(`${this.apiUrl}/reviews/return/${this.documentId}`,
-      { note: this.auditNote },
+      { remarks: this.auditNote },
       { headers: this.getHeaders() }
     ).subscribe({
       next: () => {
