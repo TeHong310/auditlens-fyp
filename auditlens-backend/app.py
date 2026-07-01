@@ -7,6 +7,7 @@ from routes.documents import documents_bp
 from routes.matching import matching_bp
 from routes.reviews import reviews_bp
 from routes.admin import admin_bp
+from routes.ocr_review import ocr_review_bp
 
 app = Flask(__name__)
 
@@ -21,6 +22,7 @@ app.register_blueprint(documents_bp, url_prefix='/documents')
 app.register_blueprint(matching_bp,  url_prefix='/matching')
 app.register_blueprint(reviews_bp,   url_prefix='/reviews')
 app.register_blueprint(admin_bp,     url_prefix='/admin')
+app.register_blueprint(ocr_review_bp, url_prefix='/ocr-review')
 
 @app.route('/')
 def hello_world():

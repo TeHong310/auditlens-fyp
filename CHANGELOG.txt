@@ -133,3 +133,32 @@ Why:
 Setup/config needed:
   None. Verified by querying the `users` table on Render and logging into
   the live app successfully.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-01
+What was changed:
+  Backend (auditlens-backend/):
+    - Added routes/ocr_review.py: new endpoint
+      GET /ocr-review/invoice/<document_id>/related-docs. For the Finance
+      Executive OCR Review page's Invoice tab, returns whether a matching
+      PO and GR have been uploaded for a given invoice document, e.g.
+      { "invoice_no": ..., "po": {"uploaded": bool, "po_id", "po_no",
+      "filename"}, "gr": {"uploaded": bool, "gr_id", "gr_no", "filename"} }.
+    - app.py: registered the new ocr_review_bp blueprint under url_prefix
+      '/ocr-review'.
+
+Why:
+  Requested enhancement so Finance can see PO/GR upload status when
+  expanding/opening an invoice row, without switching tabs. The original
+  spec asked for invoice_no/po_no text matching, but neither
+  extracted_fields (invoice) nor purchase_orders/goods_receipts have those
+  cross-reference columns — the only real link between an invoice and its
+  PO/GR is the document_id foreign key already used by
+  upload-po/<document_id> and upload-gr/<document_id>. Confirmed this
+  approach with the user instead of inventing columns that don't exist.
+  Frontend (Angular OCR Review component) changes are still pending user
+  confirmation that this endpoint works before being built.
+
+Setup/config needed:
+  None — no new dependencies, no schema change, no new env vars.
