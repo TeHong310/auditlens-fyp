@@ -1,0 +1,135 @@
+AuditLens — Changelog
+======================
+Append new entries at the bottom, in this format:
+Date | What changed | Why | Setup/config needed
+
+----------------------------------------------------------------------
+
+Date: 2026-06-30
+What was changed:
+  Backend (auditlens-backend/):
+    - config.py rewritten to read all secrets (JWT key, DB credentials,
+      Google Vision API key, CORS origins) from environment variables via
+      python-dotenv, instead of hardcoding them.
+    - Added .env (local only, gitignored) with the previous hardcoded
+      values, so local dev behavior is unchanged.
+    - requirements.txt trimmed from ~100 packages to the 9 actually used
+      (Flask, flask-cors, Flask-JWT-Extended, psycopg2-binary, requests,
+      pdf2image, bcrypt, python-dotenv, gunicorn). Removed unused heavy ML
+      deps (torch, paddleocr, paddlepaddle, easyocr, opencv, pandas, etc.)
+      that were never imported anywhere in the codebase.
+    - Added Dockerfile (python:3.11-slim + poppler-utils + gunicorn) so
+      PDF->image OCR works on Render's Linux containers (previously relied
+      on a hardcoded Windows poppler path).
+    - app.py CORS now reads allowed origins from Config.FRONTEND_ORIGINS
+      (env var) instead of being hardcoded to localhost:4200.
+  Frontend (auditlens-frontend/):
+    - Removed unused Angular SSR scaffolding (server.ts, main.server.ts,
+      app.config.server.ts, app.routes.server.ts) and related deps
+      (@angular/ssr, @angular/platform-server, express, @types/express).
+      These were never wired into angular.json's build target, so the app
+      was already building as a client-only SPA.
+    - Added src/environments/environment.ts (dev) and environment.prod.ts
+      (prod), wired into angular.json production build via
+      fileReplacements.
+    - Replaced hardcoded `private apiUrl = 'http://localhost:5000'` in 9
+      components with `environment.apiUrl`, so the API target switches
+      automatically between dev and prod builds.
+  Deployment:
+    - Added render.yaml (repo root) — a Render Blueprint defining:
+        auditlens-db (free Postgres), auditlens-backend (Docker web
+        service, DB credentials auto-wired from auditlens-db, JWT secret
+        auto-generated, Google Vision key set manually), auditlens-frontend
+        (free static site with SPA rewrite routing).
+
+Why:
+  Migrating AuditLens from localhost-only to a Render deployment. The
+  unused ML dependencies and SSR setup would have made the Render build
+  fail or require a paid Node service for no benefit; hardcoded secrets
+  and localhost URLs needed to become environment-driven so the same code
+  works in both local dev and production.
+
+Setup/config needed (manual, on Render dashboard / your machine):
+  1. Push to GitHub, then in Render: New -> Blueprint -> connect
+     TeHong310/auditlens-fyp -> Render reads render.yaml and creates all
+     3 resources. When prompted, set GOOGLE_VISION_API_KEY manually (value
+     is in your local auditlens-backend/.env file, never committed).
+  2. The new Render Postgres database starts EMPTY — no .sql schema file
+     exists in this repo. Before the app will work, export your local
+     schema (e.g. `pg_dump -h localhost -U postgres -d auditlens
+     --schema-only -f schema.sql`) and load it into Render's database via
+     the external connection string shown on the auditlens-db dashboard
+     page (`psql "<external-connection-string>" -f schema.sql`).
+  3. environment.prod.ts assumes the backend will be reachable at
+     https://auditlens-backend.onrender.com (derived from the service name
+     in render.yaml). If that name was taken and Render assigned a
+     different URL, update environment.prod.ts and redeploy the frontend.
+  4. Known limitation (not fixed in this update): uploaded documents are
+     saved to a local "uploads/" folder and the file path is stored in the
+     DB for later download. Render's filesystem is ephemeral, so uploaded
+     files will be lost on every redeploy/restart. Needs a paid persistent
+     disk or external object storage (e.g. S3) to fix — flag if you want
+     this addressed next.
+
+----------------------------------------------------------------------
+
+Date: 2026-06-30
+What was changed:
+  - auditlens-backend/requirements.txt re-saved as plain UTF-8 (no BOM).
+
+Why:
+  The first Render Blueprint sync failed on the auditlens-backend web
+  service. Deploy logs showed null bytes between every character
+  (e.g. "F\x00l\x00a\x00s\x00k\x00=\x00=\x00..."), meaning the file was
+  UTF-16 — it was already UTF-16 before this deployment work started, and
+  the previous edit (trimming it down to 9 packages) preserved that
+  encoding instead of converting it. pip cannot parse a UTF-16
+  requirements.txt, so the Docker build failed before installing any
+  packages.
+
+Setup/config needed:
+  None — re-push and Render's Blueprint auto-syncs on push (or use
+  "Manual sync" on the Blueprint page if it doesn't pick it up
+  automatically).
+
+----------------------------------------------------------------------
+
+Date: 2026-06-30
+What was changed:
+  - Removed "config.py" from .gitignore (auditlens-backend/.gitignore
+    rule, originally under "# 敏感配置").
+  - Committed auditlens-backend/config.py to the repo for the first time.
+
+Why:
+  Container built successfully but crashed on startup with
+  "ModuleNotFoundError: No module named 'config'" at app.py's
+  "from config import Config". Root cause: config.py was gitignored back
+  when it held hardcoded secrets, and that rule was never removed when
+  config.py was refactored (earlier in this deployment work) to read
+  everything from environment variables instead. Since config.py is now
+  just import logic (os.environ.get calls) with zero secrets in it, it's
+  safe to commit — Render's git clone never had the file at all, so
+  `COPY . .` in the Dockerfile had nothing to copy.
+
+Setup/config needed:
+  None.
+
+----------------------------------------------------------------------
+
+Date: 2026-06-30
+What was changed:
+  - No code changes. Migrated local PostgreSQL data (the "auditlens"
+    database, including existing test accounts) to the Render
+    "auditlens-db" production database via pg_dump (custom format,
+    schema + data) and pg_restore (--no-owner --no-acl --clean
+    --if-exists, against Render's External Database URL).
+
+Why:
+  Earlier deploy steps only created an empty Render database; this
+  migration carries over existing test accounts/data so the live app
+  doesn't start from scratch. This also resolves the "schema must be
+  loaded manually" step flagged in the first CHANGELOG entry above.
+
+Setup/config needed:
+  None. Verified by querying the `users` table on Render and logging into
+  the live app successfully.

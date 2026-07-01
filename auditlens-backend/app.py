@@ -14,7 +14,7 @@ app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = Config.JWT_ACCESS_TOKEN_EXPIRES
 jwt = JWTManager(app)
 
-CORS(app, origins=['http://localhost:4200'], supports_credentials=True)
+CORS(app, origins=Config.FRONTEND_ORIGINS, supports_credentials=True)
 
 app.register_blueprint(auth_bp,      url_prefix='/auth')
 app.register_blueprint(documents_bp, url_prefix='/documents')

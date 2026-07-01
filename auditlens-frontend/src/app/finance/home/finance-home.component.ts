@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Chart, registerables } from 'chart.js';
+import { environment } from '../../../environments/environment';
 
 Chart.register(...registerables);
 
@@ -33,7 +34,7 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
   private donutChartInstance: any = null;
   private lineChartInstance: any = null;
 
-  private apiUrl = 'http://localhost:5000';
+  private apiUrl = environment.apiUrl;
 
   constructor(
     private http: HttpClient,

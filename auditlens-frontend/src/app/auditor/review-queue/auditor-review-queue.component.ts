@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { environment } from '../../../environments/environment';
 
 @Component({
   selector: 'app-auditor-review-queue',
@@ -25,7 +26,7 @@ export class AuditorReviewQueueComponent implements OnInit {
   lowOCR: number = 0;
   missingDocs: number = 0;
 
-  private apiUrl = 'http://localhost:5000';
+  private apiUrl = environment.apiUrl;
 
   constructor(
     private http: HttpClient,

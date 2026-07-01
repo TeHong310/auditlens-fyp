@@ -16,7 +16,6 @@ dist/
 Thumbs.db
 
 # 敏感配置
-config.py
 *.key.json
 
 # 上传的测试文件

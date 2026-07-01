@@ -1,0 +1,52 @@
+databases:
+  - name: auditlens-db
+    plan: free
+    databaseName: auditlens
+    user: auditlens
+
+services:
+  - type: web
+    name: auditlens-backend
+    runtime: docker
+    rootDir: auditlens-backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    envVars:
+      - key: DB_HOST
+        fromDatabase:
+          name: auditlens-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: auditlens-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: auditlens-db
+          property: database
+      - key: DB_USER
+        fromDatabase:
+          name: auditlens-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: auditlens-db
+          property: password
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: GOOGLE_VISION_API_KEY
+        sync: false
+      - key: FRONTEND_ORIGINS
+        value: https://auditlens-frontend.onrender.com
+
+  - type: web
+    name: auditlens-frontend
+    runtime: static
+    rootDir: auditlens-frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist/auditlens-frontend/browser
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

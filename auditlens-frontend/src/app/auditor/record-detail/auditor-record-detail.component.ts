@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { environment } from '../../../environments/environment';
 
 @Component({
   selector: 'app-auditor-record-detail',
@@ -26,7 +27,7 @@ export class AuditorRecordDetailComponent implements OnInit {
   auditNote: string = '';
   matchType: string = '';
 
-  private apiUrl = 'http://localhost:5000';
+  private apiUrl = environment.apiUrl;
 
   constructor(
     private http: HttpClient,

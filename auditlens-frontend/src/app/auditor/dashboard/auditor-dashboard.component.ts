@@ -2,6 +2,7 @@ import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { environment } from '../../../environments/environment';
 
 @Component({
   selector: 'app-auditor-dashboard',
@@ -21,7 +22,7 @@ export class AuditorDashboardComponent implements OnInit {
   needReview: number = 0;
   exceptions: number = 0;
 
-  private apiUrl = 'http://localhost:5000';
+  private apiUrl = environment.apiUrl;
 
   constructor(
     private http: HttpClient,
