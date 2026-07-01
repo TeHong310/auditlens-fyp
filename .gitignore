@@ -20,4 +20,10 @@ Thumbs.db
 
 # 上传的测试文件
 auditlens-backend/uploads/*
-!auditlens-backend/uploads/.gitkeep
+!auditlens-backend/uploads/.gitkeep】
+
+
+# Database dumps
+*.dump
+*.sql
+*.backup
