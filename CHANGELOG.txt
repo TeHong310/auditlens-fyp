@@ -199,3 +199,50 @@ Setup/config needed:
   None — no new dependencies, no schema/env changes. Requires the Render
   frontend static site to redeploy so the built bundle picks up these
   changes.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-01
+What was changed:
+  Backend (auditlens-backend/helpers/ocr_helper.py), extract_fields():
+    1. Invoice-number "label only, value on next line" pattern required
+       neither the no/number keyword nor the colon, so a standalone
+       "INVOICE" title line matched it and grabbed the following line
+       (e.g. "Bill To:") as the invoice number, then locked out every
+       later, more specific invoice-number pattern for the rest of the
+       document. Made the no/number keyword and colon mandatory.
+    2. Added a pattern for totals written as "TOTAL (RM) 1,150.00"
+       (parenthesized currency code breaks all prior amount patterns) to
+       both the per-line amount_patterns list and the full-text fallback
+       list, inserted first so it's tried before the more specific ones.
+    3. Lines like "PO No : PO-2025-0512", "GR No :", "Reg No :" were
+       matched by the generic "No\s*:\s*(...)" invoice-number pattern,
+       so the PO/GR/registration number got stored as the invoice
+       number. Added an early skip for any line containing a
+       po/gr/reg/account/tel/fax/bank no. label before running the
+       invoice-number patterns on that line.
+
+Why:
+  OCR extraction was failing on invoices that use "INVOICE" as a
+  standalone title and/or "TOTAL (RM) x.xx" as the total label (e.g.
+  INV-ZE-2025-0587), and could misattribute PO/GR reference numbers on
+  the same document as the invoice number. Verified with synthetic OCR
+  text through extract_fields() directly (dependencies not installed in
+  this shell, so tested the function in isolation): the original Zitron
+  invoice (INZEPG047575) still extracts unchanged, and the new format
+  now correctly extracts invoice_number "INV-ZE-2025-0587" and
+  total_amount 1150.00, including when PO/GR/Reg No lines appear before
+  the invoice number label in the document.
+
+  Not fixed (out of scope, flagged for awareness): a pre-existing,
+  unrelated bug in the same function strips a trailing "-<digits>" from
+  invoice numbers matched on a single line (e.g. "Invoice No:
+  INV-ZE-2025-0587" on one line truncates to "INV-ZE-2025"). It only
+  showed up while writing a stricter test case and isn't part of what
+  was reported; needs a separate look if same-line (not label-then-
+  next-line) hyphenated invoice numbers turn out to be common in real
+  scans.
+
+Setup/config needed:
+  None — no new dependencies, no schema/env changes. Requires the Render
+  backend service to redeploy so OCR extraction picks up these fixes.

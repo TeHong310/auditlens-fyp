@@ -235,36 +235,40 @@ def extract_fields(ocr_text):
 
         # ── INVOICE NUMBER ────────────────────────────────
         if fields['invoice_number'] is None:
-            inv_patterns = [
-                # E-invoice
-                r'e-invoice\s*no\.?\s*[:\-]?\s*(SIN\d+)',
-                r'\b(SIN\d{6,})\b',
-                # Standard No: XXXXX pattern (generic - works for any invoice)
-                r'^No\s*[:\-]\s*([A-Z]{2,}[A-Z0-9\-\/]+)',
-                r'No\s*:\s*([A-Z]{2,}[A-Z0-9\-\/]+)',
-                # Invoice No patterns
-                r'invoice\s*no\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
-                r'invoice\s*number\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
-                r'receipt\s*(?:no\.?|number)\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
-                r'booking\s*id\s*[:\-]?\s*([A-Z0-9\-]+)',
-                r'bill\s*(?:no\.?|number)\s*[:\-]?\s*(\S+)',
-                r'invoice\s*(?:no\.?|#)\s*[:\-]?\s*(\S+)',
-            ]
-            for p in inv_patterns:
-                match = re.search(p, line_clean, re.IGNORECASE)
-                if match:
-                    val = match.group(1).strip().rstrip('-').strip()
-                    val = re.sub(r'\s*-\s*\d+$', '', val).strip()
-                    if is_valid_invoice_number(val):
-                        fields['invoice_number'] = val
-                        break
+            # Skip lines that are clearly not invoice number labels
+            if re.search(r'\b(?:po|p\.o|gr|goods\s*receipt|reg\.?|account|tel|fax|bank|acct)\s*(?:no\.?|number)\s*[:\-]', line_clean, re.IGNORECASE):
+                pass  # skip invoice number extraction on this line
+            else:
+                inv_patterns = [
+                    # E-invoice
+                    r'e-invoice\s*no\.?\s*[:\-]?\s*(SIN\d+)',
+                    r'\b(SIN\d{6,})\b',
+                    # Standard No: XXXXX pattern (generic - works for any invoice)
+                    r'^No\s*[:\-]\s*([A-Z]{2,}[A-Z0-9\-\/]+)',
+                    r'No\s*:\s*([A-Z]{2,}[A-Z0-9\-\/]+)',
+                    # Invoice No patterns
+                    r'invoice\s*no\.?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
+                    r'invoice\s*number\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
+                    r'receipt\s*(?:no\.?|number)\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
+                    r'booking\s*id\s*[:\-]?\s*([A-Z0-9\-]+)',
+                    r'bill\s*(?:no\.?|number)\s*[:\-]?\s*(\S+)',
+                    r'invoice\s*(?:no\.?|#)\s*[:\-]?\s*(\S+)',
+                ]
+                for p in inv_patterns:
+                    match = re.search(p, line_clean, re.IGNORECASE)
+                    if match:
+                        val = match.group(1).strip().rstrip('-').strip()
+                        val = re.sub(r'\s*-\s*\d+$', '', val).strip()
+                        if is_valid_invoice_number(val):
+                            fields['invoice_number'] = val
+                            break
 
-            # Label only, value on next line
-            if fields['invoice_number'] is None:
-                if re.search(r'^(?:invoice\s*(?:no\.?|number)?|receipt\s*no\.?)\s*[:\-]?\s*$',
-                             line_clean, re.IGNORECASE):
-                    if next_line and is_valid_invoice_number(next_line.strip()):
-                        fields['invoice_number'] = next_line.strip()
+                # Label only, value on next line
+                if fields['invoice_number'] is None:
+                    if re.search(r'^(?:invoice\s*(?:no\.?|number|#)|inv\s*(?:no\.?|#)|receipt\s*(?:no\.?|number))\s*[:\-]\s*$',
+                                 line_clean, re.IGNORECASE):
+                        if next_line and is_valid_invoice_number(next_line.strip()):
+                            fields['invoice_number'] = next_line.strip()
 
         # ── INVOICE DATE ──────────────────────────────────
         if fields['invoice_date'] is None:
@@ -296,6 +300,7 @@ def extract_fields(ocr_text):
         # ── TOTAL AMOUNT ──────────────────────────────────
         if fields['total_amount'] is None:
             amount_patterns = [
+                r'\btotal\s*\(\s*(?:rm|myr)\s*\)\s*[:\-]?\s*([\d,]+\.?\d*)',
                 r'total\s*net\s*amount\s*(?:\(rm\))?\s*[:\-]?\s*([\d,]+\.?\d*)',
                 r'total\s*payable\s*amount\s*[:\-]?\s*([\d,]+\.?\d*)',
                 r'total\s*including\s*(?:tax|sst|gst)\s*[:\-]?\s*([\d,]+\.?\d*)',
@@ -377,6 +382,7 @@ def extract_fields(ocr_text):
     # Total Amount fallback
     if fields['total_amount'] is None:
         for pattern in [
+            r'\btotal\s*\(\s*(?:rm|myr)\s*\)\s*[:\-]?\s*([\d,]+\.?\d*)',
             r'total\s*net\s*amount\s*(?:\(rm\))?\s*[:\-]?\s*([\d,]+\.?\d*)',
             r'total\s*(?:paid|amount|charges?|due|payable|net)\s*(?:rm|myr)?\s*([\d,]+\.?\d*)',
             r'grand\s*total\s*[:\-]?\s*(?:rm|myr)?\s*([\d,]+\.?\d*)',
