@@ -1,1 +1,109 @@
-<p>Auditor Report</p>
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <h1 class="page-title">📊 Auditor Report</h1>
+  </div>
+
+  <!-- Period Selector -->
+  <div class="period-row">
+    <button *ngFor="let p of periods" class="period-chip"
+            [class.active]="activePeriod === p.key" (click)="setPeriod(p.key)">
+      {{ p.label }}
+    </button>
+  </div>
+
+  <div class="error-box" *ngIf="summaryError">✗ {{ summaryError }}</div>
+
+  <!-- Stat Cards -->
+  <div class="stats-grid">
+    <div class="stat-card stat-approved">
+      <span class="stat-icon">✅</span>
+      <div>
+        <p class="stat-value">{{ isLoadingSummary ? '…' : stats.approved }}</p>
+        <p class="stat-label">Approved</p>
+      </div>
+    </div>
+    <div class="stat-card stat-sent-back">
+      <span class="stat-icon">↩️</span>
+      <div>
+        <p class="stat-value">{{ isLoadingSummary ? '…' : stats.sent_back }}</p>
+        <p class="stat-label">Sent Back</p>
+      </div>
+    </div>
+    <div class="stat-card stat-pending">
+      <span class="stat-icon">⏳</span>
+      <div>
+        <p class="stat-value">{{ isLoadingSummary ? '…' : stats.pending }}</p>
+        <p class="stat-label">Pending</p>
+      </div>
+    </div>
+    <div class="stat-card stat-exceptions">
+      <span class="stat-icon">🚨</span>
+      <div>
+        <p class="stat-value">{{ isLoadingSummary ? '…' : stats.exceptions }}</p>
+        <p class="stat-label">Exceptions</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chart -->
+  <div class="chart-card">
+    <h2 class="section-title">📈 Records Processed (last 30 days)</h2>
+    <div class="chart-wrap">
+      <canvas #timelineChart></canvas>
+    </div>
+  </div>
+
+  <!-- Audit Trail -->
+  <div class="trail-card">
+    <div class="trail-header">
+      <div>
+        <h2 class="section-title">📜 Audit Trail</h2>
+        <p class="section-subtitle">{{ totalEntries }} total entries</p>
+      </div>
+      <button class="btn-export" (click)="exportCsv()">⬇ Export CSV</button>
+    </div>
+
+    <div class="trail-filters">
+      <select class="action-select" [(ngModel)]="activeAction" (ngModelChange)="setActionFilter($event)">
+        <option value="all">All Actions</option>
+        <option value="approved">Approved</option>
+        <option value="sent_back">Sent Back</option>
+        <option value="need_review">Need Review</option>
+      </select>
+      <div class="date-range">
+        <input type="date" [(ngModel)]="startDate" (change)="applyDateRange()"/>
+        <span class="date-range-sep">to</span>
+        <input type="date" [(ngModel)]="endDate" (change)="applyDateRange()"/>
+      </div>
+    </div>
+
+    <div class="trail-list">
+      <div class="skeleton-wrap" *ngIf="isLoadingTrail && entries.length === 0">
+        <div class="skeleton-row" *ngFor="let i of [1,2,3]"></div>
+      </div>
+
+      <div class="error-box" *ngIf="trailError">✗ {{ trailError }}</div>
+
+      <div class="empty-state" *ngIf="!isLoadingTrail && !trailError && entries.length === 0">
+        <p>No audit trail entries yet.</p>
+      </div>
+
+      <div class="trail-row" *ngFor="let entry of entries; let i = index" [class.row-alt]="i % 2 === 1">
+        <div class="trail-main">
+          <span class="trail-timestamp">{{ formatTimestamp(entry.timestamp) }}</span>
+          <span class="trail-auditor">{{ entry.auditor_name }}</span>
+          <span class="action-pill" [ngClass]="actionPillClass(entry.action)">{{ actionLabel(entry.action) }}</span>
+          <span class="trail-invoice" (click)="viewInvoice(entry)">{{ entry.invoice_no || '-' }}</span>
+        </div>
+        <p class="trail-remarks" *ngIf="entry.remarks">"{{ entry.remarks }}"</p>
+      </div>
+    </div>
+
+    <button class="btn-load-more" *ngIf="hasMore" (click)="loadMore()" [disabled]="isLoadingTrail">
+      {{ isLoadingTrail ? 'Loading...' : 'Load More' }}
+    </button>
+  </div>
+
+</div>

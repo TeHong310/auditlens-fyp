@@ -1,1 +1,53 @@
-<p>Exceptions</p>
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <h1 class="page-title">🚨 Exceptions</h1>
+    <p class="page-subtitle">Records requiring attention • {{ exceptions.length }} total</p>
+  </div>
+
+  <!-- Filter Chips -->
+  <div class="filter-row">
+    <button *ngFor="let f of filters" class="filter-chip"
+            [class.active]="activeFilter === f.key" (click)="setFilter(f.key)">
+      {{ f.label }} <span class="chip-count">{{ countFor(f.key) }}</span>
+    </button>
+  </div>
+
+  <!-- List Card -->
+  <div class="list-card">
+
+    <!-- Loading skeleton -->
+    <div class="skeleton-wrap" *ngIf="isLoading">
+      <div class="skeleton-row" *ngFor="let i of [1,2,3]"></div>
+    </div>
+
+    <!-- Error -->
+    <div class="error-box" *ngIf="errorMessage && !isLoading">✗ {{ errorMessage }}</div>
+
+    <!-- Empty state -->
+    <div class="empty-state" *ngIf="!isLoading && !errorMessage && filteredExceptions.length === 0">
+      <p class="empty-icon">🎉</p>
+      <p class="empty-text">No exceptions — all records clean!</p>
+    </div>
+
+    <!-- Exception rows -->
+    <div class="exception-row" *ngFor="let exc of filteredExceptions" [ngClass]="'sev-' + exc.severity">
+      <div class="exception-severity">
+        <span class="sev-icon">{{ severityIcon(exc.severity) }}</span>
+        <span class="sev-label">{{ severityLabel(exc.severity) }}</span>
+      </div>
+      <div class="exception-body">
+        <p class="exception-title">
+          <span class="exc-invoice-no">{{ exc.invoice_no || 'Unknown Invoice' }}</span>
+          <span class="exc-label">{{ exc.exception_label }}</span>
+        </p>
+        <p class="exception-detail">{{ exc.detail }}</p>
+        <p class="exception-footer">{{ exc.vendor_name || 'Unknown vendor' }} • Uploaded {{ relativeTime(exc.uploaded_at) }}</p>
+      </div>
+      <button class="btn-investigate" (click)="investigate(exc)">Investigate →</button>
+    </div>
+
+  </div>
+
+</div>

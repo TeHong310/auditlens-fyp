@@ -1,0 +1,207 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+.page-wrapper {
+  padding: 20px 28px;
+  background: #F1F5F9;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+}
+
+.header { display: flex; flex-direction: column; gap: 2px; }
+
+.page-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #1F2937;
+}
+
+.page-subtitle {
+  font-size: 13px;
+  color: #6B7280;
+}
+
+/* Filter Chips */
+.filter-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.filter-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: white;
+  border: 1.5px solid #E5E7EB;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #6B7280;
+  cursor: pointer;
+}
+
+.filter-chip:hover { background: #F9FAFB; }
+
+.filter-chip.active {
+  background: #EFF5FB;
+  border-color: #4A90D9;
+  color: #1A5FAB;
+}
+
+.chip-count {
+  background: #F3F4F6;
+  color: #6B7280;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 20px;
+}
+
+.filter-chip.active .chip-count {
+  background: #4A90D9;
+  color: white;
+}
+
+/* List Card */
+.list-card {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  overflow: hidden;
+}
+
+/* Exception Row */
+.exception-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 18px 22px;
+  border-bottom: 1px solid #F3F4F6;
+  border-left: 4px solid transparent;
+}
+
+.exception-row:last-child { border-bottom: none; }
+
+.exception-row.sev-high   { border-left-color: #EF4444; background: #FFFBFB; }
+.exception-row.sev-medium { border-left-color: #F59E0B; background: #FFFDFA; }
+.exception-row.sev-low    { border-left-color: #F97316; background: #FFFDFA; }
+
+.exception-severity {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 48px;
+}
+
+.sev-icon { font-size: 18px; }
+
+.sev-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: #6B7280;
+}
+
+.exception-body { flex: 1; min-width: 0; }
+
+.exception-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.exc-invoice-no {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #1F2937;
+}
+
+.exc-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #DC2626;
+  background: #FEF2F2;
+  padding: 2px 10px;
+  border-radius: 20px;
+}
+
+.exception-detail {
+  font-size: 13px;
+  color: #374151;
+  margin-top: 4px;
+}
+
+.exception-footer {
+  font-size: 11.5px;
+  color: #9CA3AF;
+  margin-top: 6px;
+}
+
+.btn-investigate {
+  align-self: center;
+  padding: 8px 16px;
+  background: linear-gradient(135deg, #4A90D9, #1A5FAB);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-investigate:hover { background: linear-gradient(135deg, #3f81c6, #164d8c); }
+
+/* Empty State */
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+}
+
+.empty-icon { font-size: 40px; margin-bottom: 10px; }
+
+.empty-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #10B981;
+}
+
+/* Loading Skeleton */
+.skeleton-wrap { padding: 18px 22px; display: flex; flex-direction: column; gap: 14px; }
+
+.skeleton-row {
+  height: 62px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, #F3F4F6 25%, #E5E7EB 37%, #F3F4F6 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+.error-box {
+  margin: 18px 22px;
+  background: #FEF2F2;
+  border: 1px solid #FECACA;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #DC2626;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .exception-row { flex-direction: column; align-items: stretch; }
+  .exception-severity { flex-direction: row; align-self: flex-start; }
+  .btn-investigate { align-self: flex-end; }
+}

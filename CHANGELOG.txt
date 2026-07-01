@@ -658,3 +658,137 @@ Setup/config needed:
   None — no new dependencies, no backend changes.
   1. Redeploy the Render frontend so the build picks up the raised
      budgets and stops failing.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-02
+What was changed:
+  Backend (auditlens-backend/routes/auditor.py) — 3 new endpoints, plus
+  a refactor of the existing comparison endpoint:
+    - Refactored GET /auditor/record/<id>/comparison: the invoice/PO/GR
+      fetch + vendor/amount/date matching logic (previously inline) was
+      extracted into _build_comparison(cursor, document_id), so the new
+      exception detector can reuse the exact same match logic instead
+      of duplicating it, per the task's explicit instruction. The route
+      itself is otherwise unchanged (same request/response contract).
+    - GET /auditor/exceptions?type=&limit=&offset= — scans every
+      in-flight invoice (status under_review/resubmitted/returned; an
+      already-approved invoice is resolved and no longer an exception),
+      runs it through _build_comparison(), and classifies at most one
+      exception per invoice via a new _classify_exception(): mismatch
+      (high, when overall_status=FAIL, with a detail string built from
+      whichever of vendor/amount/date actually differ), sent_back
+      (medium, status='returned', detail = the auditor's last remark
+      from review_records if any), missing_document (medium, PO and/or
+      GR not uploaded — label reads "Missing PO" / "Missing GR" /
+      "Missing PO and GR"), low_confidence (low, ocr_confidence < 80).
+      Severity order mismatch > sent_back = missing_document >
+      low_confidence, exactly as specified; ties between sent_back and
+      missing_document resolve to sent_back (stable sort, sent_back
+      checked first) since the spec only said they're equal rank and
+      didn't define a tiebreak.
+    - GET /auditor/report/summary?period= — approved/sent_back are
+      counted as review_records events within the period (by an
+      auditor, action approved/returned); pending and exceptions are
+      current-state snapshots, not period-bounded (a "how many right
+      now" number doesn't make sense filtered to a past window). The
+      30-day timeline is always the last 30 days regardless of `period`
+      (matches the UI mock's fixed "last 30 days" header) — each day's
+      pending count is invoices uploaded that day and still awaiting a
+      decision as of now (a cohort proxy, since there's no daily status
+      snapshot table to query historically).
+    - GET /auditor/report/audit-trail and .../export.csv — read from
+      review_records (see note below on why no migration was needed),
+      filtered to rows where the reviewer's role is 'auditor' (so
+      Finance's 'resubmitted' action doesn't leak into what's meant to
+      be an auditor decision log). The DB's 'returned' action value is
+      presented as "sent_back" in the API (both directions mapped via
+      ACTION_DB_TO_API/ACTION_API_TO_DB) to match the endpoint's
+      documented action enum without renaming anything in the database.
+      CSV export shares the same filter-building helper
+      (_audit_trail_query) and query shape as the JSON endpoint, just
+      written out with Python's csv module into a
+      Content-Disposition: attachment response.
+
+  NO DB MIGRATION WAS NEEDED for the audit trail. review_records
+  (document_id, reviewed_by, action, remarks, reviewed_at) already
+  captures auditor_id + timestamp + action + remarks on every approve
+  and send-back — reviews.py's approve_document()/return_document()
+  have inserted into it since before this session. Checked this before
+  writing any migration code, per the task's own "if it doesn't already
+  store this, extend it" framing — it already does.
+
+  NOT WIRED UP: the "Need Review" action. The Auditor Record Detail
+  page's "Need Review" button has never had a click handler (pre-
+  existing, not something this or the previous session added), so no
+  review_records rows with action='need_review' exist yet. The
+  audit-trail/export/summary endpoints all accept and handle that
+  action value correctly (it just won't return any rows) — wiring the
+  button itself was out of scope for this task.
+
+  PERFORMANCE NOTE (flagged, not optimized): /auditor/exceptions and
+  the `exceptions` stat in /auditor/report/summary both recompute the
+  full match logic for every in-flight invoice on every call, rather
+  than reading a cached match_status column — there isn't one in the
+  schema, and adding one would mean keeping it in sync on every
+  PO/GR/invoice upload and edit. Left as compute-per-call per the
+  task's own fallback allowance ("if a computed cache doesn't fit the
+  schema, compute per-call for now but flag it for optimization").
+  Fine at this app's current invoice volume (tested against the local
+  dev DB: 15 in-flight invoices, sub-second).
+
+  Frontend — two new pages, replacing "Exceptions"/"Auditor Report"
+  title-only placeholders:
+    - auditor-exceptions component: severity-tiered list (🔴 High / 🟡
+      Medium / 🟠 Low), filter chips with live counts (All/Mismatch/
+      Missing/Low Conf/Sent Back) computed client-side from one fetched
+      batch, an "Investigate →" button per row that navigates to
+      /auditor/record-detail?document_id=..., a friendly empty state,
+      and a shimmer loading skeleton.
+    - auditor-report component: period toggle (Today/Week/Month/All)
+      driving 4 gradient stat cards; a Chart.js line chart (3 datasets:
+      Approved/Sent Back/Pending) over the fixed 30-day timeline, using
+      the same Chart.register(...registerables) pattern already
+      established in finance-report.component.ts (no new chart library,
+      chart.js was already a dependency); an audit trail table with
+      action-pill rows (green Approved / red Sent Back / blue Need
+      Review), an action dropdown + date-range filter, a "Load More"
+      button (offset += 50), and an Export CSV button that fetches the
+      export endpoint via HttpClient with the existing Authorization-
+      header + blob-download pattern (no JWT in a URL, consistent with
+      every other file download in this app).
+
+Why:
+  Both pages were pure placeholders ("<p>Exceptions</p>" /
+  "<p>Auditor Report</p>") with no backend behind them. Exceptions gives
+  auditors a single triaged queue of records needing action instead of
+  scanning the full review queue for problems; Report gives a KPI
+  overview plus a compliance-relevant audit trail of who approved/sent
+  back what and when, with CSV export for external reporting.
+
+  Verified: unit-tested _classify_exception()'s severity/label/detail
+  logic and _audit_trail_query()'s filter-building against 8 synthetic
+  scenarios (mismatch, sent-back-with-remark, missing-PO-only,
+  missing-both, low-confidence-only, clean record -> None, a
+  missing-document/low-confidence severity tiebreak, and the
+  action-filter/db-mapping). Then ran every new SQL query for real
+  against the local dev database (not mocked) — confirmed
+  _build_comparison() and the exceptions scan run cleanly over the
+  actual 15 in-flight invoices there, the summary/timeline queries
+  return real counts, and the audit-trail query returned the 4 real
+  approve events already in review_records with correct auditor names
+  and action mapping. `ng build --configuration=production` passes
+  clean (742.36 kB initial, under budget; no component style over
+  budget).
+
+Setup/config needed:
+  None — no new dependencies (chart.js was already installed), no
+  schema/env changes, no DB migration.
+  1. Redeploy the Render backend for the 3 new /auditor/... endpoints.
+  2. Redeploy the Render frontend for the new Exceptions/Report pages.
+  3. Perform a few Approve / Send Back actions on the Auditor Record
+     Detail page, then confirm they show up in the Report page's audit
+     trail (and the stat cards / chart update accordingly).
+  4. Confirm the Exceptions page shows sent-back records and any
+     mismatched/incomplete records, with working filter chips and
+     Investigate links back to record detail.
