@@ -434,6 +434,20 @@ def extract_fields(ocr_text):
                             fields['invoice_number'] = next_val
                             break
 
+    # ── Gemini semantic fallback for missed fields ──
+    missing = [k for k, v in fields.items() if v is None]
+    if missing:
+        print(f"DEBUG Regex missed invoice fields: {missing}, calling Gemini fallback")
+        try:
+            from helpers.gemini_extractor import gemini_extract_invoice
+            g = gemini_extract_invoice(ocr_text)
+            for k in missing:
+                if g.get(k) is not None:
+                    fields[k] = g[k]
+                    print(f"DEBUG Gemini filled invoice.{k} = {g[k]}")
+        except Exception as e:
+            print(f"DEBUG Gemini invoice fallback error: {e}")
+
     print(f"DEBUG extracted fields: {fields}")
     return fields
 
@@ -506,6 +520,20 @@ def extract_po_fields(ocr_text):
             val = extract_amount(match.group(1))
             if val:
                 fields['total_amount'] = val
+
+    # ── Gemini semantic fallback for missed fields ──
+    missing = [k for k, v in fields.items() if v is None and k != 'currency']
+    if missing:
+        print(f"DEBUG Regex missed po fields: {missing}, calling Gemini fallback")
+        try:
+            from helpers.gemini_extractor import gemini_extract_po
+            g = gemini_extract_po(ocr_text)
+            for k in missing:
+                if g.get(k) is not None:
+                    fields[k] = g[k]
+                    print(f"DEBUG Gemini filled po.{k} = {g[k]}")
+        except Exception as e:
+            print(f"DEBUG Gemini po fallback error: {e}")
 
     print(f"DEBUG PO extracted fields: {fields}")
     return fields
@@ -596,6 +624,20 @@ def extract_gr_fields(ocr_text):
             val = extract_amount(match.group(1))
             if val:
                 fields['total_amount'] = val
+
+    # ── Gemini semantic fallback for missed fields ──
+    missing = [k for k, v in fields.items() if v is None and k != 'currency']
+    if missing:
+        print(f"DEBUG Regex missed gr fields: {missing}, calling Gemini fallback")
+        try:
+            from helpers.gemini_extractor import gemini_extract_gr
+            g = gemini_extract_gr(ocr_text)
+            for k in missing:
+                if g.get(k) is not None:
+                    fields[k] = g[k]
+                    print(f"DEBUG Gemini filled gr.{k} = {g[k]}")
+        except Exception as e:
+            print(f"DEBUG Gemini gr fallback error: {e}")
 
     print(f"DEBUG GR extracted fields: {fields}")
     return fields

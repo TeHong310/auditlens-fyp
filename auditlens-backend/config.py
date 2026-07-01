@@ -24,6 +24,9 @@ class Config:
     # Google Cloud Vision API
     GOOGLE_VISION_API_KEY = os.environ.get('GOOGLE_VISION_API_KEY')
 
+    # Gemini API (semantic fallback for OCR field extraction)
+    GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+
     # CORS - comma-separated list of allowed frontend origins
     FRONTEND_ORIGINS = [
         origin.strip()

@@ -246,3 +246,72 @@ Why:
 Setup/config needed:
   None — no new dependencies, no schema/env changes. Requires the Render
   backend service to redeploy so OCR extraction picks up these fixes.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-01
+What was changed:
+  Backend (auditlens-backend/):
+    - config.py: added Config.GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY').
+    - Added helpers/gemini_extractor.py: calls the Gemini 2.0 Flash REST
+      endpoint (generativelanguage.googleapis.com, no new SDK dependency,
+      uses the existing `requests` package) with three functions —
+      gemini_extract_invoice/po/gr(ocr_text) — each sending a strict
+      JSON-only prompt (temperature 0, responseMimeType
+      application/json) with document-specific vendor-detection rules
+      (e.g. on a PO the header company is the buyer, not the vendor).
+      Returns {} on missing key or any error; never raises.
+    - helpers/ocr_helper.py: extract_fields(), extract_po_fields(), and
+      extract_gr_fields() each gained a fallback block right before
+      their final return — if any field is still None after regex
+      (currency excluded for PO/GR, since it defaults to 'MYR'), call
+      the matching gemini_extract_* function and fill only the fields
+      regex left as None. If regex already filled every field, Gemini
+      is never called. No existing regex pattern, run_ocr(), or
+      run_google_vision_ocr() was touched.
+
+Why:
+  Regex extraction works for known layouts but misses on new ones and
+  can't apply semantic rules (e.g. distinguishing the issuing vendor
+  from the buyer named in the document header, which differs between
+  invoices, POs, and GRs). Gemini is added purely as a fallback for
+  fields regex leaves blank, keeping the existing regex path as primary
+  and free, so LLM cost is only incurred on genuine misses.
+
+  Verified with mocked Gemini responses (real dependencies + the actual
+  local GEMINI_API_KEY were used for a first live call, then mocked for
+  the rest — see security note below): the original Zitron invoice
+  still extracts every field from regex alone with Gemini never called;
+  a synthetic invoice with no regex-recognizable labels at all correctly
+  triggers the fallback and gets invoice_number/total_amount filled from
+  the (mocked) Gemini response; the same missing-field fallback
+  mechanism was confirmed for PO and GR extraction.
+
+  IMPORTANT — known gap, not addressed here: the fallback only fills
+  fields regex left as None. It does NOT re-check or correct fields
+  where regex already produced a value, even if that value is wrong
+  (e.g. regex picking the buyer's name as vendor_name, or stripping a
+  "PO-" prefix off a po_number). This matches the exact merge logic
+  specified for this change, but means a real PO/GR where regex returns
+  a wrong-but-non-null vendor/number won't get corrected by Gemini as
+  currently wired. Flagged for a decision on whether wrong non-null
+  values should also be eligible for Gemini correction.
+
+  SECURITY NOTE: while testing live, a rate-limit (429) error from
+  `requests` embedded the full request URL (including the ?key=...
+  query parameter) in its exception text, which got printed via a
+  DEBUG log during testing and exposed the real GEMINI_API_KEY in the
+  session transcript. Fixed by sending the key via the `x-goog-api-key`
+  HTTP header instead of a URL query parameter (still no new
+  dependency), so it can no longer leak through error messages, proxy
+  logs, or redirects. The exposed key should be rotated regardless.
+
+Setup/config needed:
+  1. GEMINI_API_KEY must be set in both the local .env file and Render's
+     environment variables for auditlens-backend (confirm it's present
+     in both places — the code returns {} and falls back to regex-only
+     behavior if it's missing, but the semantic fallback won't run).
+  2. Rotate/regenerate the GEMINI_API_KEY that was exposed during this
+     session's live test (see security note above) before relying on
+     the old value in production.
+  3. Redeploy the Render backend service after pushing.
