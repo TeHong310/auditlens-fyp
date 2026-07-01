@@ -463,3 +463,107 @@ Setup/config needed:
   3. Delete the existing truncated "INV-SE-2025-1001" document (it has
      invoice_number "INV-SE-2025" stored) and re-upload the same PDF to
      confirm it now extracts the full number.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-02
+What was changed:
+  Backend:
+    - auditlens-backend/routes/documents.py: fixed the pre-existing
+      GET /documents/<document_id>/file (invoice) route — it hardcoded
+      mimetype='application/pdf' regardless of actual file type and had
+      no access check. Now guesses the correct Content-Type from the
+      file extension (pdf/jpg/jpeg/png are all uploadable types) and
+      returns 403 if a finance_executive requests a document they didn't
+      upload (auditors are unrestricted, matching the rest of the app's
+      access pattern). Added two new sibling routes, since POs and GRs
+      are stored in their own tables with their own primary keys
+      (po_id/gr_id), not as rows in `documents`:
+        GET /documents/po/<po_id>/file
+        GET /documents/gr/<gr_id>/file
+      All three share a new _send_document_file() helper.
+    - Added routes/auditor.py (new auditor_bp, registered at url_prefix
+      '/auditor' in app.py):
+        GET /auditor/record/<invoice_document_id>/comparison
+      Auditor-only. Returns the invoice + its linked PO/GR (via the
+      existing document_id foreign key — same linkage used everywhere
+      else in this app) plus a computed match_result: vendor_match
+      (fuzzy: case/punctuation-insensitive, strips "Sdn Bhd"/"Berhad"),
+      amount_match (Invoice vs PO only — GR carries no monetary total),
+      date_order_valid (PO date <= GR date <= Invoice date, skipped if
+      any date or document is missing), and overall_status computed as
+      FAIL if any applicable check fails, PARTIAL if PO or GR is
+      missing (but what's present is consistent), else PASS. Never
+      raises on missing PO/GR/dates — every check degrades to
+      "not applicable" rather than crashing.
+  Frontend (auditlens-frontend/src/app/auditor/record-detail/):
+    - Full redesign of the Auditor Record Detail page around the new
+      comparison endpoint, replacing the old "Run Matching" /
+      three_way_matches-based flow entirely:
+      * Overall status banner (PASS green / PARTIAL yellow / FAIL red)
+        at the top with upload date + OCR confidence.
+      * Field-by-field comparison table (Vendor, Amount, PO Ref, Date,
+        Doc No rows x Invoice/PO/GR columns) in a monospace font, with
+        inline =/≠ pill symbols computed client-side from the raw field
+        values already in the payload (so the table can show a
+        per-column relationship, not just one aggregate flag per row).
+        Mismatch rows get a light-red background. A missing PO or GR
+        renders its whole column as a greyed "Not Uploaded" cell instead
+        of blank/crashing.
+      * Source Documents section with View Invoice/PO/GR buttons, each
+        disabled with a "Not uploaded" tooltip when that document
+        doesn't exist.
+      * A PDF quick-view modal (inline in the same component — no
+        separate modal component file, since it's single-use and tied
+        to this page's state): fetches the file via HttpClient with the
+        existing Authorization-header pattern (same approach already
+        used by the Finance OCR Review page's viewDocument()), turns it
+        into a blob URL via DomSanitizer.bypassSecurityTrustResourceUrl
+        for the iframe, with a loading spinner, Open in New Tab /
+        Download / Close footer actions, and closes on Escape or a
+        backdrop click. No JWT is ever put in a URL.
+      * Kept: Remarks/Notes textarea, Approve / Need Review / Send Back
+        buttons (unchanged, same /reviews/approve and /reviews/return
+        endpoints), the audit-trail footnote, and the Back button.
+      * Removed as part of the redesign (superseded by the live
+        comparison endpoint): the old "Run Matching" button, match-score
+        badge, and Exceptions list tied to the three_way_matches table.
+    - Rewrote the component's .css; most of the old classes (info-bar,
+      match-score-badge, docs-status, exceptions-*, run-match button)
+      became unused once the layout changed, so the file was replaced
+      rather than patched around dead selectors.
+
+Why:
+  The old page showed one document's OCR fields with a separate
+  "Run Matching" step and a placeholder "No matching result yet" state;
+  auditors had to trigger matching and still couldn't see the PO/GR
+  side by side without navigating away. This redesign puts the 3-way
+  comparison and a scannable pass/fail verdict on screen immediately,
+  with one-click PDF verification via the new file-serving endpoints,
+  so an auditor can assess a record in seconds instead of hopping
+  between tabs.
+
+  KNOWN SCHEMA LIMITATION (flagged, not fixed): the "PO Ref" row in the
+  spec assumes the Invoice and GR each carry an OCR-extracted
+  PO-reference number that can be cross-checked against the PO's own
+  po_number. Neither extracted_fields (invoice) nor goods_receipts has
+  such a column — this is the same gap already flagged when the
+  /ocr-review/invoice/<id>/related-docs endpoint was added earlier.
+  Invoice/PO/GR here are linked by the document_id foreign key set at
+  upload time, not by matching extracted reference numbers, so any
+  PO/GR shown is already guaranteed to belong to this invoice by
+  construction. po_reference_match is therefore returned as null
+  (not-applicable) rather than a hardcoded/fabricated true, and the "PO
+  Ref" row shows the PO's own po_number with '—' for Invoice/GR instead
+  of inventing comparison data that doesn't exist in the OCR pipeline.
+
+Setup/config needed:
+  None — no new dependencies, no schema/env changes.
+  1. Redeploy the Render backend (new /auditor/record/.../comparison and
+     /documents/po|gr/.../file endpoints).
+  2. Redeploy the Render frontend (record-detail redesign).
+  3. Test with a record that has Invoice + PO + GR all consistent (e.g.
+     the Solaris record) — should show a green PASS banner.
+  4. Test with a record missing its PO or GR — should show a yellow
+     PARTIAL banner, with the missing document's column showing "Not
+     Uploaded" and its View button disabled.

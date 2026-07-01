@@ -1,9 +1,12 @@
-import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, HostListener, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { environment } from '../../../environments/environment';
+
+type DocType = 'invoice' | 'po' | 'gr';
 
 @Component({
   selector: 'app-auditor-record-detail',
@@ -12,20 +15,24 @@ import { environment } from '../../../environments/environment';
   templateUrl: './auditor-record-detail.component.html',
   styleUrls: ['./auditor-record-detail.component.css']
 })
-export class AuditorRecordDetailComponent implements OnInit {
+export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
 
   documentId: number | null = null;
-  document: any = null;
-  matchResult: any = null;
-  supporting: any = null;
-  exceptions: any[] = [];
+  comparison: any = null;
   isLoading: boolean = false;
-  isRunningMatch: boolean = false;
   isSubmitting: boolean = false;
   successMessage: string = '';
   errorMessage: string = '';
   auditNote: string = '';
-  matchType: string = '';
+
+  // PDF quick-view modal
+  showModal: boolean = false;
+  modalDocType: DocType = 'invoice';
+  modalFileName: string = '';
+  modalIframeUrl: SafeResourceUrl | null = null;
+  modalRawBlobUrl: string = '';
+  modalLoading: boolean = false;
+  modalError: string = '';
 
   private apiUrl = environment.apiUrl;
 
@@ -33,19 +40,21 @@ export class AuditorRecordDetailComponent implements OnInit {
     private http: HttpClient,
     private router: Router,
     private route: ActivatedRoute,
-    private cdr: ChangeDetectorRef
+    private cdr: ChangeDetectorRef,
+    private sanitizer: DomSanitizer
   ) {}
 
   ngOnInit() {
     this.route.queryParams.subscribe(params => {
       if (params['document_id']) {
         this.documentId = parseInt(params['document_id']);
-        this.loadDocument();
-        this.loadMatchResult();
-        this.loadExceptions();
-        this.loadSupporting();
+        this.loadComparison();
       }
     });
+  }
+
+  ngOnDestroy() {
+    this.revokeModalBlobUrl();
   }
 
   getHeaders() {
@@ -53,87 +62,29 @@ export class AuditorRecordDetailComponent implements OnInit {
     return new HttpHeaders({ 'Authorization': `Bearer ${token}` });
   }
 
-  loadDocument() {
+  // ── Load comparison ─────────────────────────────────────
+
+  loadComparison() {
     if (!this.documentId) return;
     this.isLoading = true;
-    this.http.get<any>(`${this.apiUrl}/documents/${this.documentId}`, {
+    this.errorMessage = '';
+    this.http.get<any>(`${this.apiUrl}/auditor/record/${this.documentId}/comparison`, {
       headers: this.getHeaders()
     }).subscribe({
       next: (res) => {
-        this.document = res.document;
+        this.comparison = res;
         this.isLoading = false;
         this.cdr.detectChanges();
       },
-      error: () => { this.isLoading = false; }
-    });
-  }
-
-  loadMatchResult() {
-    if (!this.documentId) return;
-    this.http.get<any>(`${this.apiUrl}/matching/result/${this.documentId}`, {
-      headers: this.getHeaders()
-    }).subscribe({
-      next: (res) => {
-        this.matchResult = res.match_result;
-        this.matchType = this.matchResult?.po_id ? '3-Way' : '2-Way';
-        this.cdr.detectChanges();
-      },
-      error: () => {}
-    });
-  }
-
-  loadExceptions() {
-    if (!this.documentId) return;
-    this.http.get<any>(`${this.apiUrl}/matching/exceptions/${this.documentId}`, {
-      headers: this.getHeaders()
-    }).subscribe({
-      next: (res) => {
-        this.exceptions = res.exceptions || [];
-        this.cdr.detectChanges();
-      },
-      error: () => {}
-    });
-  }
-
-  loadSupporting() {
-    if (!this.documentId) return;
-    this.http.get<any>(`${this.apiUrl}/documents/${this.documentId}/supporting`, {
-      headers: this.getHeaders()
-    }).subscribe({
-      next: (res) => {
-        this.supporting = res;
-        this.cdr.detectChanges();
-      },
-      error: () => {}
-    });
-  }
-
-  runMatching() {
-    if (!this.documentId) return;
-    this.isRunningMatch = true;
-    this.errorMessage = '';
-    this.successMessage = '';
-
-    this.http.post<any>(`${this.apiUrl}/matching/run/${this.documentId}`, {}, {
-      headers: this.getHeaders()
-    }).subscribe({
-      next: (res) => {
-        this.isRunningMatch = false;
-        this.matchResult = res;
-        this.matchType = res.match_type === '3-way' ? '3-Way' : '2-Way';
-        this.successMessage = `${res.match_type} matching completed! Score: ${res.overall_score}%`;
-        this.loadExceptions();
-        this.loadDocument();
-        this.cdr.detectChanges();
-        setTimeout(() => { this.successMessage = ''; this.cdr.detectChanges(); }, 4000);
-      },
       error: (err) => {
-        this.isRunningMatch = false;
-        this.errorMessage = err.error?.error || 'Matching failed.';
+        this.isLoading = false;
+        this.errorMessage = err.error?.error || 'Failed to load record comparison.';
         this.cdr.detectChanges();
       }
     });
   }
+
+  // ── Audit decision actions ──────────────────────────────
 
   approveDocument() {
     if (!this.documentId) return;
@@ -186,30 +137,72 @@ export class AuditorRecordDetailComponent implements OnInit {
     });
   }
 
-  getMatchClass(matched: boolean | null): string {
-    if (matched === null || matched === undefined) return 'match-na';
-    return matched ? 'match-yes' : 'match-no';
+  goBack() {
+    this.router.navigate(['/auditor/review-queue']);
   }
 
-  getMatchLabel(matched: boolean | null): string {
-    if (matched === null || matched === undefined) return 'N/A';
-    return matched ? 'Match' : 'Mismatch';
+  // ── Overall status banner ───────────────────────────────
+
+  get overallStatus(): string {
+    return this.comparison?.match_result?.overall_status || 'PARTIAL';
   }
 
-  getOverallClass(status: string): string {
-    if (status === 'full_match') return 'status-full';
-    if (status === 'partial_match') return 'status-partial';
-    return 'status-mismatch';
+  getBannerClass(): string {
+    if (this.overallStatus === 'PASS') return 'banner-pass';
+    if (this.overallStatus === 'FAIL') return 'banner-fail';
+    return 'banner-partial';
   }
 
-  getSeverityClass(severity: string): string {
-    if (severity === 'high')   return 'sev-high';
-    if (severity === 'medium') return 'sev-medium';
-    return 'sev-low';
+  getBannerIcon(): string {
+    if (this.overallStatus === 'PASS') return '✅';
+    if (this.overallStatus === 'FAIL') return '❌';
+    return '⚠️';
   }
+
+  getBannerText(): string {
+    if (this.overallStatus === 'PASS') return 'ALL FIELDS MATCH';
+    if (this.overallStatus === 'FAIL') return 'MISMATCH DETECTED — REVIEW REQUIRED';
+    return 'SOME DOCUMENTS MISSING';
+  }
+
+  // ── Field comparison table helpers ──────────────────────
+  // Pairwise (Invoice->PO, PO->GR) symbols are computed client-side from
+  // the raw values the API already returns, so the table can show a
+  // per-column relationship instead of only the aggregate match flags.
+
+  private normalizeVendor(name: string | null | undefined): string {
+    if (!name) return '';
+    return name.toLowerCase()
+      .replace(/[.,()]/g, '')
+      .replace(/\bsdn\s*bhd\b/g, '')
+      .replace(/\bberhad\b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private amountsEqual(a: number | null | undefined, b: number | null | undefined): boolean {
+    if (a === null || a === undefined || b === null || b === undefined) return false;
+    return Math.abs(Number(a) - Number(b)) < 0.01;
+  }
+
+  vendorSymbol(fromVal: string | null, toVal: string | null): 'eq' | 'neq' | 'na' {
+    if (!fromVal || !toVal) return 'na';
+    return this.normalizeVendor(fromVal) === this.normalizeVendor(toVal) ? 'eq' : 'neq';
+  }
+
+  amountSymbol(fromVal: number | null, toVal: number | null): 'eq' | 'neq' | 'na' {
+    if (fromVal === null || fromVal === undefined || toVal === null || toVal === undefined) return 'na';
+    return this.amountsEqual(fromVal, toVal) ? 'eq' : 'neq';
+  }
+
+  rowClass(symbols: ('eq' | 'neq' | 'na')[]): string {
+    return symbols.includes('neq') ? 'row-mismatch' : '';
+  }
+
+  // ── Formatting ───────────────────────────────────────────
 
   formatAmount(amount: any): string {
-    if (!amount) return '-';
+    if (amount === null || amount === undefined || amount === '') return '-';
     return 'RM ' + parseFloat(amount).toLocaleString('en-MY', {
       minimumFractionDigits: 2, maximumFractionDigits: 2
     });
@@ -222,7 +215,89 @@ export class AuditorRecordDetailComponent implements OnInit {
     });
   }
 
-  goBack() {
-    this.router.navigate(['/auditor/review-queue']);
+  // ── PDF quick-view modal ─────────────────────────────────
+
+  private fileUrlFor(type: DocType): string | null {
+    if (!this.comparison) return null;
+    if (type === 'invoice') return `${this.apiUrl}/documents/${this.comparison.invoice.document_id}/file`;
+    if (type === 'po' && this.comparison.po) return `${this.apiUrl}/documents/po/${this.comparison.po.po_id}/file`;
+    if (type === 'gr' && this.comparison.gr) return `${this.apiUrl}/documents/gr/${this.comparison.gr.gr_id}/file`;
+    return null;
+  }
+
+  fileNameFor(type: DocType): string {
+    if (!this.comparison) return '';
+    if (type === 'invoice') return this.comparison.invoice?.filename || '';
+    if (type === 'po') return this.comparison.po?.filename || '';
+    if (type === 'gr') return this.comparison.gr?.filename || '';
+    return '';
+  }
+
+  docTypeLabel(type: DocType): string {
+    if (type === 'invoice') return 'Invoice';
+    if (type === 'po') return 'Purchase Order';
+    return 'Goods Receipt';
+  }
+
+  isDocAvailable(type: DocType): boolean {
+    return !!this.fileUrlFor(type);
+  }
+
+  openDocModal(type: DocType) {
+    const url = this.fileUrlFor(type);
+    if (!url) return;
+
+    this.revokeModalBlobUrl();
+    this.modalDocType = type;
+    this.modalFileName = this.fileNameFor(type);
+    this.modalLoading = true;
+    this.modalError = '';
+    this.modalIframeUrl = null;
+    this.showModal = true;
+    this.cdr.detectChanges();
+
+    this.http.get(url, { headers: this.getHeaders(), responseType: 'blob' }).subscribe({
+      next: (blob) => {
+        this.modalRawBlobUrl = URL.createObjectURL(blob);
+        this.modalIframeUrl = this.sanitizer.bypassSecurityTrustResourceUrl(this.modalRawBlobUrl);
+        this.modalLoading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.modalLoading = false;
+        this.modalError = 'Failed to load document.';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  closeModal() {
+    this.showModal = false;
+    this.revokeModalBlobUrl();
+    this.cdr.detectChanges();
+  }
+
+  openInNewTab() {
+    if (this.modalRawBlobUrl) window.open(this.modalRawBlobUrl, '_blank');
+  }
+
+  downloadFile() {
+    if (!this.modalRawBlobUrl) return;
+    const a = document.createElement('a');
+    a.href = this.modalRawBlobUrl;
+    a.download = this.modalFileName || 'document';
+    a.click();
+  }
+
+  private revokeModalBlobUrl() {
+    if (this.modalRawBlobUrl) {
+      URL.revokeObjectURL(this.modalRawBlobUrl);
+      this.modalRawBlobUrl = '';
+    }
+  }
+
+  @HostListener('document:keydown.escape')
+  onEscapeKey() {
+    if (this.showModal) this.closeModal();
   }
 }

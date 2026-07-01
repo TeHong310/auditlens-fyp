@@ -1,7 +1,8 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
 import psycopg2.extras
 import os
+import mimetypes
 from datetime import datetime
 from db import get_db_connection, get_user_by_id
 from helpers.audit_log import log_audit
@@ -9,6 +10,18 @@ from helpers.ocr_helper import run_ocr, extract_fields, extract_po_fields, extra
 from config import Config
 
 documents_bp = Blueprint('documents', __name__)
+
+
+def _send_document_file(file_path, file_name):
+    if not os.path.exists(file_path):
+        return jsonify({'error': 'File not found on server'}), 404
+    mimetype = mimetypes.guess_type(file_name)[0] or 'application/octet-stream'
+    return send_file(
+        file_path,
+        mimetype=mimetype,
+        as_attachment=False,
+        download_name=file_name
+    )
 
 # ------------------------------------------------------------
 # UPLOAD INVOICE + OCR
@@ -527,7 +540,7 @@ def get_document_detail(document_id):
 
 
 # ------------------------------------------------------------
-# SERVE DOCUMENT FILE
+# SERVE DOCUMENT FILE (Invoice)
 # GET /documents/<document_id>/file
 # ------------------------------------------------------------
 @documents_bp.route('/<int:document_id>/file', methods=['GET'])
@@ -540,7 +553,7 @@ def serve_document_file(document_id):
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
-            'SELECT file_name, file_path FROM documents WHERE document_id = %s',
+            'SELECT file_name, file_path, uploaded_by FROM documents WHERE document_id = %s',
             (document_id,)
         )
         document = cursor.fetchone()
@@ -549,19 +562,74 @@ def serve_document_file(document_id):
         if not document:
             return jsonify({'error': 'Document not found'}), 404
 
-        file_path = document['file_path']
-        file_name = document['file_name']
+        if user['role'] == 'finance_executive' and document['uploaded_by'] != user['user_id']:
+            return jsonify({'error': 'Access denied'}), 403
 
-        if not os.path.exists(file_path):
-            return jsonify({'error': 'File not found on server'}), 404
+        return _send_document_file(document['file_path'], document['file_name'])
 
-        from flask import send_file
-        return send_file(
-            file_path,
-            mimetype='application/pdf',
-            as_attachment=False,
-            download_name=file_name
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# SERVE PO FILE
+# GET /documents/po/<po_id>/file
+# ------------------------------------------------------------
+@documents_bp.route('/po/<int:po_id>/file', methods=['GET'])
+@jwt_required()
+def serve_po_file(po_id):
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute(
+            'SELECT file_name, file_path, uploaded_by FROM purchase_orders WHERE po_id = %s',
+            (po_id,)
         )
+        po = cursor.fetchone()
+        conn.close()
+
+        if not po:
+            return jsonify({'error': 'Purchase order not found'}), 404
+
+        if user['role'] == 'finance_executive' and po['uploaded_by'] != user['user_id']:
+            return jsonify({'error': 'Access denied'}), 403
+
+        return _send_document_file(po['file_path'], po['file_name'])
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# SERVE GR FILE
+# GET /documents/gr/<gr_id>/file
+# ------------------------------------------------------------
+@documents_bp.route('/gr/<int:gr_id>/file', methods=['GET'])
+@jwt_required()
+def serve_gr_file(gr_id):
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute(
+            'SELECT file_name, file_path, uploaded_by FROM goods_receipts WHERE gr_id = %s',
+            (gr_id,)
+        )
+        gr = cursor.fetchone()
+        conn.close()
+
+        if not gr:
+            return jsonify({'error': 'Goods receipt not found'}), 404
+
+        if user['role'] == 'finance_executive' and gr['uploaded_by'] != user['user_id']:
+            return jsonify({'error': 'Access denied'}), 403
+
+        return _send_document_file(gr['file_path'], gr['file_name'])
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
