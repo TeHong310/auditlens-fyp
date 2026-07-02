@@ -1,0 +1,98 @@
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <h1 class="page-title">🤖 Anomaly Detection</h1>
+    <p class="page-subtitle">AI-powered pattern analysis • {{ stats.total }} anomalies detected</p>
+  </div>
+
+  <!-- Filters -->
+  <div class="filter-block">
+    <div class="filter-group">
+      <span class="filter-group-label">Severity:</span>
+      <button *ngFor="let f of severityFilters" class="filter-chip"
+              [class.active]="activeSeverity === f.key" (click)="setSeverity(f.key)">
+        {{ f.icon }} {{ f.label }}
+        <span class="chip-count" *ngIf="f.key !== 'all'">{{ stats.by_severity[f.key] || 0 }}</span>
+        <span class="chip-count" *ngIf="f.key === 'all'">{{ stats.total }}</span>
+      </button>
+    </div>
+
+    <div class="filter-group">
+      <span class="filter-group-label">Type:</span>
+      <button *ngFor="let f of typeFilters" class="filter-chip"
+              [class.active]="activeType === f.key" (click)="setType(f.key)">
+        {{ f.icon }} {{ f.label }}
+        <span class="chip-count" *ngIf="f.key !== 'all'">{{ stats.by_type[f.key] || 0 }}</span>
+      </button>
+    </div>
+
+    <div class="filter-group">
+      <span class="filter-group-label">Status:</span>
+      <button *ngFor="let f of statusFilters" class="filter-chip status-chip"
+              [class.active]="activeStatus === f.key" (click)="setStatus(f.key)">
+        {{ f.label }}
+      </button>
+    </div>
+  </div>
+
+  <div class="error-box" *ngIf="errorMessage">✗ {{ errorMessage }}</div>
+
+  <!-- Loading skeleton -->
+  <div class="skeleton-wrap" *ngIf="isLoading">
+    <div class="skeleton-card" *ngFor="let i of [1,2]"></div>
+  </div>
+
+  <!-- Empty state -->
+  <div class="empty-state" *ngIf="!isLoading && !errorMessage && anomalies.length === 0">
+    <p class="empty-icon">🎉</p>
+    <p class="empty-text">No anomalies detected — all records appear normal.</p>
+  </div>
+
+  <!-- Anomaly Cards -->
+  <div class="anomaly-list" *ngIf="!isLoading">
+    <div class="anomaly-card" *ngFor="let a of anomalies" [ngClass]="'sev-' + a.severity">
+
+      <div class="card-top">
+        <span class="severity-pill" [ngClass]="'pill-' + a.severity">
+          {{ severityIcon(a.severity) }} {{ a.severity | uppercase }}
+        </span>
+        <span class="type-badge">{{ typeIcon(a.anomaly_type) }} {{ typeLabel(a.anomaly_type) }}</span>
+        <span class="card-invoice-no">{{ a.invoice_no || 'Unknown Invoice' }}</span>
+        <span class="card-time">{{ relativeTime(a.created_at) }}</span>
+      </div>
+
+      <p class="card-vendor">Vendor: {{ a.vendor_name || 'Unknown vendor' }}</p>
+
+      <div class="pattern-box">
+        <p class="section-label">📊 Detected Pattern</p>
+        <div class="pattern-line" *ngFor="let line of patternLines(a)">
+          <span class="pattern-label">{{ line.label }}:</span>
+          <span class="pattern-value">{{ line.value }}</span>
+        </div>
+      </div>
+
+      <div class="ai-box">
+        <p class="section-label">🤖 AI Analysis</p>
+        <p class="ai-text">"{{ a.ai_explanation }}"</p>
+      </div>
+
+      <div class="rec-box">
+        <p class="section-label">💡 Recommendation</p>
+        <p class="rec-text">"{{ a.ai_recommendation }}"</p>
+      </div>
+
+      <div class="card-actions" *ngIf="a.status === 'pending'">
+        <button class="btn-investigate" (click)="investigate(a)">Investigate →</button>
+        <button class="btn-reviewed" [disabled]="actionInFlight === a.anomaly_id" (click)="review(a, 'reviewed')">✓ Mark Reviewed</button>
+        <button class="btn-dismiss" [disabled]="actionInFlight === a.anomaly_id" (click)="review(a, 'dismissed')">✗ Dismiss</button>
+      </div>
+      <div class="card-actions" *ngIf="a.status !== 'pending'">
+        <button class="btn-investigate" (click)="investigate(a)">Investigate →</button>
+        <span class="status-note">{{ a.status === 'reviewed' ? '✓ Reviewed' : '✗ Dismissed' }}</span>
+      </div>
+
+    </div>
+  </div>
+
+</div>

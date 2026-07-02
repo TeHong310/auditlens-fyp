@@ -841,3 +841,166 @@ Why:
 Setup/config needed:
   None — no backend changes, no new dependencies.
   1. Redeploy the Render frontend to pick up the fix.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-02
+What was changed:
+  New Detection Layer: hybrid rule-based + Gemini LLM anomaly detection,
+  the 4th layer of the 6-layer AI pipeline.
+
+  DB migration (auditlens-backend/migrations/2026-07-02_create_anomalies_table.sql):
+    New `anomalies` table exactly as specified (anomaly_id, invoice_
+    document_id FK -> documents ON DELETE CASCADE, anomaly_type,
+    severity, detected_pattern JSONB, ai_explanation, ai_recommendation,
+    status, reviewed_by FK -> users, reviewed_at, created_at) plus
+    idx_anomalies_status and idx_anomalies_invoice. No migration runner
+    exists in this repo (schema changes have always been applied
+    directly to each Postgres instance), so this is a plain .sql file —
+    applied and tested against the local dev DB; the Render production
+    DB still needs it run manually (see below).
+
+  Backend — helpers/anomaly_detector.py (new):
+    4 independent rule-based detectors, each returning
+    {"type", "severity", "pattern"} or None:
+      - detect_amount_anomaly: pulls the vendor's approved invoices
+        from the last 90 days (by invoice_date, vendor name normalized
+        the same way routes/auditor.py already does for match logic —
+        lowercase, strip "Sdn Bhd"/"Berhad"/punctuation), needs >= 3
+        historical invoices or returns None (skips silently, no error —
+        per the task's explicit instruction). Flags if current >
+        mean + 2*stdev OR current > 3*mean; severity HIGH >5x mean,
+        MEDIUM >3x mean, LOW >2x mean. ASSUMPTION: the flag rule and
+        the severity bands don't perfectly nest (a current amount can
+        trip the mean+2*stdev rule without crossing the 2x-mean floor
+        the severity bands start at) — that case defaults to LOW
+        severity, since the spec didn't define a band for it.
+      - detect_round_amount: amount >= 1000 and a multiple of 500
+        (float-tolerant modulo check, not exact ==, since Postgres
+        NUMERIC survives a mean/stdev-free round-trip as a float here
+        without floating point epsilon issues at these values, but the
+        check was written tolerant regardless) -> medium.
+      - detect_weekend_transaction: invoice_date.weekday() in
+        (Sat, Sun) -> low.
+      - detect_duplicate_suspicion: same normalized vendor, amount
+        within +/-5%, invoice_date within +/-7 days, excluding the
+        current document_id -> high. Picks the closest-by-date match
+        when more than one candidate qualifies.
+    get_gemini_explanation() reuses the exact Gemini call pattern
+    already established in helpers/gemini_extractor.py (same API key,
+    same x-goog-api-key header, same temperature=0 +
+    responseMimeType=application/json), with the prompt template given
+    in the task. On any failure (bad response, timeout, no API key,
+    or — as actually happened during testing, see below — a live 429
+    rate limit) it falls back to a template-based explanation built
+    from the anomaly's own pattern numbers, not a generic "AI
+    unavailable" message, so the card is still informative.
+    run_anomaly_detection(invoice_document_id) fetches the invoice's
+    extracted_fields, runs all 4 detectors (skipping any whose
+    required field is missing/None), calls Gemini once per anomaly
+    found, and inserts each into `anomalies`. Multiple anomaly types
+    can legitimately co-fire on one invoice (e.g. an amount that's
+    both anomalously high AND suspiciously round) — both get inserted,
+    exactly as the task describes as acceptable.
+
+  Backend — integration:
+    documents.py's POST /documents/upload (invoice upload + OCR) now
+    calls run_anomaly_detection(document_id) right after
+    extracted_fields is committed, wrapped in try/except so a detection
+    failure never blocks the upload response — matches the task's
+    explicit requirement.
+
+  Backend — routes/anomalies.py (new), registered at /anomalies in
+  app.py:
+    - GET /anomalies?severity=&type=&status=&limit=&offset= — joined
+      with extracted_fields for invoice_no/vendor_name/invoice_date/
+      amount, filtered server-side, newest first.
+    - POST /anomalies/<id>/review — body {"status": "reviewed" |
+      "dismissed", "note": "optional"}, sets reviewed_by/reviewed_at
+      to the current auditor. GAP FLAGGED: the given `anomalies` table
+      has no column to store a reviewer's free-text "note" (only
+      ai_explanation/ai_recommendation, which are Gemini's fields, not
+      the reviewer's). The endpoint accepts `note` in the body per the
+      task's own contract but doesn't persist it anywhere — didn't want
+      to silently add a column beyond the exact schema given. Flagging
+      this rather than guessing; say the word if you want a
+      reviewer_note column added.
+    - GET /anomalies/stats — total + by_severity + by_type, counted
+      across ALL anomalies regardless of status (matches the task's own
+      worked example, where by_severity and by_type both sum to total).
+
+  Frontend — new auditor-anomalies page (replaces nothing; this is a
+  new sidebar entry), added to the sidebar between "Exceptions" and
+  "Report & Log" with a new inline SVG spark icon matching the existing
+  icon style (the other nav icons are hand-drawn line art, not emoji,
+  so a matching icon was added rather than reusing 🤖 inline):
+    - Severity chips (All/High/Med/Low) and type chips (All/Amount/
+      Round/Weekend/Dup) show counts from GET /anomalies/stats — these
+      are global totals, not counts filtered by the other active
+      chips, matching how the existing Exceptions page's chips behave.
+    - Status chips (Pending/Reviewed/Dismissed, no "All") match the
+      task's own mockup exactly, which shows no count badges on that
+      row and no "All" option; defaults to Pending.
+    - Changing any filter re-fetches GET /anomalies with all three
+      filters combined as query params (not client-side filtering —
+      unlike the Exceptions page, there are 3 filter dimensions here,
+      and server-side keeps chip/list state from ever disagreeing).
+    - Each card: severity pill, type badge + emoji, invoice no, vendor,
+      a grey "Detected Pattern" box with type-specific stat lines, a
+      light-blue "AI Analysis" box, a light-green "Recommendation" box,
+      and Investigate / Mark Reviewed / Dismiss actions (the latter two
+      only shown while status is pending; POSTs to the review endpoint
+      and removes the card from the current filtered view on success).
+    - Empty state, loading skeleton, and error banner all present.
+    - KNOWN LIMITATION: because the anomalies table has no flag
+      distinguishing a real Gemini explanation from the template
+      fallback, the frontend can't visually de-emphasize fallback text
+      as the task asked ("still display, but slightly less prominent")
+      — there's nothing in the API response to key that styling off
+      without inventing a column. Both render identically for now.
+
+Why:
+  Gives auditors an automated first pass at four common invoice red
+  flags (amount outliers vs. vendor history, suspiciously round
+  figures, weekend-dated invoices, and likely duplicate submissions)
+  with a plain-English explanation grounded in the vendor's own numbers
+  instead of a bare rule-trigger label, so auditors can triage without
+  re-deriving why something was flagged.
+
+  Verified: unit-tested all 4 pure-logic detector paths (round-amount
+  boundary cases, real Saturday/Sunday dates, vendor-name
+  normalization, and the Gemini fallback template for all 4 anomaly
+  types) synthetically. Then ran the full pipeline for real against the
+  local dev DB — seeded 8 synthetic documents (3 approved baseline
+  invoices + 5 test invoices covering all 4 anomaly types, including
+  one that legitimately trips both amount and round-amount at once),
+  called run_anomaly_detection() on each, and confirmed every inserted
+  row's severity/pattern/explanation against expected values — this
+  incidentally proved the Gemini-failure fallback path live, since the
+  Gemini API was actually rate-limited (429) during this test run and
+  every explanation used the fallback template. Also route-tested GET
+  /anomalies (filter combinations, response shape including
+  detected_pattern deserializing to a real JSON object), GET
+  /anomalies/stats, and POST /anomalies/<id>/review (invalid status
+  rejected with 400, valid transition updates status/reviewed_by/
+  reviewed_at and moves the row out of the pending filter, 404 on an
+  unknown id) through the real Flask app with a real auditor JWT. All
+  synthetic test data was deleted afterward — confirmed zero residue
+  in both `documents`/`extracted_fields` and `anomalies`.
+  `ng build --configuration=production` passes clean (758.97 kB
+  initial, under budget).
+
+Setup/config needed:
+  No new dependencies (requests/Gemini API key already in use by
+  gemini_extractor.py; same GEMINI_API_KEY env var is reused, nothing
+  new to configure).
+  1. Run auditlens-backend/migrations/2026-07-02_create_anomalies_table.sql
+     against the Render production database — this was NOT applied
+     there, only to the local dev DB. The feature will 500 on Render
+     until this runs.
+  2. Redeploy the Render backend for the /anomalies endpoints and the
+     upload-flow hook.
+  3. Redeploy the Render frontend for the new Anomaly Detection page.
+  4. Upload the anomaly-testing sample PDFs (baseline vendor history +
+     4 types of anomalies) to exercise this against real OCR output
+     end-to-end.

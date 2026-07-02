@@ -9,6 +9,7 @@ from routes.reviews import reviews_bp
 from routes.admin import admin_bp
 from routes.ocr_review import ocr_review_bp
 from routes.auditor import auditor_bp
+from routes.anomalies import anomalies_bp
 
 app = Flask(__name__)
 
@@ -25,6 +26,7 @@ app.register_blueprint(reviews_bp,   url_prefix='/reviews')
 app.register_blueprint(admin_bp,     url_prefix='/admin')
 app.register_blueprint(ocr_review_bp, url_prefix='/ocr-review')
 app.register_blueprint(auditor_bp,    url_prefix='/auditor')
+app.register_blueprint(anomalies_bp,  url_prefix='/anomalies')
 
 @app.route('/')
 def hello_world():

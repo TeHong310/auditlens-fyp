@@ -13,6 +13,7 @@ import { AuditorReviewQueueComponent } from './auditor/review-queue/auditor-revi
 import { AuditorReportComponent } from './auditor/report/auditor-report.component';
 import { AuditorRecordDetailComponent } from './auditor/record-detail/auditor-record-detail.component';
 import { AuditorExceptionsComponent } from './auditor/exceptions/auditor-exceptions.component';
+import { AuditorAnomaliesComponent } from './auditor/anomalies/auditor-anomalies.component';
 export const routes: Routes = [
   { path: '', redirectTo: 'login', pathMatch: 'full' },
   { path: 'login', component: LoginComponent },
@@ -37,6 +38,7 @@ export const routes: Routes = [
       { path: 'review-queue', component: AuditorReviewQueueComponent },
       { path: 'record-detail', component: AuditorRecordDetailComponent },  // ← 新加
       { path: 'exceptions', component: AuditorExceptionsComponent },     // ← 新加
+      { path: 'anomalies', component: AuditorAnomaliesComponent },
       { path: 'report', component: AuditorReportComponent },
       { path: '', redirectTo: 'home', pathMatch: 'full' }
     ]

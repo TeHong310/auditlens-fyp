@@ -18,6 +18,7 @@ export class AuditorLayoutComponent implements OnInit {
     { label: 'Review Queue',  icon: 'review',      route: '/auditor/review-queue' },
     { label: 'Record Detail', icon: 'record',      route: '/auditor/record-detail' },
     { label: 'Exceptions',    icon: 'exceptions',  route: '/auditor/exceptions' },
+    { label: 'Anomaly Detection', icon: 'anomaly', route: '/auditor/anomalies' },
     { label: 'Report & Log',  icon: 'report',      route: '/auditor/report' },
   ];
 
