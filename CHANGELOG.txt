@@ -1061,3 +1061,81 @@ Setup/config needed:
   against Render is no longer necessary; startup now does it.
   1. Redeploy the Render backend so the next boot runs
      _ensure_anomalies_table() against the Render production DB.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-02
+What was changed:
+  Fix amount anomaly detector — baseline now includes all non-rejected
+  invoices, not just approved ones, allowing early anomaly detection
+  during auditor review.
+
+  helpers/anomaly_detector.py, detect_amount_anomaly()'s baseline
+  query: WHERE d.status = 'approved' -> WHERE d.status != 'returned'.
+  Baseline now draws from every invoice for that vendor except ones
+  the auditor already sent back — 'ocr_processing', 'ocr_done',
+  'under_review', 'resubmitted', and 'approved' documents (from other,
+  earlier invoices for the same vendor) all now count, as long as
+  their extracted_fields has a vendor_name/amount/invoice_date. The
+  current invoice being checked is still excluded from its own
+  baseline via the existing document_id != %s condition (unchanged).
+  The 90-day window and the >= 3 samples floor are both unchanged.
+
+  Added the 5 requested DEBUG print lines (vendor, sample size,
+  baseline mean/std, current amount/deviation, threshold EXCEEDED/
+  PASSED), plus two more for the early-exit paths (fewer than 3
+  samples, or a zero baseline mean) so "why didn't this fire" is
+  diagnosable from logs without guessing.
+
+  ADAPTED THE STATUS LIST, NOT COPIED LITERALLY: the requested clause
+  was `WHERE status NOT IN ('sent_back', 'rejected')`, with 'pending'
+  and 'need_review' named as statuses that should count. None of
+  'sent_back', 'rejected', 'pending', or 'need_review' are values this
+  app's documents.status column ever actually takes (checked every
+  `SET status = ...` in the backend to confirm) — the real status
+  values are ocr_processing / ocr_done / under_review / resubmitted /
+  returned / approved. 'returned' is what this app calls "sent back to
+  Finance by the auditor" — the closest real equivalent to "rejected"
+  in the request. Using the literal given clause verbatim would have
+  been silently inert: since 'returned' isn't in ('sent_back',
+  'rejected'), it would have passed the NOT IN filter too, so nothing
+  would actually have been excluded — defeating the request's own
+  stated goal of keeping auditor-rejected records out of the baseline.
+  Flagging this rather than guessing whether you wanted it silently
+  translated: if it turns out 'returned' invoices *should* count too
+  (their rationale — "downstream audit decisions don't change what the
+  vendor invoiced" — arguably applies to 'returned' just as much as to
+  'under_review') say so and the filter can be dropped entirely.
+
+Why:
+  Every invoice enters this app as 'ocr_processing' -> 'ocr_done' ->
+  'under_review', and typically sits in 'under_review' for a while
+  before an auditor acts on it — 'approved' is the last stage, not a
+  typical one. Requiring 'approved' history meant a vendor's baseline
+  stayed empty (or under the 3-sample floor) until 3+ of their past
+  invoices had individually been fully approved, which — especially
+  during testing/demo, but also in a slow real audit queue — meant the
+  amount detector almost never fired, even though the other 3
+  detectors worked immediately. The fix lets the baseline build up
+  from invoices still in the queue, so an auditor reviewing invoice #4
+  for a vendor gets an anomaly signal even if #1-3 haven't been
+  approved yet.
+
+  Verified by directly reproducing the reported scenario against the
+  local dev DB: seeded 3 SOLARIS-ELECTRONICS-style invoices as
+  'under_review' (not approved) plus one 'returned' invoice with a
+  wild outlier amount (RM 999,999) to test the exclusion still works,
+  then ran detect_amount_anomaly() on a new RM 24,750 invoice for that
+  vendor (the exact scenario and amount from the report). Confirmed:
+  sample_size=3 (the 3 under_review invoices), the returned outlier
+  did NOT leak into the baseline (mean stayed ~RM 1,783, not skewed by
+  999,999), severity=HIGH, and all 5 requested DEBUG lines printed
+  with correct values (deviation ~1288%, "Threshold check: EXCEEDED").
+  Also re-ran the earlier full-pipeline regression test (all 4
+  detector types via run_anomaly_detection) to confirm round/weekend/
+  duplicate are unaffected, exactly as instructed. All synthetic test
+  data deleted afterward — confirmed zero residue.
+
+Setup/config needed:
+  None — no new dependencies, no schema change.
+  1. Redeploy the Render backend to pick up the fix.

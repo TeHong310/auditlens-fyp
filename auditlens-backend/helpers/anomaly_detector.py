@@ -72,7 +72,7 @@ def detect_amount_anomaly(invoice_document_id, vendor_name, amount):
         '''SELECT ef.vendor_name, ef.total_amount
            FROM extracted_fields ef
            JOIN documents d ON ef.document_id = d.document_id
-           WHERE d.status = 'approved' AND ef.document_id != %s
+           WHERE d.status != 'returned' AND ef.document_id != %s
              AND ef.invoice_date >= %s AND ef.total_amount IS NOT NULL''',
         (invoice_document_id, cutoff)
     )
@@ -83,7 +83,12 @@ def detect_amount_anomaly(invoice_document_id, vendor_name, amount):
         float(r['total_amount']) for r in rows
         if _normalize_vendor(r['vendor_name']) == normalized
     ]
+
+    print(f"DEBUG Amount detector for vendor={vendor_name}")
+    print(f"DEBUG Historical sample size: {len(history)}")
+
     if len(history) < 3:
+        print("DEBUG Threshold check: SKIPPED (fewer than 3 historical invoices)")
         return None
 
     mean = statistics.mean(history)
@@ -91,8 +96,17 @@ def detect_amount_anomaly(invoice_document_id, vendor_name, amount):
     current = float(amount)
 
     if mean <= 0:
+        print("DEBUG Threshold check: SKIPPED (baseline mean is zero)")
         return None
-    if not (current > mean + 2 * std or current > 3 * mean):
+
+    deviation_pct = (current - mean) / mean * 100
+    flagged = current > mean + 2 * std or current > 3 * mean
+
+    print(f"DEBUG Baseline mean=RM {mean:.2f}, std=RM {std:.2f}")
+    print(f"DEBUG Current amount=RM {current:.2f}, deviation={deviation_pct:.1f}%")
+    print(f"DEBUG Threshold check: {'EXCEEDED' if flagged else 'PASSED'}")
+
+    if not flagged:
         return None
 
     ratio = current / mean
@@ -112,7 +126,7 @@ def detect_amount_anomaly(invoice_document_id, vendor_name, amount):
             'current': current,
             'mean': round(mean, 2),
             'std': round(std, 2),
-            'deviation_pct': round((current - mean) / mean * 100, 1),
+            'deviation_pct': round(deviation_pct, 1),
             'sample_size': len(history)
         }
     }
