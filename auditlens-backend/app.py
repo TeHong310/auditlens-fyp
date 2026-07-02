@@ -2,6 +2,7 @@ from flask import Flask, jsonify
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
 from config import Config
+from db import get_db_connection
 from routes.auth import auth_bp
 from routes.documents import documents_bp
 from routes.matching import matching_bp
@@ -10,6 +11,40 @@ from routes.admin import admin_bp
 from routes.ocr_review import ocr_review_bp
 from routes.auditor import auditor_bp
 from routes.anomalies import anomalies_bp
+
+
+def _ensure_anomalies_table():
+    """Auto-create the anomalies table on startup so Render (which has
+    no migration runner) doesn't need the .sql file run manually. Safe
+    to run on every boot: CREATE ... IF NOT EXISTS is a no-op once the
+    table exists. Failure is logged, not raised, so a transient DB
+    hiccup at cold start doesn't take down the whole app."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS anomalies (
+                anomaly_id SERIAL PRIMARY KEY,
+                invoice_document_id INT NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+                anomaly_type VARCHAR(50) NOT NULL,
+                severity VARCHAR(20) NOT NULL,
+                detected_pattern JSONB,
+                ai_explanation TEXT,
+                ai_recommendation TEXT,
+                status VARCHAR(20) DEFAULT 'pending',
+                reviewed_by INT REFERENCES users(user_id),
+                reviewed_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_anomalies_status ON anomalies(status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_anomalies_invoice ON anomalies(invoice_document_id)')
+        conn.commit()
+        conn.close()
+        print('Anomaly table ready')
+    except Exception as e:
+        print(f'WARNING: could not ensure anomalies table exists: {type(e).__name__}: {e}')
+
 
 app = Flask(__name__)
 
@@ -27,6 +62,8 @@ app.register_blueprint(admin_bp,     url_prefix='/admin')
 app.register_blueprint(ocr_review_bp, url_prefix='/ocr-review')
 app.register_blueprint(auditor_bp,    url_prefix='/auditor')
 app.register_blueprint(anomalies_bp,  url_prefix='/anomalies')
+
+_ensure_anomalies_table()
 
 @app.route('/')
 def hello_world():

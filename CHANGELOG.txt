@@ -1004,3 +1004,60 @@ Setup/config needed:
   4. Upload the anomaly-testing sample PDFs (baseline vendor history +
      4 types of anomalies) to exercise this against real OCR output
      end-to-end.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-02
+What was changed:
+  app.py now auto-creates the `anomalies` table (+ both indexes) on
+  every backend startup, via a new _ensure_anomalies_table() called
+  right after blueprint registration. Uses CREATE TABLE/INDEX IF NOT
+  EXISTS, so it's a no-op once the table exists — safe to run on every
+  boot, local or Render. Wrapped in try/except: a failure here is
+  logged ("WARNING: could not ensure anomalies table exists: ...") but
+  doesn't raise, so a transient DB hiccup at cold start can't take
+  down the whole app — every other route would still work, just the
+  anomalies ones would keep failing until the next successful boot.
+  On success it prints "Anomaly table ready".
+
+  ADAPTED, NOT COPIED: the requested snippet was Flask-SQLAlchemy code
+  (db.session.execute(text(...)), app.app_context()) — this backend
+  doesn't use SQLAlchemy anywhere; every route uses raw psycopg2 via
+  get_db_connection() in db.py. Pasting the given snippet in as-is
+  would have crashed on import (NameError: db is not defined, no such
+  db.session). Implemented the same intent — auto-create on startup —
+  using this codebase's actual DB access pattern instead.
+
+Why:
+  Render's production DB never got the migrations/2026-07-02_create_
+  anomalies_table.sql file run against it (no migration runner exists
+  in this repo, and that step required manual action that hadn't
+  happened yet), so every /anomalies request there was failing with
+  "relation 'anomalies' does not exist". Auto-creating on startup
+  means Render's boot process applies the schema itself on next
+  deploy — no manual psql step required, and this survives future
+  Render DB resets/recreations too.
+
+  The migrations/*.sql file itself was left in place (not deleted) —
+  it's still a useful plain-text record of exactly what the schema
+  change was and when, even though it's no longer the only thing that
+  applies it.
+
+  Verified locally by directly reproducing the reported bug: dropped
+  the local `anomalies` table (CASCADE), then did a fresh import of
+  app.py in a new Python process (mirroring a real backend boot) and
+  confirmed "Anomaly table ready" printed and the table + both indexes
+  (idx_anomalies_status, idx_anomalies_invoice) came back exactly as
+  specified. Re-ran the same fresh-import startup a second time against
+  the now-existing table to confirm idempotency (no error, same log
+  line). Then called GET /anomalies and GET /anomalies/stats through
+  the real Flask app with a real auditor JWT and got clean 200
+  responses instead of the reported 500 — confirming the fix actually
+  resolves the reported symptom, not just that a CREATE TABLE statement
+  compiles.
+
+Setup/config needed:
+  None — no new dependencies. Manually running the migration SQL
+  against Render is no longer necessary; startup now does it.
+  1. Redeploy the Render backend so the next boot runs
+     _ensure_anomalies_table() against the Render production DB.
