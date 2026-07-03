@@ -169,7 +169,7 @@ export class AuditorAnomaliesComponent implements OnInit {
         const ratio = p.mean ? (p.current / p.mean) : null;
         return [
           { label: 'Current', value: this.formatAmount(p.current) },
-          { label: 'Vendor 90-day avg', value: `${this.formatAmount(p.mean)} (${ratio ? ratio.toFixed(1) + 'x higher' : '-'})` },
+          { label: 'Vendor avg (recent 50)', value: `${this.formatAmount(p.mean)} (${ratio ? ratio.toFixed(1) + 'x higher' : '-'})` },
           { label: 'Sample size', value: `${p.sample_size} prior invoice(s)` },
         ];
       }

@@ -1373,3 +1373,26 @@ Setup/config needed:
      asked for.
   3. Remove this endpoint after the FYP demo (see the TODO comment in
      routes/admin.py).
+
+----------------------------------------------------------------------
+
+Date: 2026-07-03
+What was changed:
+  fix(ui): remove stale 90-day label from amount anomaly card
+
+  auditor-anomalies.component.ts, patternLines() for anomaly_type
+  'amount': label changed from "Vendor 90-day avg" to "Vendor avg
+  (recent 50)". Label text only — found in the .ts component's
+  patternLines() method (builds the Detected Pattern rows shown on
+  each anomaly card), not the .html template. No other "90-day"
+  references found anywhere else in this component.
+
+Why:
+  The 90-day calendar window was removed from detect_amount_anomaly()
+  two fixes ago in favor of a recent-50-invoices-per-vendor baseline,
+  but this UI label was never updated to match, so the card was
+  describing logic that no longer ran.
+
+Setup/config needed:
+  None — no backend changes, no new dependencies.
+  1. Redeploy the Render frontend to pick up the label fix.
