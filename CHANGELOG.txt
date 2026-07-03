@@ -1540,3 +1540,49 @@ Setup/config needed:
      confirm a real (non-mocked) authenticity check appears correctly
      on /auditor/authenticity — this is the one thing not verified
      live this session.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-04
+What was changed:
+  helpers/gemini_extractor.py, INVOICE_PROMPT: added an INVOICE NUMBER
+  rule with a location-priority list (labeled "No."/"No :"/"Invoice
+  No."/"Invoice #" field first, then the top-right corner near the
+  "Invoice" title), example formats that include slashes and hyphens
+  (INV-2025-1234, SLP2026-01/004, IN12345), and an explicit instruction
+  to return the full string as printed, not a truncated/partial one.
+  PO_PROMPT and GR_PROMPT were not touched — the request was
+  specifically about invoice numbers, not PO/GR document numbers, so
+  scope wasn't expanded without being asked.
+
+Why:
+  Grounded in a real failure case: Starlax Polymer Sdn Bhd's invoice
+  ("Starlax - Inv.pdf") has its invoice number printed as
+  "No. : SLP2026-01/004" in the top-right corner under the "Invoice"
+  title — exactly the kind of slash-containing, multi-segment format
+  the prompt had no explicit guidance for, and an easy candidate for
+  truncation (e.g. "SLP2026-01" or "004" alone) without an explicit
+  "return the full string" instruction.
+
+  Before writing anything, asked which of the two extraction paths in
+  this codebase this should target: the Gemini semantic-fallback
+  prompt (gemini_extractor.py) or the separate regex/heuristic
+  extractor (ocr_helper.py's is_valid_invoice_number and its
+  line-scanning logic). Confirmed: Gemini prompt only.
+
+  Verified: py_compile clean, and rendered the full prompt with
+  INVOICE_PROMPT.format() to visually confirm it reads correctly and
+  the JSON structure's escaped braces still format without error.
+  COULD NOT verify a live Gemini call against the real invoice text —
+  hit the same exhausted daily free-tier quota from two sessions ago
+  (confirmed via the same 429/RESOURCE_EXHAUSTED response), which
+  hasn't reset. Did not fabricate a result.
+
+Setup/config needed:
+  None — no new dependencies, no schema change.
+  1. Redeploy the Render backend to pick up the updated prompt.
+  2. Once the Gemini quota resets, re-process the Starlax invoice (or
+     any invoice with a slash/hyphen-formatted number) and confirm
+     invoice_number extracts as the full string, e.g. "SLP2026-01/004"
+     not "SLP2026-01" or "004" — this is the one thing not verified
+     live this session.

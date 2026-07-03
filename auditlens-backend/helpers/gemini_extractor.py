@@ -12,6 +12,11 @@ Below is OCR-extracted text from an INVOICE document. Extract the fields listed.
 IMPORTANT RULES:
 - The VENDOR is the entity ISSUING the invoice (the seller), typically shown as the company name in the document header at the top
 - The BUYER is who the invoice is billed TO ("Bill To", "Invoice To"), which is NOT the vendor
+- INVOICE NUMBER: look in these locations, in order:
+  1. A field labeled "No.", "No :", "Invoice No.", or "Invoice #"
+  2. The top right corner near the "Invoice" title
+  3. Formats vary and may include slashes or hyphens, e.g. INV-2025-1234, SLP2026-01/004, IN12345
+  Return the FULL string exactly as printed, including slashes and hyphens. Do NOT return a partial or truncated number.
 - Return null for any field you cannot confidently extract
 - Amounts must be numbers only (no currency symbols, no commas, no "RM")
 - Dates in ISO format: YYYY-MM-DD
