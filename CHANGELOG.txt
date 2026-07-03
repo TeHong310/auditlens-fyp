@@ -1227,3 +1227,63 @@ Why:
 Setup/config needed:
   None — no new dependencies, no schema change.
   1. Redeploy the Render backend to pick up the fix.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-03
+What was changed:
+  Add scripts/backfill_anomaly_detection.py for re-running detection on
+  existing documents (useful when baseline grows after original
+  upload).
+
+  New one-off CLI script: `python scripts/backfill_anomaly_detection.py
+  <document_id>`. Deletes any existing anomalies for that
+  invoice_document_id first (prints the deleted count, so re-running
+  is safe and doesn't duplicate rows), then calls the existing
+  run_anomaly_detection() unchanged and prints the created anomaly IDs
+  with type/severity. No detector logic touched — this only calls the
+  existing pipeline against a document that's already in the DB.
+
+Why:
+  Diagnosed this session (document_id=10, SOLARIS ELECTRONICS, RM
+  24,750 invoice on Render's production DB): run_anomaly_detection()
+  only ever gets invoked from inside POST /documents/upload. A
+  document that entered the documents/extracted_fields tables any
+  other way (most likely: seeded directly via SQL for demo/test data,
+  based on this session's evidence — the request was traced through
+  Render's DB via a SQL client, not the app's own upload UI) never
+  triggers detection, no matter how anomalous its data is. Verified by
+  hand-computing the actual amount-detector math against the real
+  SOLARIS baseline pulled from Render (6 invoices, mean≈RM 2417.50,
+  std≈RM 1287, current RM 24,750 → ~10.2x mean, comfortably past both
+  the mean+2*std and 3x-mean triggers) — the detector's own logic
+  clearly says this should fire, so the gap was upload-hook coverage,
+  not detector correctness. This script is the retroactive equivalent
+  of that hook for documents that predate it or were seeded outside
+  the normal upload flow. It's also useful more generally any time a
+  vendor's baseline has grown since a given invoice was first
+  processed, since detection is a point-in-time computation that's
+  never automatically re-run later.
+
+  Verified locally: seeded a synthetic document reproducing the exact
+  reported doc_id=10 scenario (6 SOLARIS-style historical invoices +
+  one RM 24,750 invoice, none of them ever detected), then ran the
+  script as a real subprocess exactly as it will be invoked in
+  practice. First run: "Deleted 0 existing anomalies" ... "Created 1
+  anomaly: type=amount severity=high" (deviation 923.8%, matching the
+  923.7% hand-computed from the real Render data earlier this
+  session). Re-ran it a second time to confirm re-run safety: reported
+  "Deleted 1 existing anomalies" (the row from the first run) and
+  recreated a fresh one — confirmed via direct DB query that exactly
+  one row exists afterward, not two. Also checked the failure paths:
+  no CLI arg, a non-integer arg, and a nonexistent document_id all
+  behave correctly (usage message + exit 1 for the first two, a clean
+  "Deleted 0 / Created 0" with exit 0 for the last, no crash). All
+  synthetic test data cleaned up afterward — confirmed zero residue.
+
+Setup/config needed:
+  None — no new dependencies.
+  1. Run `python scripts/backfill_anomaly_detection.py 10` against the
+     Render production DB to backfill the specific document already
+     diagnosed this session, and against any other pre-existing
+     documents you want detection retroactively applied to.
