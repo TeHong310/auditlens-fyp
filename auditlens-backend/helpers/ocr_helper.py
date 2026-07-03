@@ -138,7 +138,7 @@ def run_google_vision_ocr(image_path):
     except:
         confidence = 85.0
 
-    print(f"DEBUG OCR TEXT: {full_text[:500]}")
+    print(f"DEBUG OCR TEXT: {full_text[:500]}".encode('ascii', errors='replace').decode('ascii'))
     return full_text, confidence
 
 

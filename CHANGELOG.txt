@@ -1586,3 +1586,110 @@ Setup/config needed:
      invoice_number extracts as the full string, e.g. "SLP2026-01/004"
      not "SLP2026-01" or "004" — this is the one thing not verified
      live this session.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-04
+What was changed:
+  fix(extraction): improve Malaysian SME document field detection
+
+  - Invoice Number: handle "No. :" label with wide whitespace +
+    slash-containing IDs
+  - PO Number: prevent substring extraction from vendor names
+    (Polymer -> lymer bug)
+  - Total Amount: prioritize "Total Payable Incl. Tax" over
+    "Total Excl. Tax"
+  - GR Number: recognize "Doc No." as the GRN identifier label
+
+  helpers/gemini_extractor.py: expanded INVOICE_PROMPT's invoice-number
+  rule with the full label list, priority order, and "do not confuse
+  with PO number/debtor code/contact person/page number" guidance.
+  Added a CRITICAL PO Number block to PO_PROMPT (labeled-field-only,
+  explicit list of things NOT to extract from company names/product
+  descriptions/addresses, format examples, a null-if-no-label
+  instruction, and a length floor) plus a Total Amount priority list
+  (Total Payable Incl. Tax > Grand Total > Total (RM) > Amount Payable
+  > Net Total > Total Excl. Tax, only as a last resort). Added a GR
+  Number priority-label block to GR_PROMPT ("Doc No." first, plus
+  GRN No./GR No./Goods Receipt No./Receipt No./Ref No., with explicit
+  "do not confuse with PO Number/Supplier Ref No./Item Code"
+  guidance). Added a shared DOCUMENT_QUALITY_NOTE block (scanned/
+  handwritten/OCR-confusable-character framing, null-not-empty-string,
+  don't invent, prefer labeled values, numeric amounts) prepended to
+  all three prompts, exactly as specified.
+
+  ROOT CAUSE FOUND FOR THE QUOTA BLOCKER FROM THE LAST TWO SESSIONS:
+  every "429 RESOURCE_EXHAUSTED, limit: 0" seen across this session and
+  the previous one was NOT a billing problem and NOT a bad API key —
+  Google has sunset free-tier access to gemini-2.0-flash specifically.
+  Confirmed by testing generateContent directly against several models
+  with the same key: gemini-2.0-flash and gemini-2.0-flash-lite both
+  hard-fail with limit:0, while gemini-2.5-flash, gemini-2.5-flash-lite,
+  and gemini-flash-latest all return real 200 responses. Updated
+  GEMINI_URL in gemini_extractor.py from gemini-2.0-flash to
+  gemini-2.5-flash. This resolves gemini_extractor.py; it does NOT
+  touch helpers/anomaly_detector.py or helpers/authenticity_check.py,
+  which both hardcode the same now-dead gemini-2.0-flash URL and will
+  hit the identical wall the next time either runs — left untouched
+  per this task's explicit "do not change anomaly/authenticity code"
+  constraint, flagged here as a known, real follow-up.
+
+  ALSO FIXED (approved before touching, since it's technically inside
+  the OCR service this task said not to change): a one-line debug
+  print in ocr_helper.py's run_google_vision_ocr() — print(f"DEBUG OCR
+  TEXT: {full_text[:500]}") — crashed with a UnicodeEncodeError
+  whenever OCR'd text contained a character the Windows console's
+  cp1252 codepage can't render (hit on the real Starlax invoice scan).
+  This crashed the entire OCR call before extraction ever ran, which
+  is what was actually blocking the invoice-number test, not the
+  prompt. Fixed by encoding the debug string with errors='replace'
+  before printing. Zero effect on extraction logic — purely a logging
+  crash.
+
+Why:
+  Same root cause named in the OCR error two commits ago
+  (SLP2026-01/004): Malaysian SME documents mix labeled fields with
+  positional noise (company names containing prefixes that look like
+  ID fragments, multiple "total" lines with only one being the real
+  payable amount, inconsistent Doc No./PO No./GRN No. labeling across
+  document types from the same vendor). Untuned prompts fell back to
+  positional/substring guessing when a label wasn't recognized —
+  exactly how "PO3005713" became "lymer" (grabbed from "Polymer" in
+  the vendor name once the real PO No. field wasn't matched).
+
+  Verified: ran the complete real pipeline — actual Google Vision OCR
+  against the three real PDFs (Starlax invoice/PO/GRN from Downloads,
+  not hand-typed approximations), through the real extract_fields/
+  extract_po_fields/extract_gr_fields regex-then-Gemini-fallback
+  pipeline exactly as production runs it — twice, after two
+  intermediate blockers (the dead-model quota wall, then the OCR
+  print crash) were found and fixed in between. Final clean run, all
+  four checks passing against real extracted values:
+    PASS  Invoice Number   expected='SLP2026-01/004'  actual='SLP2026-01/004'
+    PASS  PO Number        expected='PO3005713'       actual='PO3005713'
+    PASS  PO Total Amount  expected=82850.0           actual=82850.0
+    PASS  GR Number        expected='PD6011652'       actual='PD6011652'
+  The PO Number pass includes a visible log line proving the exact
+  reported bug is fixed: "DEBUG Gemini overrode PO.po_number: 'lymer'
+  -> 'PO3005713'". One transient 503 from Gemini mid-testing (unrelated
+  to quota or prompt content — 3/3 immediate retries against the same
+  model succeeded) was retried and passed; not a code issue.
+
+Setup/config needed:
+  Local .env's GEMINI_API_KEY was replaced with a new key provided
+  this session (the old key had identical limit:0 behavior on
+  gemini-2.0-flash — same root cause, not a bad key). .env is
+  gitignored and this change does NOT ship with this commit.
+  1. Update GEMINI_API_KEY in Render's environment variables dashboard
+     to the new key (Render doesn't read .env — it needs updating
+     there directly, or this will still fail in production even
+     though it's fixed here).
+  2. Redeploy the Render backend for the updated prompts, the
+     gemini-2.0-flash -> gemini-2.5-flash model fix, and the OCR print
+     fix.
+  3. FOLLOW-UP NEEDED (not done here, out of scope for this task):
+     helpers/anomaly_detector.py and helpers/authenticity_check.py
+     both still hardcode gemini-2.0-flash and will hit the same dead
+     free-tier wall the next time anomaly detection or an authenticity
+     check runs. Worth a quick follow-up to swap both to
+     gemini-2.5-flash, same one-line fix as this one.

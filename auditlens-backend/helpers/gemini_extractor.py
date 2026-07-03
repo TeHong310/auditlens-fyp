@@ -3,20 +3,44 @@ import re
 import requests
 from config import Config
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 GEMINI_TIMEOUT = 15
 
+DOCUMENT_QUALITY_NOTE = """These documents may be:
+- Scanned (CamScanner watermark visible)
+- Handwritten annotations mixed with typed text
+- Low quality with OCR errors like 'O'/'0', 'I'/'1', 'S'/'5' confusion
+
+Guidelines:
+- If OCR text seems garbled, still attempt extraction using context
+- Return null (not empty string, not '-', not 'N/A') for truly missing fields
+- Do NOT invent or guess values from unrelated text
+- Prefer LABELED values over positional guessing
+- For amounts, always return numeric (float), never string with commas"""
+
 INVOICE_PROMPT = """You are an expert at extracting structured data from Malaysian SME business documents.
+""" + DOCUMENT_QUALITY_NOTE + """
+
 Below is OCR-extracted text from an INVOICE document. Extract the fields listed.
 
 IMPORTANT RULES:
 - The VENDOR is the entity ISSUING the invoice (the seller), typically shown as the company name in the document header at the top
 - The BUYER is who the invoice is billed TO ("Bill To", "Invoice To"), which is NOT the vendor
-- INVOICE NUMBER: look in these locations, in order:
-  1. A field labeled "No.", "No :", "Invoice No.", or "Invoice #"
-  2. The top right corner near the "Invoice" title
-  3. Formats vary and may include slashes or hyphens, e.g. INV-2025-1234, SLP2026-01/004, IN12345
-  Return the FULL string exactly as printed, including slashes and hyphens. Do NOT return a partial or truncated number.
+- INVOICE NUMBER: Look for the invoice number in these labels (case-insensitive), in priority order:
+  1. "No.", "No :", "No. :", "No:", "Invoice No.", "Invoice No", "Invoice #", "Invoice Number", "Bill No.", "Doc No."
+  2. If the label is followed by ":" or wide whitespace, the value is what comes after
+  3. Value may contain letters, digits, slashes "/", hyphens "-", dots "."
+  4. Return the FULL value including all slashes and special chars
+  5. Common Malaysian SME formats:
+     - INV-YYYY-NNNN (e.g. INV-2025-1004)
+     - AAA-YYYY-NN/NNN (e.g. SLP2026-01/004)
+     - Plain numeric (e.g. 12345)
+  6. Do NOT return partial values. If you see "SLP2026-01/004", return the whole thing.
+  7. Do NOT confuse invoice number with:
+     - PO Number / PO No. / Purchase Order No.
+     - Debtor Code / Customer Code
+     - Contact Person / Person In Charge
+     - Page number (e.g. "Page 1 of 1")
 - Return null for any field you cannot confidently extract
 - Amounts must be numbers only (no currency symbols, no commas, no "RM")
 - Dates in ISO format: YYYY-MM-DD
@@ -37,11 +61,40 @@ Return this exact JSON structure:
 }}"""
 
 PO_PROMPT = """You are an expert at extracting structured data from Malaysian SME business documents.
+""" + DOCUMENT_QUALITY_NOTE + """
+
 Below is OCR-extracted text from a PURCHASE ORDER (PO) document. Extract the fields listed.
 
 IMPORTANT RULES:
 - The VENDOR is the SUPPLIER the PO is issued TO (look for labels like "Bill To Vendor", "Vendor:", "Supplier:", "To:")
 - The company shown in the header of a PO is usually the BUYER issuing the order, NOT the vendor
+- CRITICAL: PO Number rules:
+  1. PO Number is found in a LABELED field, never inferred from other text.
+  2. Look for these exact labels: "Doc No.", "PO No.", "P.O. No.", "Purchase Order No.", "Order No.", "PO Number", "Reference No."
+  3. The value must be adjacent to (right of or below) the label.
+  4. Do NOT extract any substring from:
+     - Company names (e.g. "Polymer", "Solutions", "Industries")
+     - Product descriptions
+     - Address fields
+  5. Common Malaysian SME PO number formats:
+     - PONNNNNNN (e.g. PO3005713)
+     - PO-YYYY-NNNN
+     - Numeric-only (e.g. 3005713)
+  6. If no clearly labeled PO number field exists, return null. Do NOT guess or extract from unrelated text.
+  7. Length is typically 6-12 characters. Reject candidates shorter than 5.
+- Total Amount priority (return the FIRST match found):
+  1. "Total Payable Incl. Tax (RM)" — highest priority (this is the final amount)
+  2. "Grand Total"
+  3. "Total (RM)"
+  4. "Amount Payable"
+  5. "Net Total"
+  6. "Total Excl. Tax (RM)" — use only if no tax-inclusive total exists
+  Value format:
+  - May contain commas: "82,850.00" -> return as number 82850.00
+  - May have "RM" or "MYR" prefix — strip it
+  - Reject values that appear in item-line "Sub Total" columns
+  - Reject "Discount" amounts (they're not the total)
+  If the document has both "Total Excl. Tax" and "Total Payable Incl. Tax", ALWAYS return "Total Payable Incl. Tax".
 - Return null for any field you cannot confidently extract
 - Amounts must be numbers only (no currency symbols, no commas, no "RM")
 - Dates in ISO format: YYYY-MM-DD
@@ -61,11 +114,25 @@ Return this exact JSON structure:
 }}"""
 
 GR_PROMPT = """You are an expert at extracting structured data from Malaysian SME business documents.
+""" + DOCUMENT_QUALITY_NOTE + """
+
 Below is OCR-extracted text from a GOODS RECEIPT (GR) document. Extract the fields listed.
 
 IMPORTANT RULES:
 - The VENDOR is who DELIVERED the goods (look for "Received From", "Delivered by", "Supplier")
 - The company shown in the header is usually the RECEIVING company (the buyer's warehouse), NOT the vendor
+- GR Number labels (priority order):
+  1. "Doc No." (most common on Malaysian GRN)
+  2. "GRN No.", "GR No.", "Goods Receipt No."
+  3. "Receipt No.", "Ref No."
+  Common formats:
+  - PDNNNNNNN (e.g. PD6011652)
+  - GRN-YYYY-NNNN
+  - Numeric-only
+  Do NOT confuse with:
+  - PO Number (usually labeled "From Doc No." or "PO Ref")
+  - Supplier Ref No. (that's the supplier's invoice reference)
+  - Item Code / Part Number
 - Return null for any field you cannot confidently extract
 - Amounts must be numbers only (no currency symbols, no commas, no "RM")
 - Dates in ISO format: YYYY-MM-DD
