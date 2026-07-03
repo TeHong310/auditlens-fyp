@@ -1139,3 +1139,91 @@ Why:
 Setup/config needed:
   None — no new dependencies, no schema change.
   1. Redeploy the Render backend to pick up the fix.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-03
+What was changed:
+  Fix: amount anomaly detector now uses recent-50 baseline instead of
+  90-day window (was silently skipping vendors with no invoices in
+  last 90 days).
+
+  helpers/anomaly_detector.py, detect_amount_anomaly(): replaced the
+  `invoice_date >= today - 90 days` SQL filter with "most recent 50
+  invoices for this vendor" selected in Python after the existing
+  fuzzy vendor-name match. AMOUNT_HISTORY_WINDOW_DAYS (90) removed;
+  replaced with AMOUNT_HISTORY_SAMPLE_LIMIT (50). The len(history) < 3
+  floor, the mean+2*std / 3x-mean threshold, and the severity bands
+  are all untouched, as instructed. round/weekend/duplicate detectors
+  untouched.
+
+  DEVIATED FROM THE GIVEN SQL, FLAGGING WHY: the requested query was
+  `... ORDER BY ef.invoice_date DESC LIMIT 50` with no vendor filter
+  in the SQL itself (vendor matching happens via the existing
+  _normalize_vendor() fuzzy match in Python, e.g. to treat "Solaris
+  Electronics Sdn Bhd" and "SOLARIS ELECTRONICS SDN. BHD." as the same
+  vendor — not something a plain SQL WHERE can do). Applied literally,
+  that LIMIT 50 would run BEFORE the Python-side vendor filter, taking
+  the 50 most recent invoices system-wide, not the 50 most recent for
+  the vendor being checked. If 50+ other vendors' invoices are more
+  recent than this vendor's own history, its rows get silently pushed
+  out of the window entirely — the exact same class of bug this fix
+  is fixing (an empty baseline for a vendor that actually has enough
+  history), just triggered by invoice volume instead of invoice age.
+  Fixed by fetching broadly (excluding only 'returned'/null-amount/
+  null-date/the current invoice, no LIMIT at the SQL level), filtering
+  to the matched vendor in Python, sorting by invoice_date descending,
+  then slicing to the 50 most recent — so the cap applies per-vendor,
+  not globally.
+
+  Also updated the amount-anomaly Gemini-fallback explanation text,
+  which said "{X}-day average" — no longer accurate now that there's
+  no calendar window — to "average of RM {mean} (based on the last
+  {sample_size} invoices)" instead. AMOUNT_HISTORY_WINDOW_DAYS was
+  still referenced there, so it wasn't dead — it wasn't blanket-
+  deleted, it was replaced along with the text that used it.
+
+  NOTE (file path in the report vs. actual repo): the report referenced
+  services/anomaly_detection.py; the actual file — confirmed via the
+  IDE selection attached to the request — is
+  helpers/anomaly_detector.py. No such services/ directory exists in
+  this backend. Edited the real file; flagging the mismatch in case it
+  points to a stale local checkout on your end.
+
+Why:
+  Confirmed independently before changing anything: today's system
+  date is 2026-07-03, so any invoice dated in 2025 (as this app's demo
+  data is) is unconditionally more than 90 days old and was being
+  excluded from every vendor's baseline — regardless of how much
+  genuine history that vendor had. That silently starved the amount
+  detector exactly as reported. A recency-by-count baseline (last 50
+  invoices, whenever they're dated) fixes this and is a defensible
+  choice for a detector whose whole job is comparing a new invoice
+  against "what this vendor normally invoices," but it's worth naming
+  the trade-off: a long-idle vendor's baseline can now be built from
+  invoices that are calendar-old, so if pricing genuinely shifts over
+  a long gap, the baseline won't reflect that yet. Given this app's
+  current scale (FYP/demo data spanning a limited date range), that's
+  an acceptable trade for no longer silently skipping detection.
+
+  Verified against document_id=10 could not be done directly — that
+  document doesn't exist in the local dev DB this session has access
+  to (checked; also no SOLARIS ELECTRONICS rows at all locally), so
+  this was almost certainly tested against Render's data, which isn't
+  reachable from here. Instead, reproduced the exact reported failure
+  mode locally: seeded 3 invoices for a SOLARIS-ELECTRONICS-style
+  vendor dated in Jan/Feb/Mar 2025 (deliberately >90 days old to mirror
+  the actual demo data's age), plus 5 other-vendor invoices dated
+  today (to prove the per-vendor LIMIT fix doesn't let other vendors'
+  more-recent invoices crowd this vendor out), then ran the detector
+  against a new RM 24,750 invoice for that vendor. Confirmed:
+  sample_size=3 (all 3 of the 2025-dated invoices, correctly included
+  despite their age), the 5 other-vendor rows did not leak into the
+  baseline mean, severity=HIGH, and "DEBUG Threshold check: EXCEEDED"
+  printed. Re-ran the earlier full 4-detector regression test
+  afterward to confirm round/weekend/duplicate are unaffected. All
+  synthetic test data deleted afterward — confirmed zero residue.
+
+Setup/config needed:
+  None — no new dependencies, no schema change.
+  1. Redeploy the Render backend to pick up the fix.

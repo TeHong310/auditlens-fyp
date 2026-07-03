@@ -10,7 +10,7 @@ from config import Config
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 GEMINI_TIMEOUT = 15
 
-AMOUNT_HISTORY_WINDOW_DAYS = 90
+AMOUNT_HISTORY_SAMPLE_LIMIT = 50
 DUPLICATE_DATE_WINDOW_DAYS = 7
 DUPLICATE_AMOUNT_TOLERANCE_PCT = 5
 
@@ -64,25 +64,26 @@ def detect_amount_anomaly(invoice_document_id, vendor_name, amount):
     if not normalized or amount is None:
         return None
 
-    cutoff = date.today() - timedelta(days=AMOUNT_HISTORY_WINDOW_DAYS)
-
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cursor.execute(
-        '''SELECT ef.vendor_name, ef.total_amount
+        '''SELECT ef.vendor_name, ef.total_amount, ef.invoice_date
            FROM extracted_fields ef
            JOIN documents d ON ef.document_id = d.document_id
            WHERE d.status != 'returned' AND ef.document_id != %s
-             AND ef.invoice_date >= %s AND ef.total_amount IS NOT NULL''',
-        (invoice_document_id, cutoff)
+             AND ef.total_amount IS NOT NULL AND ef.invoice_date IS NOT NULL''',
+        (invoice_document_id,)
     )
     rows = cursor.fetchall()
     conn.close()
 
-    history = [
-        float(r['total_amount']) for r in rows
-        if _normalize_vendor(r['vendor_name']) == normalized
-    ]
+    # Most recent AMOUNT_HISTORY_SAMPLE_LIMIT invoices for THIS vendor,
+    # not the N most recent system-wide — the LIMIT has to apply after
+    # the vendor filter, or a busy period for other vendors could push
+    # this vendor's own history out of the window entirely.
+    vendor_rows = [r for r in rows if _normalize_vendor(r['vendor_name']) == normalized]
+    vendor_rows.sort(key=lambda r: r['invoice_date'], reverse=True)
+    history = [float(r['total_amount']) for r in vendor_rows[:AMOUNT_HISTORY_SAMPLE_LIMIT]]
 
     print(f"DEBUG Amount detector for vendor={vendor_name}")
     print(f"DEBUG Historical sample size: {len(history)}")
@@ -220,8 +221,8 @@ def _fallback_explanation(anomaly_type, pattern):
         return {
             'explanation': (
                 f"Invoice amount RM {pattern.get('current')} is well above this vendor's "
-                f"{AMOUNT_HISTORY_WINDOW_DAYS}-day average of RM {pattern.get('mean')} "
-                f"(based on {pattern.get('sample_size')} prior invoices), "
+                f"average of RM {pattern.get('mean')} "
+                f"(based on the last {pattern.get('sample_size')} invoices), "
                 f"a deviation of {pattern.get('deviation_pct')}%."
             ),
             'recommendation': 'Verify this amount with the vendor before approving.'
