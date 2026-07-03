@@ -1287,3 +1287,89 @@ Setup/config needed:
      Render production DB to backfill the specific document already
      diagnosed this session, and against any other pre-existing
      documents you want detection retroactively applied to.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-03
+What was changed:
+  chore(admin): add temp endpoint for backfilling anomaly detection
+  (FYP debug)
+
+  New route in the existing routes/admin.py / admin_bp:
+  POST /admin/rerun-anomaly/<doc_id>[?token=<ADMIN_TOKEN>]. Deletes
+  any existing anomalies for that invoice_document_id, calls the
+  existing run_anomaly_detection() unchanged with its stdout captured
+  via io.StringIO + contextlib.redirect_stdout, and returns
+  {doc_id, deleted_count, created_anomaly_ids, debug_log}. Same
+  delete-then-redetect logic as scripts/backfill_anomaly_detection.py,
+  exposed over HTTP because Render's free tier has no Shell to run
+  that script from. New Config.ADMIN_TOKEN (env var, matching the
+  existing Config pattern for GEMINI_API_KEY etc.) gates it — if set,
+  the request must pass a matching ?token= query param or gets 403; if
+  NOT set, the route is open to anyone who finds the URL (a deliberate
+  dev fallback per this task's own spec) and a WARNING line is printed
+  to the logs on every unauthenticated hit so it's visible either way.
+  No @jwt_required() on this route, unlike every other route in this
+  file — intentional, so it can be hit from a browser/Postman without
+  first extracting a JWT. Tagged with a TODO to remove it after the
+  FYP demo. No detector logic touched, as instructed.
+
+  PATH DIFFERS FROM WHAT WAS REQUESTED: asked for POST /api/admin/
+  rerun-anomaly/<id> in a possibly-new routes/admin.py. Neither the
+  /api prefix nor a from-scratch admin.py exist — no route anywhere in
+  this backend uses an /api prefix, and routes/admin.py plus admin_bp
+  already existed, already registered at url_prefix='/admin' in
+  app.py. Added to the existing file/blueprint instead of introducing
+  an inconsistent new prefix or a second admin blueprint; the real URL
+  is /admin/rerun-anomaly/<doc_id>, not /api/admin/rerun-anomaly/<id>.
+
+  SELF-INFLICTED BUG CAUGHT BEFORE COMMIT: the first version of this
+  edit landed in the middle of get_statistics()'s existing try block,
+  displacing its except clause to after the new function and leaving
+  it with no matching try — a SyntaxError caught immediately by
+  py_compile. Fixed by restoring the original except in place and
+  removing the resulting duplicate. Also added an outer try/except
+  around the whole new route body (matching every other route in this
+  file) after a local test showed a DB-connection failure ahead of the
+  run_anomaly_detection() call would otherwise escape as a raw Flask
+  500 with no JSON body, unlike the rest of this file's error handling.
+
+Why:
+  scripts/backfill_anomaly_detection.py (added last session) needs a
+  Shell to invoke, which Render's free tier doesn't provide — this is
+  the same operation reachable over HTTP instead, specifically to
+  unblock backfilling document_id=10 (and confirming or ruling out the
+  remaining hypothesis from this session's diagnosis: whether the
+  detector itself is broken on Render, or whether — as the local code
+  audit this session concluded, having found no defect in any of the
+  four hypothesized failure branches — it's simply never been invoked
+  for that document at all).
+
+  Verified locally end-to-end via the real Flask test client (not
+  just py_compile): seeded a synthetic reproduction of the doc_id=10
+  scenario (6 SOLARIS-style historical invoices + one RM 24,750
+  invoice), then called the route with no ADMIN_TOKEN set — confirmed
+  200, deleted_count=0, one amount/high anomaly created, and
+  debug_log contained the real "DEBUG Historical sample size: 6" /
+  "DEBUG Threshold check: EXCEEDED" lines (including a live Gemini 429
+  mid-request, correctly falling back without breaking the response).
+  Separately verified the token guard in a fresh subprocess with
+  ADMIN_TOKEN set in the environment (matching how it actually differs
+  in real deployment, where the token is set before the process
+  starts): no token and a wrong token both -> 403, correct token ->
+  200. Re-ran the DELETE-then-recreate path a second time to confirm
+  it doesn't duplicate rows (deleted_count correctly reflects the
+  prior run's row). All synthetic test data cleaned up afterward —
+  confirmed zero residue.
+
+Setup/config needed:
+  Set ADMIN_TOKEN on Render BEFORE relying on this endpoint — without
+  it the route is open to anyone who finds the URL. This is a public
+  Render URL, not localhost.
+  1. Redeploy the Render backend.
+  2. Trigger via POST https://<render-url>/admin/rerun-anomaly/10
+     (add ?token=<ADMIN_TOKEN> once that env var is set on Render) —
+     note the path is /admin/..., not /api/admin/... as originally
+     asked for.
+  3. Remove this endpoint after the FYP demo (see the TODO comment in
+     routes/admin.py).

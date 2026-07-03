@@ -33,3 +33,6 @@ class Config:
         for origin in os.environ.get('FRONTEND_ORIGINS', 'http://localhost:4200').split(',')
         if origin.strip()
     ]
+
+    # Temp diagnostic-endpoint guard (see routes/admin.py rerun-anomaly route)
+    ADMIN_TOKEN = os.environ.get('ADMIN_TOKEN')

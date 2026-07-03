@@ -1,9 +1,13 @@
+import io
+import contextlib
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 import psycopg2.extras
 import bcrypt
 from db import get_db_connection, get_user_by_id
 from helpers.audit_log import log_audit
+from helpers.anomaly_detector import run_anomaly_detection
+from config import Config
 
 admin_bp = Blueprint('admin', __name__)
 
@@ -453,6 +457,66 @@ def get_statistics():
             'matching':   dict(match_stats),
             'exceptions': dict(exception_stats)
         }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# TEMP DIAGNOSTIC: RE-RUN ANOMALY DETECTION FOR ONE DOCUMENT
+# POST /admin/rerun-anomaly/<doc_id>?token=<ADMIN_TOKEN>
+#
+# TODO: Remove this endpoint after FYP demo. It exists only because
+# Render's free tier has no Shell, so scripts/backfill_anomaly_
+# detection.py can't be run there directly — this exposes the same
+# delete-then-redetect logic over HTTP so it can be triggered from a
+# browser/Postman instead.
+#
+# No @jwt_required() here on purpose (unlike every other route in this
+# file) — it's meant to be hit without first extracting/pasting a JWT.
+# Guarded by a single shared-secret query param instead. If ADMIN_TOKEN
+# isn't set in the environment, the guard is skipped entirely and the
+# route is open to anyone who finds the URL — deliberately, as a dev
+# fallback, but that means this MUST have ADMIN_TOKEN set before this
+# is deployed anywhere public. A hit with no token configured is logged
+# as a warning so it's visible in Render's logs either way.
+# ------------------------------------------------------------
+@admin_bp.route('/rerun-anomaly/<int:doc_id>', methods=['POST'])
+def rerun_anomaly_detection(doc_id):
+    if Config.ADMIN_TOKEN:
+        if request.args.get('token') != Config.ADMIN_TOKEN:
+            return jsonify({'error': 'Invalid or missing token'}), 403
+    else:
+        print('WARNING: /admin/rerun-anomaly hit with no ADMIN_TOKEN set - endpoint is unauthenticated')
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM anomalies WHERE invoice_document_id = %s', (doc_id,))
+        deleted_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        log_buffer = io.StringIO()
+        created_ids = []
+        detection_error = None
+        try:
+            with contextlib.redirect_stdout(log_buffer):
+                created_ids = run_anomaly_detection(doc_id)
+        except Exception as e:
+            detection_error = f'{type(e).__name__}: {e}'
+
+        response = {
+            'doc_id': doc_id,
+            'deleted_count': deleted_count,
+            'created_anomaly_ids': created_ids,
+            'debug_log': log_buffer.getvalue()
+        }
+        if detection_error:
+            response['error'] = detection_error
+            return jsonify(response), 500
+
+        return jsonify(response), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
