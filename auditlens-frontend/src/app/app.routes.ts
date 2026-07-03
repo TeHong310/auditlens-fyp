@@ -14,6 +14,7 @@ import { AuditorReportComponent } from './auditor/report/auditor-report.componen
 import { AuditorRecordDetailComponent } from './auditor/record-detail/auditor-record-detail.component';
 import { AuditorExceptionsComponent } from './auditor/exceptions/auditor-exceptions.component';
 import { AuditorAnomaliesComponent } from './auditor/anomalies/auditor-anomalies.component';
+import { AuditorAuthenticityComponent } from './auditor/authenticity/auditor-authenticity.component';
 export const routes: Routes = [
   { path: '', redirectTo: 'login', pathMatch: 'full' },
   { path: 'login', component: LoginComponent },
@@ -39,6 +40,7 @@ export const routes: Routes = [
       { path: 'record-detail', component: AuditorRecordDetailComponent },  // ← 新加
       { path: 'exceptions', component: AuditorExceptionsComponent },     // ← 新加
       { path: 'anomalies', component: AuditorAnomaliesComponent },
+      { path: 'authenticity', component: AuditorAuthenticityComponent },
       { path: 'report', component: AuditorReportComponent },
       { path: '', redirectTo: 'home', pathMatch: 'full' }
     ]

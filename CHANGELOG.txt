@@ -1396,3 +1396,147 @@ Why:
 Setup/config needed:
   None — no backend changes, no new dependencies.
   1. Redeploy the Render frontend to pick up the label fix.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-04
+What was changed:
+  feat(layer-6): add Authenticity Lens with 3-signal badge detection
+
+  Layer 6 Authenticity Lens — Gemini Vision detects 3 signals (company
+  chop, logo, name) per document. New page /auditor/authenticity with
+  badge-based UI. Runs in parallel with anomaly detection during
+  upload. Advisory only, does not affect document status or approval
+  flow.
+
+  DB: new `authenticity_checks` table (check_id, document_id FK ->
+  documents ON DELETE CASCADE, has_company_chop/logo/name booleans,
+  ai_notes, created_at, UNIQUE(document_id)) + idx_authenticity_
+  document_id, exactly as specified. Migration file added at
+  migrations/2026-07-04_create_authenticity_checks_table.sql, but —
+  same lesson as the anomalies table two sessions ago, where a
+  manual-migration instruction led directly to a "relation does not
+  exist" production bug — also added _ensure_authenticity_checks_table()
+  to app.py, called at startup right alongside the existing
+  _ensure_anomalies_table(), so Render self-heals on next deploy
+  without a manual SQL step. Verified locally by dropping the table
+  and confirming a fresh app.py import recreates it with the exact
+  schema (confirmed via information_schema: all 3 booleans NOT NULL
+  DEFAULT FALSE, ai_notes/created_at nullable, UNIQUE(document_id) +
+  FK + both indexes all present).
+
+  Backend — helpers/authenticity_check.py (new; task said services/,
+  this repo has no services/ directory and uses helpers/ for every
+  other Gemini-backed detector — gemini_extractor.py, anomaly_detector.py
+  — so this went there too, matching the established convention):
+  _call_gemini_vision() sends the raw file bytes (base64, inline_data)
+  to Gemini 2.0 Flash with the given strict-detection prompt;
+  run_authenticity_check() upserts the result and never raises (a
+  bare try/except around the whole function, matching the spec's own
+  "NEVER raises — pipeline safe" requirement). Two small adaptations
+  to the given code, not blind copies:
+    - mime type detection: the given snippet hardcoded 'image/jpeg'
+      for every non-PDF file, but this app's Config.ALLOWED_EXTENSIONS
+      includes 'png' too — a PNG sent with the wrong declared mime
+      type risks degraded or failed vision results. Added a proper
+      _mime_type() covering pdf/png/jpg/jpeg (verified against all 4).
+    - JSON parsing: added the same _strip_markdown_fences() defensive
+      step already used in gemini_extractor.py and anomaly_detector.py
+      before json.loads(), even though responseMimeType=application/json
+      should avoid fences — matches this codebase's own established
+      defensive pattern rather than a bare parse that would crash on
+      any deviation.
+
+  Wired into routes/documents.py's upload_document(), right after the
+  existing run_anomaly_detection() call, using the same file_path
+  local variable already in scope there (confirmed it's the persisted
+  on-disk path, never deleted mid-request) — its own independent
+  try/except, exactly as specified, so a Gemini Vision failure can
+  never block the anomaly detector or the upload response.
+
+  Backend — routes/authenticity.py (new), registered in app.py:
+  GET /authenticity/<document_id> (404 if none exists) and
+  GET /authenticity (all checks, LEFT JOINed with extracted_fields for
+  invoice_number/vendor_name, ordered by created_at DESC) — both
+  gated to the auditor role, matching every other auditor-facing route
+  in this app (routes/anomalies.py, routes/auditor.py).
+
+  Frontend — new auditor-authenticity component (.ts/.html/.css),
+  styled to match auditor-anomalies.component (same card container,
+  spacing, shadow, filter-chip pattern): header with live count,
+  All/Complete/Incomplete filter chips (client-side, since "complete"
+  is just a boolean AND of the 3 signal fields — no backend filtering
+  needed for data this small), one card per document with the 3
+  badges (green #d1fae5/#065f46 when true, red #fee2e2/#991b1b when
+  false, exactly the colors specified), an AI Notes box, and a View
+  Document button. Sidebar icon is an inline SVG shield in the same
+  hand-drawn line-art stroke style as every other sidebar icon
+  (including the anomaly-detection "spark" icon added last feature) —
+  not the 🛡️ emoji as asked, for the same reason the anomaly icon
+  wasn't an emoji either: it wouldn't match the existing nav's visual
+  style.
+
+  TWO DEVIATIONS FROM THE GIVEN SPEC, BOTH FLAGGED:
+    - File location: helpers/authenticity_check.py, not
+      services/authenticity_check.py (no services/ dir exists here).
+    - Frontend route: /auditor/authenticity, not the bare /authenticity
+      asked for. Every other auditor page (exceptions, anomalies,
+      report, record-detail) is a child route nested under
+      AuditorLayoutComponent, which is what actually renders the
+      sidebar and applies consistent routing. A top-level /authenticity
+      route would render with no sidebar at all, breaking the page out
+      of the rest of the auditor section entirely.
+
+Why:
+  Layer 6 of the 6-layer AI pipeline: a fast visual sanity check
+  (does this look like a real business document — company name, logo,
+  an actual chop/stamp) that's independent of the OCR/matching/anomaly
+  layers, surfaced as plain badges rather than a score so it can't be
+  mistaken for a pass/fail gate. Explicitly advisory — nothing in this
+  change touches document status, approval flow, or any other
+  detector's logic, exactly as constrained.
+
+  Verified: applied and inspected the migration locally (schema
+  confirmed exactly as specified via information_schema, all
+  constraints/indexes present); confirmed the auto-create-on-startup
+  path recreates the table correctly on a fresh boot after a manual
+  DROP, mirroring the anomalies-table precedent. Ran the real upload-
+  time file_path against a live Gemini Vision call — hit the Gemini
+  free tier's daily request quota (already exhausted from this
+  session's earlier testing across the anomaly detector and admin
+  endpoint; confirmed via the API's own error body:
+  "GenerateRequestsPerDayPerProjectPerModel-FreeTier", limit 0), which
+  did NOT reset even after several minutes of unrelated work in
+  between — so a genuine live Gemini Vision success could not be
+  exercised this session. That failure path itself was fully verified,
+  though: confirmed run_authenticity_check() returns None cleanly with
+  no exception and no DB row on a real 429, twice, satisfying the
+  "skip silently, never block upload" requirement for real. To still
+  verify everything downstream of the network call for real, mocked
+  ONLY _call_gemini_vision's return value (not the DB layer, not the
+  routes) and ran the actual run_authenticity_check() against a real
+  local PDF path end-to-end: confirmed the INSERT, confirmed a second
+  call with a different mocked result correctly UPDATEs the same row
+  in place (UNIQUE(document_id) + ON CONFLICT, not a duplicate),
+  confirmed GET /authenticity/<id> and GET /authenticity both return
+  the exact documented shape against that real row (including the
+  LEFT JOIN's invoice_number/vendor_name), and confirmed 404 for a
+  document with no check. All synthetic test data deleted afterward —
+  confirmed zero residue. `ng build --configuration=production` passes
+  clean (768.61 kB initial, under budget).
+
+  KNOWN GAP: the actual Gemini Vision round-trip against a real
+  document — does it correctly identify a real chop/logo/company name
+  in practice — has not been exercised live this session, only its
+  failure and fallback paths. Worth a real end-to-end upload test once
+  the daily quota resets.
+
+Setup/config needed:
+  None — no new dependencies, GEMINI_API_KEY already in use.
+  1. Redeploy the Render backend for the new table, the /authenticity
+     endpoints, and the upload-flow hook.
+  2. Redeploy the Render frontend for the new Authenticity page.
+  3. Once the Gemini daily quota resets, upload a real invoice and
+     confirm a real (non-mocked) authenticity check appears correctly
+     on /auditor/authenticity — this is the one thing not verified
+     live this session.

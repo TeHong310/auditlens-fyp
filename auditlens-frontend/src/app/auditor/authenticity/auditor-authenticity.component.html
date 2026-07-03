@@ -1,0 +1,74 @@
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <h1 class="page-title">🛡️ Authenticity Lens</h1>
+    <p class="page-subtitle">AI-powered visual signal detection • {{ checks.length }} documents checked</p>
+  </div>
+
+  <!-- Filter -->
+  <div class="filter-row">
+    <button class="filter-chip" [class.active]="activeFilter === 'all'" (click)="setFilter('all')">
+      All <span class="chip-count">{{ checks.length }}</span>
+    </button>
+    <button class="filter-chip" [class.active]="activeFilter === 'complete'" (click)="setFilter('complete')">
+      Complete <span class="chip-count">{{ completeCount }}</span>
+    </button>
+    <button class="filter-chip" [class.active]="activeFilter === 'incomplete'" (click)="setFilter('incomplete')">
+      Incomplete <span class="chip-count">{{ incompleteCount }}</span>
+    </button>
+  </div>
+
+  <div class="error-box" *ngIf="errorMessage">✗ {{ errorMessage }}</div>
+
+  <!-- Loading skeleton -->
+  <div class="skeleton-wrap" *ngIf="isLoading">
+    <div class="skeleton-card" *ngFor="let i of [1,2]"></div>
+  </div>
+
+  <!-- Empty state -->
+  <div class="empty-state" *ngIf="!isLoading && !errorMessage && filteredChecks.length === 0">
+    <p class="empty-icon">🛡️</p>
+    <p class="empty-text">No authenticity checks to show.</p>
+  </div>
+
+  <!-- Cards -->
+  <div class="check-list" *ngIf="!isLoading">
+    <div class="check-card" *ngFor="let c of filteredChecks">
+
+      <div class="card-top">
+        <span class="card-icon">🛡️</span>
+        <span class="card-invoice-no">{{ c.invoice_number || 'Unknown Invoice' }}</span>
+        <span class="card-time">{{ relativeTime(c.created_at) }}</span>
+      </div>
+
+      <p class="card-vendor">Vendor: {{ c.vendor_name || 'Unknown vendor' }}</p>
+
+      <div class="signals-box">
+        <p class="section-label">Signals Detected:</p>
+        <div class="badge-row">
+          <span class="badge" [ngClass]="c.has_company_chop ? 'badge-yes' : 'badge-no'">
+            {{ c.has_company_chop ? '✓' : '✗' }} Company Chop
+          </span>
+          <span class="badge" [ngClass]="c.has_company_logo ? 'badge-yes' : 'badge-no'">
+            {{ c.has_company_logo ? '✓' : '✗' }} Company Logo
+          </span>
+          <span class="badge" [ngClass]="c.has_company_name ? 'badge-yes' : 'badge-no'">
+            {{ c.has_company_name ? '✓' : '✗' }} Company Name
+          </span>
+        </div>
+      </div>
+
+      <div class="ai-box" *ngIf="c.ai_notes">
+        <p class="section-label">🤖 AI Notes</p>
+        <p class="ai-text">"{{ c.ai_notes }}"</p>
+      </div>
+
+      <div class="card-actions">
+        <button class="btn-view" (click)="viewDocument(c)">View Document →</button>
+      </div>
+
+    </div>
+  </div>
+
+</div>

@@ -8,6 +8,7 @@ from db import get_db_connection, get_user_by_id
 from helpers.audit_log import log_audit
 from helpers.ocr_helper import run_ocr, extract_fields, extract_po_fields, extract_gr_fields, calculate_confidence, parse_date
 from helpers.anomaly_detector import run_anomaly_detection
+from helpers.authenticity_check import run_authenticity_check
 from config import Config
 
 documents_bp = Blueprint('documents', __name__)
@@ -102,6 +103,11 @@ def upload_document():
             run_anomaly_detection(document_id)
         except Exception as e:
             print(f"DEBUG anomaly detection error: {type(e).__name__}: {e}")
+
+        try:
+            run_authenticity_check(document_id, file_path)
+        except Exception as e:
+            print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
 
         log_audit(user['user_id'], 'UPLOAD_DOCUMENT', 'documents', document_id,
                   f'Document uploaded and OCR processed: {safe_name}')

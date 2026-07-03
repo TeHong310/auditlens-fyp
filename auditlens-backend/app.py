@@ -11,6 +11,7 @@ from routes.admin import admin_bp
 from routes.ocr_review import ocr_review_bp
 from routes.auditor import auditor_bp
 from routes.anomalies import anomalies_bp
+from routes.authenticity import authenticity_bp
 
 
 def _ensure_anomalies_table():
@@ -46,6 +47,34 @@ def _ensure_anomalies_table():
         print(f'WARNING: could not ensure anomalies table exists: {type(e).__name__}: {e}')
 
 
+def _ensure_authenticity_checks_table():
+    """Same auto-create-on-startup pattern as _ensure_anomalies_table()
+    above, for the same reason: no migration runner exists in this repo,
+    so Render never gets a .sql file run against it unless startup does
+    it itself."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS authenticity_checks (
+                check_id SERIAL PRIMARY KEY,
+                document_id INTEGER NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+                has_company_chop BOOLEAN NOT NULL DEFAULT FALSE,
+                has_company_logo BOOLEAN NOT NULL DEFAULT FALSE,
+                has_company_name BOOLEAN NOT NULL DEFAULT FALSE,
+                ai_notes TEXT,
+                created_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(document_id)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_authenticity_document_id ON authenticity_checks(document_id)')
+        conn.commit()
+        conn.close()
+        print('Authenticity checks table ready')
+    except Exception as e:
+        print(f'WARNING: could not ensure authenticity_checks table exists: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -62,8 +91,10 @@ app.register_blueprint(admin_bp,     url_prefix='/admin')
 app.register_blueprint(ocr_review_bp, url_prefix='/ocr-review')
 app.register_blueprint(auditor_bp,    url_prefix='/auditor')
 app.register_blueprint(anomalies_bp,  url_prefix='/anomalies')
+app.register_blueprint(authenticity_bp, url_prefix='/authenticity')
 
 _ensure_anomalies_table()
+_ensure_authenticity_checks_table()
 
 @app.route('/')
 def hello_world():
