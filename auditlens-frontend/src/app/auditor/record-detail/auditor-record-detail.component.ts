@@ -19,6 +19,7 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
 
   documentId: number | null = null;
   comparison: any = null;
+  authenticity: any = null;
   isLoading: boolean = false;
   isSubmitting: boolean = false;
   successMessage: string = '';
@@ -49,6 +50,7 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
       if (params['document_id']) {
         this.documentId = parseInt(params['document_id']);
         this.loadComparison();
+        this.loadAuthenticity();
       }
     });
   }
@@ -82,6 +84,61 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       }
     });
+  }
+
+  // ── Authenticity warning banner ─────────────────────────
+  // Advisory only (Layer 6 soft gate) — informational, never blocks
+  // the review flow below. A 404 (no check run / not yet detected)
+  // is expected and silent, not an error.
+
+  loadAuthenticity() {
+    if (!this.documentId) return;
+    this.http.get<any>(`${this.apiUrl}/authenticity/${this.documentId}`, {
+      headers: this.getHeaders()
+    }).subscribe({
+      next: (res) => {
+        this.authenticity = res;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.authenticity = null;
+      }
+    });
+  }
+
+  get showAuthenticityWarning(): boolean {
+    return this.authenticity?.authenticity_status === 'warning';
+  }
+
+  authenticityWarningReason(): string {
+    if (!this.authenticity) return '';
+    const missing: string[] = [];
+    if (!this.authenticity.has_company_name) missing.push('company name');
+    if (!this.authenticity.has_company_chop && !this.authenticity.has_signature) {
+      missing.push('signature and company chop');
+    }
+    const docLabel = this.authenticity.document_type === 'invoice' ? 'Invoice'
+      : this.authenticity.document_type === 'po' ? 'PO' : 'GR';
+    if (missing.length === 0) return `Authenticity signals below expected threshold on ${docLabel}.`;
+    return `Missing ${missing.join(' and ')} on ${docLabel}.`;
+  }
+
+  authenticitySourceIcon(): string {
+    const source = this.authenticity?.upload_source;
+    if (source === 'phone_photo') return '📱';
+    if (source === 'scanned') return '🖨️';
+    if (source === 'digital_native') return '💻';
+    if (source === 'webcam') return '📷';
+    return '❓';
+  }
+
+  authenticitySourceLabel(): string {
+    const source = this.authenticity?.upload_source;
+    if (source === 'phone_photo') return 'Phone Photo';
+    if (source === 'scanned') return 'Scanned';
+    if (source === 'digital_native') return 'Digital Native';
+    if (source === 'webcam') return 'Webcam';
+    return 'Unknown';
   }
 
   // ── Audit decision actions ──────────────────────────────

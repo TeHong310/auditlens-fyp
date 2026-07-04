@@ -30,6 +30,17 @@
 
   <ng-container *ngIf="!isLoading && comparison">
 
+    <!-- Authenticity Warning Banner (Layer 6, advisory only) -->
+    <div class="authenticity-warning-banner" *ngIf="showAuthenticityWarning">
+      <span class="banner-icon">⚠️</span>
+      <div class="banner-text">
+        <p class="banner-title">Authenticity Warning</p>
+        <p class="banner-subtitle">{{ authenticityWarningReason() }}</p>
+        <p class="banner-subtitle">Auditor may proceed with review but should verify with vendor.</p>
+        <p class="banner-meta">Upload source: {{ authenticitySourceIcon() }} {{ authenticitySourceLabel() }}</p>
+      </div>
+    </div>
+
     <!-- Overall Status Banner -->
     <div class="status-banner" [ngClass]="getBannerClass()">
       <span class="banner-icon">{{ getBannerIcon() }}</span>

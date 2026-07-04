@@ -262,6 +262,36 @@
   cursor: pointer;
 }
 
+.authenticity-cell { position: relative; }
+
+.auth-pill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.auth-passed  { background: #ECFDF5; color: #10B981; }
+.auth-warning { background: #FFFBEB; color: #F59E0B; cursor: pointer; }
+.auth-none    { background: transparent; color: #9CA3AF; }
+
+.auth-tooltip {
+  position: absolute;
+  z-index: 10;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: #1F2937;
+  color: white;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
 .btn-open:hover { background: #357ABD; }
 
 .loading-row, .empty-row {

@@ -4,7 +4,7 @@ import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 
-type Filter = 'all' | 'complete' | 'incomplete';
+type Filter = 'all' | 'passed' | 'warning';
 
 @Component({
   selector: 'app-auditor-authenticity',
@@ -58,28 +58,58 @@ export class AuditorAuthenticityComponent implements OnInit {
     this.activeFilter = f;
   }
 
-  isComplete(check: any): boolean {
-    return !!(check.has_company_chop && check.has_company_logo && check.has_company_name);
-  }
-
   get filteredChecks() {
-    if (this.activeFilter === 'complete') return this.checks.filter(c => this.isComplete(c));
-    if (this.activeFilter === 'incomplete') return this.checks.filter(c => !this.isComplete(c));
+    if (this.activeFilter === 'passed') return this.checks.filter(c => c.authenticity_status === 'passed');
+    if (this.activeFilter === 'warning') return this.checks.filter(c => c.authenticity_status === 'warning');
     return this.checks;
   }
 
-  get completeCount(): number {
-    return this.checks.filter(c => this.isComplete(c)).length;
+  get passedCount(): number {
+    return this.checks.filter(c => c.authenticity_status === 'passed').length;
   }
 
-  get incompleteCount(): number {
-    return this.checks.length - this.completeCount;
+  get warningCount(): number {
+    return this.checks.filter(c => c.authenticity_status === 'warning').length;
   }
 
   viewDocument(check: any) {
     this.router.navigate(['/auditor/record-detail'], {
       queryParams: { document_id: check.document_id }
     });
+  }
+
+  docTypeLabel(type: string): string {
+    if (type === 'invoice') return 'Invoice';
+    if (type === 'po') return 'PO';
+    if (type === 'gr') return 'GR';
+    return type || 'Unknown';
+  }
+
+  uploadSourceIcon(source: string): string {
+    if (source === 'phone_photo') return '📱';
+    if (source === 'scanned') return '🖨️';
+    if (source === 'digital_native') return '💻';
+    if (source === 'webcam') return '📷';
+    return '❓';
+  }
+
+  uploadSourceLabel(source: string): string {
+    if (source === 'phone_photo') return 'Phone Photo';
+    if (source === 'scanned') return 'Scanned';
+    if (source === 'digital_native') return 'Digital Native';
+    if (source === 'webcam') return 'Webcam';
+    return 'Unknown';
+  }
+
+  warningReason(check: any): string {
+    const type = (check.document_type || '').toLowerCase();
+    const missing: string[] = [];
+    if (!check.has_company_name) missing.push('company name');
+    if (type === 'invoice' && !check.has_company_chop && !check.has_signature) {
+      missing.push('chop/signature');
+    }
+    if (missing.length === 0) return '';
+    return `Missing ${missing.join(' and ')} (required for ${this.docTypeLabel(check.document_type)})`;
   }
 
   relativeTime(dateStr: string): string {

@@ -105,7 +105,7 @@ def upload_document():
             print(f"DEBUG anomaly detection error: {type(e).__name__}: {e}")
 
         try:
-            run_authenticity_check(document_id, file_path)
+            run_authenticity_check(document_id, file_path, 'invoice')
         except Exception as e:
             print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
 
@@ -187,6 +187,11 @@ def upload_purchase_order(document_id):
         conn.commit()
         conn.close()
 
+        try:
+            run_authenticity_check(document_id, file_path, 'po')
+        except Exception as e:
+            print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
+
         log_audit(user['user_id'], 'UPLOAD_PO', 'purchase_orders', po_id,
                   f'PO uploaded for document {document_id}: {safe_name}')
 
@@ -262,6 +267,11 @@ def upload_goods_receipt(document_id):
         gr_id = cursor.fetchone()[0]
         conn.commit()
         conn.close()
+
+        try:
+            run_authenticity_check(document_id, file_path, 'gr')
+        except Exception as e:
+            print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
 
         log_audit(user['user_id'], 'UPLOAD_GR', 'goods_receipts', gr_id,
                   f'GR uploaded for document {document_id}: {safe_name}')

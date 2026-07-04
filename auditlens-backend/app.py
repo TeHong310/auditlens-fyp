@@ -75,6 +75,45 @@ def _ensure_authenticity_checks_table():
         print(f'WARNING: could not ensure authenticity_checks table exists: {type(e).__name__}: {e}')
 
 
+def _ensure_authenticity_v2_columns():
+    """Layer 6 v2 (soft-gate rules + upload source): adds the new columns
+    to whatever authenticity_checks table _ensure_authenticity_checks_table()
+    just ensured exists, and widens the UNIQUE constraint from
+    (document_id) to (document_id, document_type) so an invoice/PO/GR check
+    on the same parent document_id can coexist instead of colliding. Safe
+    to run on every boot: every step is idempotent (IF NOT EXISTS / guarded
+    by a pg_constraint lookup)."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            ALTER TABLE authenticity_checks
+              ADD COLUMN IF NOT EXISTS has_signature BOOLEAN NOT NULL DEFAULT FALSE,
+              ADD COLUMN IF NOT EXISTS document_type VARCHAR(20),
+              ADD COLUMN IF NOT EXISTS upload_source VARCHAR(30),
+              ADD COLUMN IF NOT EXISTS authenticity_status VARCHAR(20) NOT NULL DEFAULT 'passed'
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_authenticity_status ON authenticity_checks(authenticity_status)')
+        cursor.execute('''
+            SELECT 1 FROM pg_constraint WHERE conname = 'authenticity_checks_document_id_key'
+        ''')
+        if cursor.fetchone():
+            cursor.execute('ALTER TABLE authenticity_checks DROP CONSTRAINT authenticity_checks_document_id_key')
+        cursor.execute('''
+            SELECT 1 FROM pg_constraint WHERE conname = 'authenticity_checks_document_id_doctype_key'
+        ''')
+        if not cursor.fetchone():
+            cursor.execute('''
+                ALTER TABLE authenticity_checks
+                ADD CONSTRAINT authenticity_checks_document_id_doctype_key UNIQUE (document_id, document_type)
+            ''')
+        conn.commit()
+        conn.close()
+        print('Authenticity checks v2 columns ready')
+    except Exception as e:
+        print(f'WARNING: could not migrate authenticity_checks to v2: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -95,6 +134,7 @@ app.register_blueprint(authenticity_bp, url_prefix='/authenticity')
 
 _ensure_anomalies_table()
 _ensure_authenticity_checks_table()
+_ensure_authenticity_v2_columns()
 
 @app.route('/')
 def hello_world():

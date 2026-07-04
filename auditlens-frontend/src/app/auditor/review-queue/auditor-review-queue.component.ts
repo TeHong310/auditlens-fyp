@@ -26,6 +26,8 @@ export class AuditorReviewQueueComponent implements OnInit {
   lowOCR: number = 0;
   missingDocs: number = 0;
 
+  openTooltipDocId: number | null = null;
+
   private apiUrl = environment.apiUrl;
 
   constructor(
@@ -151,4 +153,16 @@ export class AuditorReviewQueueComponent implements OnInit {
   parseFloat(val: any): number {
   return parseFloat(val);
 }
+
+  toggleAuthenticityTooltip(doc: any) {
+    this.openTooltipDocId = this.openTooltipDocId === doc.document_id ? null : doc.document_id;
+  }
+
+  authenticityWarningReason(doc: any): string {
+    const missing: string[] = [];
+    if (!doc.has_company_name) missing.push('company name');
+    if (!doc.has_company_chop && !doc.has_signature) missing.push('signature and chop');
+    if (missing.length === 0) return 'Authenticity signals below expected threshold.';
+    return 'Missing ' + missing.join(' and ') + '.';
+  }
 }

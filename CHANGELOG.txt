@@ -1693,3 +1693,151 @@ Setup/config needed:
      free-tier wall the next time anomaly detection or an authenticity
      check runs. Worth a quick follow-up to swap both to
      gemini-2.5-flash, same one-line fix as this one.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-05
+What was changed:
+  feat(layer-6): soft-gate authenticity with per-doc-type rules and
+  upload source
+
+  Authenticity Lens v2 — soft-gate verification with per-document-type
+  rules (Invoice needs company_name + chop/signature; PO/GR need
+  company_name). Detects upload source (phone_photo / scanned /
+  digital_native / webcam) in same Gemini call. Warning badges surface
+  in Review Queue and Record Detail. No hard blocking — auditor
+  retains full review authority.
+
+  DB: authenticity_checks gained has_signature, document_type,
+  upload_source, authenticity_status (DEFAULT 'passed') + idx_
+  authenticity_status, applied via ALTER TABLE ... ADD COLUMN IF NOT
+  EXISTS (idempotent) and added to app.py's startup auto-migration
+  chain (_ensure_authenticity_v2_columns), same pattern as the
+  anomalies table and the original authenticity_checks table — Render
+  never needs a manual .sql run.
+
+  helpers/authenticity_check.py: AUTHENTICITY_PROMPT now asks Gemini
+  for has_signature and upload_source in the same call (no extra API
+  cost, as specified). New _compute_authenticity_status(document_type,
+  signals): invoice needs name AND (chop OR signature); po/gr/grn need
+  name only; any other/unknown document_type always passes (soft-gate
+  default). run_authenticity_check() signature gained a required
+  document_type arg. Also switched GEMINI_URL from gemini-2.0-flash to
+  gemini-2.5-flash in this file too — in scope this time since the
+  file was being substantially rewritten anyway (flagged, not silently
+  fixed, in the previous session as a file this task's constraints
+  didn't cover).
+
+  SCHEMA DEVIATION FROM WHAT WAS GIVEN, FLAGGED AND APPROVED BEFORE
+  IMPLEMENTING: the original authenticity_checks had UNIQUE(document_id)
+  — one row per parent document. But PO/GR uploads don't create their
+  own row in `documents`; they attach to the invoice's existing
+  document_id (their own data lives in purchase_orders/goods_receipts,
+  linked back to that same document_id). Since this feature needs an
+  independent invoice check, PO check, and GR check to all exist for
+  one document_id, the literal UNIQUE(document_id) would have let a
+  PO or GR check silently overwrite the invoice's own check via
+  ON CONFLICT. Widened to UNIQUE(document_id, document_type) instead
+  (DROP the old constraint, ADD the new one, both guarded by
+  pg_constraint existence checks so it's safe to run on every boot).
+  Confirmed with the user before implementing.
+
+  Wired new run_authenticity_check() calls into upload_purchase_order()
+  and upload_goods_receipt() in routes/documents.py (previously only
+  the invoice upload endpoint called it at all) — required for the
+  PO/GR gating rules to ever actually run against anything.
+
+  routes/authenticity.py: GET /authenticity/<document_id> now accepts
+  ?document_type=invoice|po|gr (defaults to 'invoice', since that's
+  what every existing caller — the Record Detail banner — actually
+  wants; a document_id can now have up to 3 checks, so a plain
+  document_id lookup is no longer enough to identify one row).
+  GET /authenticity gained ?status=passed|warning filtering and now
+  LEFT JOINs to extracted_fields/purchase_orders/goods_receipts
+  (whichever matches the row's document_type) for a single generic
+  document_number + vendor_name field, instead of an invoice-only
+  invoice_number field — the given example response was invoice-only
+  and didn't address what a PO/GR row's reference-number field should
+  be called.
+
+  routes/matching.py's GET /matching/queue (the actual endpoint the
+  Review Queue frontend calls — there's also an unused, unrelated
+  get_review_queue() in routes/reviews.py that nothing calls, left
+  untouched) now LEFT JOINs authenticity_checks filtered to
+  document_type='invoice' and exposes authenticity_status plus the
+  raw has_company_name/has_company_chop/has_signature signals (needed
+  so the frontend tooltip can compute a real "missing X and Y" reason
+  instead of a generic message).
+
+  Frontend:
+    - auditor-authenticity.component: filter chips changed from
+      All/Complete/Incomplete to All/🟢 Passed/⚠️ Warning. Cards gained
+      a green/yellow left border by status, a Document Type + Upload
+      Source meta row, a 4th signal badge (Signature), and a yellow
+      warning box with the computed reason when status is 'warning'.
+    - auditor-review-queue: new "Authenticity" column between GR and
+      Action — 🟢 OK / ⚠️ Warning (click toggles a small tooltip with
+      the missing-signal reason) / — (dash) if no check exists yet.
+    - auditor-record-detail: new yellow warning banner ABOVE the
+      existing overall-status banner, shown only when the invoice's
+      authenticity_status is 'warning' (never shown when 'passed', as
+      specified). Fetches GET /authenticity/<document_id> (default
+      document_type=invoice) — NOTE: the task said GET /auditor/
+      authenticity/<document_id>, but the actual registered blueprint
+      is at /authenticity (no /auditor prefix), matching every other
+      reference to this endpoint already in the codebase. Used the
+      real path.
+
+Why:
+  The original Authenticity Lens (last session) was purely informational
+  — three badges, no judgment. This version gives auditors an
+  actionable-but-non-blocking signal: which records look like they're
+  missing something a real physical document of that type should have,
+  without ever taking the decision out of the auditor's hands (no
+  status change, no override button, no gating of the approve/return
+  flow — exactly as constrained).
+
+  Verified: 12 unit-test assertions for _compute_authenticity_status
+  covering every doc-type branch (invoice pass/fail on both chop-only
+  and signature-only paths, po/gr/grn pass/fail, unknown/None/empty
+  doc_type always passing, case-insensitivity). Attempted a live
+  end-to-end Gemini Vision test against the real Starlax invoice/PO/
+  GRN PDFs — blocked by a NEW failure mode this session: not the
+  dead-model quota wall from before, but "Your prepayment credits are
+  depleted" (RESOURCE_EXHAUSTED) on the actual paid plan, from this
+  session's own testing volume. Did not keep retrying against a
+  depleted account. Instead mocked only the Gemini network call
+  (_call_gemini_vision) with realistic per-document-type responses
+  matching what these actual documents look like, and ran everything
+  downstream for real: run_authenticity_check() correctly computed
+  passed/passed/warning for invoice/po/gr respectively (the GR case
+  deliberately mocked with no company_name to prove the warning path
+  triggers), all 3 rows coexist under one document_id via the new
+  composite constraint, GET /authenticity/<id>?document_type=X returned
+  the correct row and default for each, GET /authenticity?status=
+  warning/passed correctly filtered, and GET /matching/queue exposed
+  authenticity_status for the review queue badge. All synthetic test
+  data (documents + extracted_fields + purchase_orders + goods_receipts
+  + authenticity_checks) cleaned up afterward — confirmed zero
+  residue. `ng build --configuration=production` passes clean
+  (774.69 kB initial, under budget).
+
+  KNOWN GAP: the actual Gemini Vision round-trip — does it correctly
+  detect a real signature vs. chop vs. upload source in practice — has
+  not been exercised live this session, only via the mocked-network
+  path above. Needs a real test once credits are topped up.
+
+Setup/config needed:
+  Add credits to the Google AI Studio project (https://ai.studio/projects)
+  — the "prepayment credits are depleted" error is a real billing wall,
+  not a code issue.
+  1. Redeploy the Render backend for the new columns/constraint
+     (auto-migrated on startup), the new PO/GR call sites, the updated
+     /authenticity and /matching/queue endpoints.
+  2. Redeploy the Render frontend for the updated Authenticity page,
+     Review Queue badge, and Record Detail banner.
+  3. Once credits are topped up, upload a real invoice/PO/GR and
+     confirm a real (non-mocked) authenticity check with correct
+     document_type/upload_source/authenticity_status appears in all
+     3 UI surfaces (Authenticity page, Review Queue badge, Record
+     Detail banner if it warrants a warning).

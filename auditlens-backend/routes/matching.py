@@ -478,7 +478,9 @@ def get_review_queue():
                       ef.invoice_number, ef.vendor_name, ef.total_amount,
                       ef.invoice_date, ef.ocr_confidence,
                       CASE WHEN po.po_id IS NOT NULL THEN true ELSE false END as has_po,
-                      CASE WHEN gr.gr_id IS NOT NULL THEN true ELSE false END as has_gr
+                      CASE WHEN gr.gr_id IS NOT NULL THEN true ELSE false END as has_gr,
+                      ac.authenticity_status, ac.has_company_name,
+                      ac.has_company_chop, ac.has_signature
                FROM documents d
                LEFT JOIN extracted_fields ef ON d.document_id = ef.document_id
                LEFT JOIN (
@@ -487,6 +489,7 @@ def get_review_queue():
                LEFT JOIN (
                    SELECT DISTINCT ON (document_id) * FROM goods_receipts ORDER BY document_id, uploaded_at DESC
                ) gr ON d.document_id = gr.document_id
+               LEFT JOIN authenticity_checks ac ON d.document_id = ac.document_id AND ac.document_type = 'invoice'
                WHERE d.status IN ('under_review', 'resubmitted')
                ORDER BY d.uploaded_at DESC'''
         )

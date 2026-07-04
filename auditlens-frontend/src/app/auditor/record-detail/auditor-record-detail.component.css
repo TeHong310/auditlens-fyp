@@ -56,6 +56,19 @@
   line-height: 1.2;
 }
 
+/* Authenticity Warning Banner (Layer 6, advisory only) */
+.authenticity-warning-banner {
+  border-radius: 12px;
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  border-left: 4px solid #f59e0b;
+  background: #fef3c7;
+  color: #92400e;
+}
+
 /* Overall Status Banner */
 .status-banner {
   border-radius: 12px;

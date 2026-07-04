@@ -108,15 +108,16 @@
             <th>Priority</th>
             <th>PO</th>
             <th>GR</th>
+            <th>Authenticity</th>
             <th>Action</th>
           </tr>
         </thead>
         <tbody>
           <tr *ngIf="isLoading">
-            <td colspan="9" class="loading-row">Loading...</td>
+            <td colspan="10" class="loading-row">Loading...</td>
           </tr>
           <tr *ngIf="!isLoading && filteredDocuments.length === 0">
-            <td colspan="9" class="empty-row">No documents found</td>
+            <td colspan="10" class="empty-row">No documents found</td>
           </tr>
           <tr *ngFor="let doc of filteredDocuments">
             <td class="inv-id">{{ doc.invoice_number || '-' }}</td>
@@ -146,6 +147,15 @@
               <span [style.color]="doc.has_gr ? '#10B981' : '#EF4444'">
                 {{ doc.has_gr ? '✓' : '✗' }}
               </span>
+            </td>
+            <td class="authenticity-cell">
+              <span *ngIf="doc.authenticity_status === 'passed'" class="auth-pill auth-passed">🟢 OK</span>
+              <span *ngIf="doc.authenticity_status === 'warning'" class="auth-pill auth-warning"
+                    (click)="toggleAuthenticityTooltip(doc)">⚠️ Warning</span>
+              <span *ngIf="!doc.authenticity_status" class="auth-pill auth-none">—</span>
+              <div class="auth-tooltip" *ngIf="openTooltipDocId === doc.document_id">
+                {{ authenticityWarningReason(doc) }}
+              </div>
             </td>
             <td>
               <button class="btn-open" (click)="openRecord(doc)">Open</button>

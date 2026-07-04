@@ -5,26 +5,43 @@ import requests
 from config import Config
 from db import get_db_connection
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 GEMINI_TIMEOUT = 20
 
-AUTHENTICITY_PROMPT = """You are analyzing a business document from a Malaysian SME (invoice, purchase order, or goods received note).
+AUTHENTICITY_PROMPT = """You are analyzing a business document from a Malaysian SME.
 
-Detect these 3 visual authenticity signals. Be strict — only mark true if clearly visible.
+Detect the following signals AND identify how this document was captured/uploaded.
 
 Return ONLY JSON, no markdown fences:
 {
   "has_company_chop": <bool>,
   "has_company_logo": <bool>,
   "has_company_name": <bool>,
-  "notes": "<one short sentence describing what you see>"
+  "has_signature": <bool>,
+  "upload_source": "phone_photo" | "scanned" | "digital_native" | "webcam",
+  "notes": "<one short sentence>"
 }
 
-Definitions:
-- has_company_chop: A round, square, or oval colored stamp/seal with company name or department label (e.g. "IQC PASSED", "RECEIVED", company chop). NOT just a printed logo.
-- has_company_logo: A distinct visual/graphic company logo (an image, icon, or stylized mark). NOT just text.
-- has_company_name: The company's full registered name printed clearly (usually in header). Typed text counts.
-"""
+Signal definitions:
+- has_company_chop: Round/square colored physical stamp (e.g. "IQC PASSED",
+  "RECEIVED", company chop with red/blue ink). NOT a printed logo.
+- has_company_logo: Distinct graphic/visual company logo (icon, stylized mark).
+  NOT just text.
+- has_company_name: Company's registered name printed clearly, usually in header.
+  Typed text counts.
+- has_signature: Handwritten signature (cursive strokes, ink pen marks).
+  NOT a typed name or printed name.
+
+Upload source definitions:
+- phone_photo: Handheld phone photo — visible perspective distortion, uneven
+  lighting, shadows, possibly angled or slightly blurred edges
+- scanned: Uniform lighting, straight edges, may have CamScanner/scanner
+  watermark visible, cleaner than phone photo
+- digital_native: Perfectly clean text and lines, no image compression
+  artifacts, appears to be direct PDF export from software (SAP, Word, etc.)
+- webcam: Low resolution, front-lit, static composition
+
+Be strict — only mark signal true if clearly visible."""
 
 
 def _mime_type(file_path):
@@ -78,9 +95,35 @@ def _call_gemini_vision(file_path):
         return None
 
 
-def run_authenticity_check(document_id, file_path):
+def _compute_authenticity_status(document_type, signals):
+    """
+    Returns 'passed' or 'warning' based on document type rules.
+
+    Invoice: needs company_name AND (chop OR signature)
+    PO/GR:   needs company_name only
+    Unknown doc type: always passes (soft gate, defensive default)
+    """
+    has_name = signals.get('has_company_name', False)
+    has_chop = signals.get('has_company_chop', False)
+    has_sig = signals.get('has_signature', False)
+
+    doc_type = (document_type or '').lower()
+
+    if doc_type == 'invoice':
+        passed = has_name and (has_chop or has_sig)
+    elif doc_type in ('po', 'gr', 'grn'):
+        passed = has_name
+    else:
+        # Unknown doc type — default to passing (soft gate)
+        passed = True
+
+    return 'passed' if passed else 'warning'
+
+
+def run_authenticity_check(document_id, file_path, document_type):
     """
     Main entry. NEVER raises — pipeline safe.
+    document_type: 'invoice' | 'po' | 'gr' (from upload endpoint, required)
     Returns check_id on success, None on failure.
     """
     try:
@@ -91,26 +134,37 @@ def run_authenticity_check(document_id, file_path):
         chop = bool(result.get('has_company_chop', False))
         logo = bool(result.get('has_company_logo', False))
         name = bool(result.get('has_company_name', False))
+        sig = bool(result.get('has_signature', False))
+        upload_source = result.get('upload_source')
         notes = result.get('notes', '')
+
+        status = _compute_authenticity_status(document_type, result)
 
         conn = get_db_connection()
         cursor = conn.cursor()
         try:
             cursor.execute('''
                 INSERT INTO authenticity_checks
-                (document_id, has_company_chop, has_company_logo, has_company_name, ai_notes)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (document_id) DO UPDATE SET
+                (document_id, has_company_chop, has_company_logo, has_company_name,
+                 has_signature, document_type, upload_source, authenticity_status, ai_notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (document_id, document_type) DO UPDATE SET
                     has_company_chop = EXCLUDED.has_company_chop,
                     has_company_logo = EXCLUDED.has_company_logo,
                     has_company_name = EXCLUDED.has_company_name,
+                    has_signature = EXCLUDED.has_signature,
+                    upload_source = EXCLUDED.upload_source,
+                    authenticity_status = EXCLUDED.authenticity_status,
                     ai_notes = EXCLUDED.ai_notes,
                     created_at = NOW()
                 RETURNING check_id
-            ''', (document_id, chop, logo, name, notes))
+            ''', (document_id, chop, logo, name, sig,
+                  document_type, upload_source, status, notes))
             check_id = cursor.fetchone()[0]
             conn.commit()
-            print(f"DEBUG Authenticity: doc={document_id} chop={chop} logo={logo} name={name}")
+            print(f"DEBUG Authenticity: doc={document_id} type={document_type} "
+                  f"chop={chop} sig={sig} logo={logo} name={name} "
+                  f"source={upload_source} status={status}")
             return check_id
         finally:
             conn.close()
