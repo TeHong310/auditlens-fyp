@@ -12,6 +12,7 @@ import { Router, RouterModule, RouterOutlet } from '@angular/router';
 export class FinanceLayoutComponent implements OnInit {
   user: any = {};
   showUserMenu: boolean = false;
+  isSidebarOpen = false;
 
   navItems = [
     { label: 'Finance Home', icon: 'home', route: '/finance/home' },
@@ -34,6 +35,14 @@ export class FinanceLayoutComponent implements OnInit {
 
   toggleUserMenu() {
     this.showUserMenu = !this.showUserMenu;
+  }
+
+  toggleSidebar() {
+    this.isSidebarOpen = !this.isSidebarOpen;
+  }
+
+  closeSidebar() {
+    this.isSidebarOpen = false;
   }
 
   logout() {

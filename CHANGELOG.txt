@@ -1841,3 +1841,167 @@ Setup/config needed:
      document_type/upload_source/authenticity_status appears in all
      3 UI surfaces (Authenticity page, Review Queue badge, Record
      Detail banner if it warrants a warning).
+
+----------------------------------------------------------------------
+
+Date: 2026-07-04
+What was changed:
+  feat(mobile): responsive layout with hamburger sidebar and phone
+  camera upload
+
+  Mobile responsive layout — collapsible sidebar with hamburger toggle
+  at <768px, cards/tables/badges adapted for narrow viewports. Upload
+  inputs enable native camera capture on phone browsers via
+  capture="environment". Backend pipeline confirmed to accept JPG/PNG
+  in addition to PDF.
+
+  Layout components: found only 2 layout components exist in this app
+  — auditor-layout and finance-layout (no admin-layout; there's no
+  standalone admin UI page in this app). Added isSidebarOpen/
+  toggleSidebar()/closeSidebar() to both, a hamburger button + overlay
+  + [class.open] binding + (click)="closeSidebar()" on every nav link
+  in both templates, and the given hamburger/overlay/sidebar-slide
+  CSS block to both stylesheets, unchanged from what was specified.
+
+  Global mobile styles (src/styles.css): before pasting the given
+  generic selector list in as-is, audited it against this app's actual
+  class names, since several didn't match anything real:
+    - .authenticity-card doesn't exist (real name: .check-card)
+    - .exception-card doesn't exist (real name: .exception-row)
+    - .kpi-row/.metric-row/.kpi-card don't exist (real names:
+      .stats-row/.stats-grid/.stat-card, and these are CSS Grid with
+      repeat(4-5, 1fr), not flex — flex-direction:column would have
+      been a silent no-op; needed grid-template-columns:1fr instead)
+    - .chart-container doesn't exist (real name: .chart-wrap)
+    - .modal/.dialog don't exist (real names: .modal-backdrop/
+      .modal-box, in auditor-record-detail's PDF quick-view)
+    - .field-comparison-table doesn't exist (real name:
+      .comparison-table-wrap)
+    - .upload-form/.upload-container/.upload-zone don't exist (real
+      name: .dropzone, in finance-upload)
+    Added the real class names alongside the given generic ones
+    (harmless dead weight, kept for parity with what was asked) so the
+    CSS actually does something. Deliberately did NOT force explicit
+    width/height onto .modal-body (the PDF iframe wrapper) — it's a
+    flex child that already sizes itself correctly via flex:1 inside
+    .modal-box, and forcing raw vw/vh values there would fight that
+    layout and risk clipping the iframe against .modal-box's
+    overflow:hidden.
+
+  CRITICAL BUG FOUND AND FIXED, not in the original request: even with
+  the correct class names, a live computed-style check in a real
+  browser at 375px showed .stats-row's grid-template-columns silently
+  staying at repeat(4,1fr) — the global override wasn't applying at
+  all. Root cause: Angular's emulated ViewEncapsulation adds a
+  per-component attribute selector (e.g. .stats-row[_ngcontent-xxx])
+  to every component-scoped style, which beats a plain global class
+  selector on specificity regardless of media-query nesting or
+  stylesheet source order. Added !important to every property in the
+  global mobile block that overrides an existing component-level base
+  value (documented inline in styles.css); properties with nothing to
+  override were left plain. Re-verified via computed style afterward:
+  .stats-row and .middle-row both correctly show a single column value
+  at 375px and their original multi-column values, unchanged, at 1280px.
+
+  SIX MORE REAL LAYOUT GAPS FOUND VIA LIVE BROWSER TESTING (not in the
+  original request, found because a real screenshot at 375px showed
+  actual clipped/overlapping content, not because they were guessed):
+    - auditor-dashboard's .middle-row (Risk Overview / Priority Review
+      Queue, grid-template-columns: 1fr 1fr) — confirmed visually
+      clipped on a real screenshot before the fix.
+    - .content-row (record-detail, ocr-review, finance-upload — three
+      different pages sharing this exact class for a 2-column layout,
+      none had their own mobile handling).
+    - .supporting-grid (finance-upload's PO/GR upload cards, 1fr 1fr).
+    - .charts-row (finance-report 1fr 1fr 1fr, finance-home 2fr 1fr 1fr).
+    - .header (used identically across 11 page components, no wrap) —
+      without wrapping, the search bar / action buttons on the right
+      visually overlapped a title that wraps to 2 lines on a narrow
+      screen; observed live on the Upload Document page.
+    - .header-right + .search-bar (used across 5 page components,
+      fixed 240px width) — after .header wraps, the still-fixed-width
+      search bar overflowed the viewport on its own; observed live,
+      fixed by letting it flex/shrink instead of holding 240px.
+    Deliberately did NOT touch auditor-report.component.css's
+    .stats-grid or register.component.css's .form-row — both already
+    have their own working @media breakpoints (900px/640px and 900px
+    respectively) that already cover 768px; a global override would
+    have been redundant at best and could have conflicted with their
+    specific breakpoint values at best.
+
+  Upload (finance-upload.component): all 3 file inputs (main dropzone,
+  PO attach, GR attach) updated to
+  accept=".pdf,.jpg,.jpeg,.png,image/*" capture="environment". Client-
+  side validation in handleFiles() already permitted pdf/jpg/jpeg/png —
+  no change needed there. Added real image thumbnail rendering for the
+  Upload Queue Status table (previously every row showed the same
+  generic document icon regardless of file type): generates an object
+  URL per queued image file, rendered via a new .doc-thumbnail <img>
+  in place of the generic .doc-icon SVG, with proper revocation in
+  ngOnDestroy/clearQueue/clearDoneItems to avoid leaking blob URLs
+  during a long session.
+
+  Backend: verified, zero code changes needed. Config.ALLOWED_EXTENSIONS
+  already included jpg/jpeg/png. helpers/gemini_extractor.py doesn't
+  need mime-type detection at all — it's text-only (operates on OCR-
+  extracted text, never sends image bytes to Gemini); the mime-type
+  logic the task described actually belongs to helpers/
+  authenticity_check.py, which already had a correct _mime_type()
+  function from an earlier session. helpers/ocr_helper.py's run_ocr()
+  already branches correctly for non-PDF files straight to
+  run_google_vision_ocr(file_path) with no conversion needed — Google
+  Vision accepts JPEG/PNG natively, confirmed by reading the actual
+  branch, not just trusting the task's claim.
+
+Why:
+  On a phone browser, the sidebar took over roughly half the screen
+  and the remaining content was squeezed into an unusably narrow
+  column — auditors and finance staff couldn't review records or
+  upload from a phone camera at all. This makes the app usable at
+  phone width without changing anything about the desktop experience.
+
+  Verified: this was tested in an actual running browser, not just
+  build/typecheck. Started the real Angular dev server and the real
+  Flask backend, generated real JWTs for an auditor and a finance test
+  user (bypassing the login form the same way route-level tests did
+  earlier this session), and drove headless Chromium via Playwright
+  (bootstrapped fresh — chromium-cli wasn't available in this
+  environment) to:
+    - Confirm desktop (1280px): sidebar fully visible, no hamburger,
+      .stats-row/.middle-row computed styles unchanged (4 and 2
+      columns respectively) — screenshotted.
+    - Confirm mobile (375px): hamburger visible, sidebar hidden;
+      tapping the hamburger sets the .open class and shows the dark
+      overlay; tapping the overlay removes .open — all confirmed via
+      DOM state, not just visual inspection. Screenshotted before and
+      after every fix, including the .middle-row clipping bug and its
+      resolution.
+    - Confirm the finance-upload page's 3 file inputs carry the
+      correct accept/capture attributes via getAttribute().
+    - Confirm zero console errors across every page tested.
+    - Confirm .header's flex-wrap is nowrap on desktop (1280px) and
+      wrap on mobile, and that the search-bar/header-right fix doesn't
+      affect desktop.
+  All temporary test infrastructure (Playwright + Chromium download,
+  local dev server, local Flask backend) was stopped and verified down
+  (curl to both ports fails) before finishing. No test data was
+  written to any database — all requests were GETs against already-
+  running pages with a synthetic JWT, no uploads were actually
+  submitted during this verification.
+  `ng build --configuration=production` passes clean (779.85 kB
+  initial, under budget).
+
+  KNOWN GAP: real phone-camera capture ("Take Photo" appearing when
+  tapping the file input) can only be verified on an actual phone, not
+  in headless Chromium or desktop DevTools — the capture="environment"
+  attribute is present and correct, but the actual OS-level camera
+  picker behavior is unverified this session.
+
+Setup/config needed:
+  None — no new dependencies (Playwright was used only for this
+  session's local testing, not added to package.json).
+  1. Redeploy the Render frontend for the mobile-responsive layout.
+  2. Test on an actual phone: tap the file input on the Upload
+     Document page and confirm a native "Take Photo" option appears
+     alongside "Choose File" / "Photo Library" — this is the one thing
+     not verifiable from this environment.

@@ -1,6 +1,10 @@
 <div class="layout-wrapper">
 
-  <div class="sidebar">
+  <button class="hamburger" (click)="toggleSidebar()" aria-label="Menu">☰</button>
+
+  <div class="sidebar-overlay" *ngIf="isSidebarOpen" (click)="closeSidebar()"></div>
+
+  <div class="sidebar" [class.open]="isSidebarOpen">
     <div class="sidebar-top">
       <div class="sidebar-logo">
         <img src="logo.png" alt="AuditLens" class="sidebar-logo-img"/>
@@ -10,7 +14,8 @@
         <a *ngFor="let item of navItems"
            [routerLink]="item.route"
            class="nav-item"
-           [class.active]="isActive(item.route)">
+           [class.active]="isActive(item.route)"
+           (click)="closeSidebar()">
 
           <!-- Home icon -->
           <svg *ngIf="item.icon === 'home'" width="18" height="18" viewBox="0 0 18 18" fill="none">

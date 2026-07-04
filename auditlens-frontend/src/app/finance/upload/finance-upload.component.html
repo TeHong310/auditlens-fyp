@@ -59,7 +59,7 @@
         </div>
       </div>
 
-      <input #fileInput type="file" accept=".pdf,.jpg,.jpeg,.png" multiple style="display:none"
+      <input #fileInput type="file" accept=".pdf,.jpg,.jpeg,.png,image/*" capture="environment" multiple style="display:none"
         (change)="onFileSelected($event)" />
 
       <div class="upload-actions">
@@ -143,7 +143,8 @@
           <tr *ngFor="let item of uploadQueue">
             <td class="doc-name">
               <div class="doc-name-wrapper">
-                <div class="doc-icon">
+                <img *ngIf="item.previewUrl" [src]="item.previewUrl" class="doc-thumbnail" alt="" />
+                <div class="doc-icon" *ngIf="!item.previewUrl">
                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                     <rect x="2" y="1" width="10" height="12" rx="1.5" stroke="#4A90D9" stroke-width="1.2" />
                     <path d="M4 4h6M4 6.5h6M4 9h4" stroke="#4A90D9" stroke-width="1.2" stroke-linecap="round" />
@@ -276,7 +277,7 @@
         <div class="success-box" *ngIf="poSuccess && poMessage">{{ poMessage }}</div>
         <div class="error-box" *ngIf="!poSuccess && poMessage">{{ poMessage }}</div>
 
-        <input #poInput type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none"
+        <input #poInput type="file" accept=".pdf,.jpg,.jpeg,.png,image/*" capture="environment" style="display:none"
           (change)="onPOFileSelected($event)" />
 
         <button class="btn-supporting" (click)="poInput.click()" [disabled]="isUploadingPO">
@@ -303,7 +304,7 @@
         <div class="success-box" *ngIf="grSuccess && grMessage">{{ grMessage }}</div>
         <div class="error-box" *ngIf="!grSuccess && grMessage">{{ grMessage }}</div>
 
-        <input #grInput type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none"
+        <input #grInput type="file" accept=".pdf,.jpg,.jpeg,.png,image/*" capture="environment" style="display:none"
           (change)="onGRFileSelected($event)" />
 
         <button class="btn-supporting btn-gr" (click)="grInput.click()" [disabled]="isUploadingGR">

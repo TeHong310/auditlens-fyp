@@ -1,3 +1,193 @@
 html, body {
   touch-action: none;
 }
+
+@media (max-width: 768px) {
+  /* Prevent horizontal scroll */
+  body, html {
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
+
+  /* Page headers: used identically across 11 page components
+     (display:flex; justify-content:space-between; no wrap). Without
+     wrapping, a search bar / action button on the right visually
+     overlaps a title that wraps to 2 lines on a narrow screen —
+     observed live on the Upload Document page before this fix. */
+  .header {
+    flex-wrap: wrap !important;
+    gap: 12px;
+  }
+
+  /* .header-right's fixed-width .search-bar (240px, used identically
+     across 5 page components) still overflowed the viewport even
+     after .header wraps onto its own row — observed live. Let it
+     take the full wrapped row and shrink instead of a rigid 240px. */
+  .header-right {
+    width: 100%;
+  }
+
+  .search-bar {
+    width: auto !important;
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Cards full width
+     NOTE ON !important: Angular's emulated ViewEncapsulation adds a
+     per-component attribute selector (e.g. .foo[_ngcontent-xxx]) to
+     every component-scoped style, which beats a plain global class
+     selector on specificity regardless of media-query nesting or
+     stylesheet order. Confirmed via a live computed-style check this
+     session (.stats-row's grid-template-columns silently stayed
+     repeat(4,1fr) on a 375px viewport without !important). Every
+     property below that overrides an existing component-level base
+     value uses !important for that reason; properties with nothing
+     to override are left plain. */
+  .card,
+  .anomaly-card,
+  .authenticity-card,
+  .exception-card,
+  /* actual card class names used in this app */
+  .check-card,
+  .exception-row {
+    width: 100% !important;
+    margin: 8px 0;
+    box-sizing: border-box;
+  }
+
+  /* Tables scroll horizontally */
+  .table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+
+  table {
+    min-width: 600px;
+  }
+
+  /* Filter chips wrap onto multiple rows */
+  .filter-chips,
+  .filter-row {
+    flex-wrap: wrap !important;
+    gap: 6px;
+  }
+
+  .filter-chip {
+    font-size: 13px;
+    padding: 6px 10px;
+  }
+
+  /* Smaller headers */
+  h1 { font-size: 20px; line-height: 1.3; }
+  h2 { font-size: 17px; }
+  h3 { font-size: 15px; }
+
+  /* Signal badges wrap */
+  .signal-badges,
+  .badge-row {
+    flex-wrap: wrap !important;
+    gap: 4px;
+  }
+
+  /* Upload zones full width */
+  .upload-form,
+  .upload-container,
+  .upload-zone,
+  /* actual upload dropzone class name (finance-upload.component) */
+  .dropzone {
+    padding: 12px;
+    width: 100% !important;
+    box-sizing: border-box;
+  }
+
+  /* KPI cards stack instead of row */
+  .kpi-row,
+  .metric-row {
+    flex-direction: column !important;
+    gap: 12px;
+  }
+
+  /* Page-level 2-3 column grid layouts collapse to 1 column.
+     Found by auditing every component CSS for multi-column
+     grid-template-columns not already covered by their own @media
+     query (auditor-report.component.css and register.component.css
+     both already handle their own grids responsively and are
+     intentionally NOT listed here to avoid overriding their own,
+     already-correct breakpoints):
+       - .content-row: record-detail (1.4fr 1fr), ocr-review (1.4fr 1fr),
+         finance-upload (1fr 0.6fr)
+       - .supporting-grid: finance-upload PO/GR cards (1fr 1fr)
+       - .middle-row: auditor-dashboard Risk/Priority cards (1fr 1fr) —
+         confirmed visually clipped on a 375px screenshot before this fix
+       - .charts-row: finance-report (1fr 1fr 1fr), finance-home
+         (2fr 1fr 1fr) */
+  .content-row,
+  .supporting-grid,
+  .middle-row,
+  .charts-row {
+    grid-template-columns: 1fr !important;
+    gap: 12px;
+  }
+
+  /* actual stat-row class names used across dashboard/report/review-queue
+     pages — these are CSS Grid (repeat(4-5, 1fr)), not flex, so
+     flex-direction would be a no-op here; needs grid-template-columns
+     instead to actually stack on a phone-width screen. */
+  .stats-row,
+  .stats-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px;
+  }
+
+  .kpi-card,
+  /* actual stat-card class name used across dashboard/report pages */
+  .stat-card {
+    width: 100% !important;
+  }
+
+  /* Auditor/Finance home charts */
+  .chart-container,
+  /* actual chart wrapper class name (auditor-report.component) */
+  .chart-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  canvas {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  /* Modal fills more of screen */
+  .modal, .dialog,
+  /* actual modal class names (auditor-record-detail PDF quick-view;
+     its .modal-box has a conflicting base max-width: 900px) */
+  .modal-box {
+    width: 95vw !important;
+    max-width: 95vw !important;
+    margin: 0 auto;
+  }
+
+  /* PDF preview modal */
+  .pdf-preview {
+    width: 100vw;
+    height: 80vh;
+  }
+  /* NOTE: auditor-record-detail's PDF quick-view modal (.modal-box >
+     .modal-body) already sizes itself responsively via flexbox
+     (.modal-body { flex: 1 }) inside .modal-box, which is resized
+     above. Forcing an explicit width/height onto .modal-body here
+     would fight that flex sizing and risk clipping the iframe against
+     .modal-box's overflow:hidden, so it's intentionally left alone. */
+
+  /* Field Comparison table on Record Detail — force scroll not break */
+  .field-comparison-table,
+  /* actual comparison table wrapper class name (auditor-record-detail) */
+  .comparison-table-wrap {
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+}

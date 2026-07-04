@@ -12,6 +12,7 @@ import { Router, RouterModule, RouterOutlet } from '@angular/router';
 export class AuditorLayoutComponent implements OnInit {
   user: any = {};
   showUserMenu: boolean = false;
+  isSidebarOpen = false;
 
   navItems = [
     { label: 'Auditor Home',  icon: 'home',       route: '/auditor/home' },
@@ -37,6 +38,14 @@ export class AuditorLayoutComponent implements OnInit {
 
   toggleUserMenu() {
     this.showUserMenu = !this.showUserMenu;
+  }
+
+  toggleSidebar() {
+    this.isSidebarOpen = !this.isSidebarOpen;
+  }
+
+  closeSidebar() {
+    this.isSidebarOpen = false;
   }
 
   logout() {

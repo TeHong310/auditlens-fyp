@@ -1,4 +1,4 @@
-import { Component, OnInit, ElementRef, ViewChild, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, ElementRef, ViewChild, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
@@ -11,7 +11,7 @@ import { environment } from '../../../environments/environment';
   templateUrl: './finance-upload.component.html',
   styleUrls: ['./finance-upload.component.css']
 })
-export class FinanceUploadComponent implements OnInit {
+export class FinanceUploadComponent implements OnInit, OnDestroy {
   @ViewChild('fileInput') fileInputRef!: ElementRef;
   @ViewChild('poInput') poInputRef!: ElementRef;
   @ViewChild('grInput') grInputRef!: ElementRef;
@@ -23,7 +23,7 @@ export class FinanceUploadComponent implements OnInit {
   successMessage: string = '';
   isDragOver: boolean = false;
 
-  uploadQueue: { file: any, status: 'pending' | 'uploading' | 'done' | 'error', message: string }[] = [];
+  uploadQueue: { file: any, status: 'pending' | 'uploading' | 'done' | 'error', message: string, previewUrl?: string }[] = [];
 
   // PO + GR
   selectedDocumentId: number | null = null;
@@ -46,6 +46,17 @@ export class FinanceUploadComponent implements OnInit {
   ngOnInit() {
     this.loadQueueFromStorage();
     this.loadDocuments();
+  }
+
+  ngOnDestroy() {
+    this.uploadQueue.forEach(item => {
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+    });
+  }
+
+  isImageFile(file: any): boolean {
+    const ext = file?.name?.split('.').pop()?.toLowerCase();
+    return ext === 'jpg' || ext === 'jpeg' || ext === 'png';
   }
 
   getHeaders() {
@@ -128,7 +139,8 @@ export class FinanceUploadComponent implements OnInit {
     const newItems = validFiles.map(file => ({
       file,
       status: 'pending' as const,
-      message: ''
+      message: '',
+      previewUrl: this.isImageFile(file) ? URL.createObjectURL(file) : undefined
     }));
 
     this.uploadQueue = [...this.uploadQueue, ...newItems];
@@ -348,12 +360,17 @@ export class FinanceUploadComponent implements OnInit {
   }
 
   clearDoneItems() {
+    this.uploadQueue.filter(item => item.status === 'done' && item.previewUrl)
+      .forEach(item => URL.revokeObjectURL(item.previewUrl!));
     this.uploadQueue = this.uploadQueue.filter(item => item.status !== 'done');
     this.saveQueueToStorage();
     this.cdr.detectChanges();
   }
 
   clearQueue() {
+    this.uploadQueue.forEach(item => {
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+    });
     this.uploadQueue = [];
     localStorage.removeItem('uploadQueue');
     this.cdr.detectChanges();
