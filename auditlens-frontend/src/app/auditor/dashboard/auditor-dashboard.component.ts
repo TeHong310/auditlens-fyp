@@ -58,7 +58,7 @@ export class AuditorDashboardComponent implements OnInit {
   }
 
   goToReviewQueue() {
-    this.router.navigate(['/auditor/review-queue']);
+    this.router.navigate(['/auditor/home']);
   }
 
   goToRecord(doc: any) {

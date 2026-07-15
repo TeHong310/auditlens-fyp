@@ -73,8 +73,8 @@ export class AuditorAuthenticityComponent implements OnInit {
   }
 
   viewDocument(check: any) {
-    this.router.navigate(['/auditor/record-detail'], {
-      queryParams: { document_id: check.document_id }
+    this.router.navigate(['/auditor/authenticity', check.document_id], {
+      queryParams: { document_type: check.document_type }
     });
   }
 

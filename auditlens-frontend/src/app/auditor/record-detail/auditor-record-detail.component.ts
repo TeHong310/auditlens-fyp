@@ -155,7 +155,7 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
         this.successMessage = 'Document approved successfully!';
         this.cdr.detectChanges();
         setTimeout(() => {
-          this.router.navigate(['/auditor/review-queue']);
+          this.router.navigate(['/auditor/home']);
         }, 2000);
       },
       error: (err) => {
@@ -183,7 +183,7 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
         this.successMessage = 'Document returned to Finance!';
         this.cdr.detectChanges();
         setTimeout(() => {
-          this.router.navigate(['/auditor/review-queue']);
+          this.router.navigate(['/auditor/home']);
         }, 2000);
       },
       error: (err) => {
@@ -195,7 +195,7 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   }
 
   goBack() {
-    this.router.navigate(['/auditor/review-queue']);
+    this.router.navigate(['/auditor/home']);
   }
 
   // ── Overall status banner ───────────────────────────────

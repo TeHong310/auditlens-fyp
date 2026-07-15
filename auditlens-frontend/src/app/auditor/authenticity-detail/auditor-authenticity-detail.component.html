@@ -1,0 +1,96 @@
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <button class="btn-back" (click)="goBack()">← Back to Authenticity</button>
+    <h1 class="page-title">🛡️ Authenticity Detail</h1>
+  </div>
+
+  <div class="error-box" *ngIf="errorMessage">✗ {{ errorMessage }}</div>
+
+  <!-- Loading -->
+  <div class="loading-wrap" *ngIf="isLoading">
+    <div class="spinner"></div>
+    <p>Loading…</p>
+  </div>
+
+  <div class="detail-layout" *ngIf="!isLoading && check">
+
+    <!-- Main: document image with overlay markers -->
+    <div class="image-panel">
+
+      <div class="image-wrap" *ngIf="imageLoadState === 'image'">
+        <img #docImage [src]="imageBlobUrl" (load)="onImageLoad()" class="doc-image" alt="Document" />
+        <div class="marker" *ngFor="let m of markers"
+             [ngClass]="m.shape === 'circle' ? 'marker-circle' : 'marker-rect'"
+             [style.left.px]="m.left" [style.top.px]="m.top"
+             [style.width.px]="m.width" [style.height.px]="m.height">
+        </div>
+      </div>
+
+      <div class="image-hint" *ngIf="imageLoadState === 'image' && !hasAnyBoxes">
+        ℹ️ No location data for this document yet — Re-check to locate signals on the image.
+      </div>
+
+      <div class="image-fallback" *ngIf="imageLoadState === 'loading'">
+        <div class="spinner"></div>
+        <p>Loading document…</p>
+      </div>
+
+      <div class="image-fallback" *ngIf="imageLoadState === 'pdf'">
+        <p class="fallback-icon">📄</p>
+        <p>This document is a PDF — overlay markers aren't available for PDF files.</p>
+        <p class="fallback-sub">The checklist still reflects the cached signals.</p>
+      </div>
+
+      <div class="image-fallback" *ngIf="imageLoadState === 'error'">
+        <p class="fallback-icon">✗</p>
+        <p>Could not load the document file.</p>
+      </div>
+
+      <div class="legend" *ngIf="imageLoadState === 'image'">
+        <span class="legend-item"><span class="legend-swatch legend-green"></span> Present &amp; located</span>
+        <span class="legend-item"><span class="legend-text-red">✗</span> Missing (checklist only)</span>
+      </div>
+    </div>
+
+    <!-- Side panel -->
+    <div class="side-panel">
+
+      <div class="verdict-banner" [ngClass]="check.authenticity_status === 'warning' ? 'verdict-warning' : 'verdict-passed'">
+        <span class="verdict-icon">{{ check.authenticity_status === 'warning' ? '⚠️' : '✅' }}</span>
+        <div>
+          <p class="verdict-title">{{ check.authenticity_status === 'warning' ? 'Warning' : 'Passed' }}</p>
+          <p class="verdict-doc">{{ check.document_number || 'Unknown Document' }} · {{ docTypeLabel(check.document_type) }}</p>
+        </div>
+      </div>
+
+      <p class="vendor-line">Vendor: {{ check.vendor_name || 'Unknown vendor' }}</p>
+
+      <div class="checklist-box">
+        <p class="section-label">Signals Checklist</p>
+        <div class="checklist-row" *ngFor="let key of signalKeys">
+          <span class="checklist-icon" [ngClass]="check[key] ? 'icon-yes' : 'icon-no'">{{ check[key] ? '✓' : '✗' }}</span>
+          <span class="checklist-label">{{ signalLabels[key] }}</span>
+          <span class="checklist-located" *ngIf="check[key] && hasBox(key)">📍 located</span>
+        </div>
+      </div>
+
+      <div class="meta-box">
+        <p class="meta-row">Upload Source: {{ uploadSourceIcon(check.upload_source) }} {{ uploadSourceLabel(check.upload_source) }}</p>
+      </div>
+
+      <div class="ai-box" *ngIf="check.ai_notes">
+        <p class="section-label">🤖 AI Notes</p>
+        <p class="ai-text">"{{ check.ai_notes }}"</p>
+      </div>
+
+      <button class="btn-recheck" (click)="recheck()" [disabled]="isRechecking">
+        {{ isRechecking ? '⏳ Re-checking…' : '🔄 Re-check' }}
+      </button>
+
+    </div>
+
+  </div>
+
+</div>

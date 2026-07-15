@@ -15,13 +15,11 @@ export class AuditorLayoutComponent implements OnInit {
   isSidebarOpen = false;
 
   navItems = [
-    { label: 'Auditor Home',  icon: 'home',       route: '/auditor/home' },
-    { label: 'Review Queue',  icon: 'review',      route: '/auditor/review-queue' },
-    { label: 'Record Detail', icon: 'record',      route: '/auditor/record-detail' },
-    { label: 'Exceptions',    icon: 'exceptions',  route: '/auditor/exceptions' },
-    { label: 'Anomaly Detection', icon: 'anomaly', route: '/auditor/anomalies' },
-    { label: 'Authenticity',  icon: 'authenticity', route: '/auditor/authenticity' },
-    { label: 'Report & Log',  icon: 'report',      route: '/auditor/report' },
+    { label: 'Auditor Home',      icon: 'home',          route: '/auditor/home' },
+    { label: 'Authenticity',      icon: 'authenticity',  route: '/auditor/authenticity' },
+    { label: 'Exceptions',        icon: 'exceptions',    route: '/auditor/exceptions' },
+    { label: 'Anomaly Detection', icon: 'anomaly',       route: '/auditor/anomalies' },
+    { label: 'Report & Log',      icon: 'report',        route: '/auditor/report' },
   ];
 
   constructor(private router: Router) {}

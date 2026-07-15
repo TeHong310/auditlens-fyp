@@ -19,7 +19,13 @@ Return ONLY JSON, no markdown fences:
   "has_company_name": <bool>,
   "has_signature": <bool>,
   "upload_source": "phone_photo" | "scanned" | "digital_native" | "webcam",
-  "notes": "<one short sentence>"
+  "notes": "<one short sentence>",
+  "signal_boxes": {
+    "has_company_chop": [ymin, xmin, ymax, xmax],
+    "has_company_logo": [ymin, xmin, ymax, xmax],
+    "has_company_name": [ymin, xmin, ymax, xmax],
+    "has_signature": [ymin, xmin, ymax, xmax]
+  }
 }
 
 Signal definitions:
@@ -31,6 +37,19 @@ Signal definitions:
   Typed text counts.
 - has_signature: Handwritten signature (cursive strokes, ink pen marks).
   NOT a typed name or printed name.
+
+signal_boxes rules:
+- Only include a key in signal_boxes for a signal that is true above. If a
+  signal is false, omit its key from signal_boxes entirely (do not include
+  it with a null or empty value).
+- Each box is [ymin, xmin, ymax, xmax], normalized to a 0-1000 scale relative
+  to the full image (top-left is [0,0], bottom-right is [1000,1000]) —
+  standard Gemini bounding box format.
+- If has_company_chop or has_company_logo is true, the box should tightly
+  bound that specific mark (compact box).
+- If has_company_name or has_signature is true, the box should bound that
+  specific text/mark (can be wider for text fields, but stay tight to the
+  actual characters, not the whole document).
 
 Upload source definitions:
 - phone_photo: Handheld phone photo — visible perspective distortion, uneven
@@ -140,14 +159,32 @@ def run_authenticity_check(document_id, file_path, document_type):
 
         status = _compute_authenticity_status(document_type, result)
 
+        # Only keep a box for a signal we've actually parsed as present,
+        # and only if Gemini gave a well-formed [ymin,xmin,ymax,xmax] —
+        # keeps signal_boxes' keys consistent with the boolean flags
+        # regardless of what Gemini actually returned.
+        raw_boxes = result.get('signal_boxes') or {}
+        present_signals = {
+            'has_company_chop': chop,
+            'has_company_logo': logo,
+            'has_company_name': name,
+            'has_signature': sig,
+        }
+        signal_boxes = {
+            key: raw_boxes[key]
+            for key, is_present in present_signals.items()
+            if is_present and isinstance(raw_boxes.get(key), list) and len(raw_boxes[key]) == 4
+        }
+
         conn = get_db_connection()
         cursor = conn.cursor()
         try:
             cursor.execute('''
                 INSERT INTO authenticity_checks
                 (document_id, has_company_chop, has_company_logo, has_company_name,
-                 has_signature, document_type, upload_source, authenticity_status, ai_notes)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 has_signature, document_type, upload_source, authenticity_status,
+                 ai_notes, signal_boxes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (document_id, document_type) DO UPDATE SET
                     has_company_chop = EXCLUDED.has_company_chop,
                     has_company_logo = EXCLUDED.has_company_logo,
@@ -156,15 +193,16 @@ def run_authenticity_check(document_id, file_path, document_type):
                     upload_source = EXCLUDED.upload_source,
                     authenticity_status = EXCLUDED.authenticity_status,
                     ai_notes = EXCLUDED.ai_notes,
+                    signal_boxes = EXCLUDED.signal_boxes,
                     created_at = NOW()
                 RETURNING check_id
             ''', (document_id, chop, logo, name, sig,
-                  document_type, upload_source, status, notes))
+                  document_type, upload_source, status, notes, json.dumps(signal_boxes)))
             check_id = cursor.fetchone()[0]
             conn.commit()
             print(f"DEBUG Authenticity: doc={document_id} type={document_type} "
                   f"chop={chop} sig={sig} logo={logo} name={name} "
-                  f"source={upload_source} status={status}")
+                  f"source={upload_source} status={status} boxes={list(signal_boxes.keys())}")
             return check_id
         finally:
             conn.close()

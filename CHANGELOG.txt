@@ -2005,3 +2005,160 @@ Setup/config needed:
      Document page and confirm a native "Take Photo" option appears
      alongside "Choose File" / "Photo Library" — this is the one thing
      not verifiable from this environment.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-15
+What was changed:
+  Three auditor-side changes: sidebar cleanup, and a new Authenticity
+  Detail view with Gemini-provided bounding boxes drawn as overlay
+  markers on the source document image.
+
+  PART 1 — CLEANUP:
+  Deleted the Review Queue page (auditor/review-queue/, its route, its
+  import, its nav item) since it duplicated the dashboard (both called
+  /matching/queue). Removed "Record Detail" from the sidebar nav (the
+  route/component stay — it's a drill-in reached by clicking a record,
+  not a page anyone navigates to directly). Reordered navItems to
+  Auditor Home / Authenticity / Exceptions / Anomaly Detection /
+  Report & Log. Removed the now-orphaned "Review" and "Record Detail"
+  SVG icon blocks from auditor-layout.component.html (dead code my own
+  nav-item removal created). Backend routes (e.g. /matching/queue)
+  intentionally left untouched, as instructed.
+
+  FOUND AND FIXED A REAL REGRESSION NOT IN THE ORIGINAL REQUEST: 4
+  places (auditor-dashboard's "Open Queue" button, and 3 spots in
+  auditor-record-detail — approve success, return success, and
+  goBack()) called router.navigate(['/auditor/review-queue']).
+  Deleting the route without fixing these would have sent auditors to
+  the ** wildcard -> login after approving/returning a document, or
+  from the dashboard's own button. Redirected all 4 to /auditor/home,
+  matching the stated reasoning for why Review Queue was redundant.
+
+  PART 2 — AUTHENTICITY DETAIL VIEW:
+  New route /auditor/authenticity/:documentId?document_type=invoice|po|gr
+  (new component auditor-authenticity-detail), opened by clicking a
+  row or the "View Document" button in the existing list (list card
+  is now itself clickable too, not just the button).
+
+  Migration migrations/2026-07-15_add_signal_boxes.sql: ADD COLUMN IF
+  NOT EXISTS signal_boxes JSONB (nullable, existing columns untouched).
+  Deliberately NOT added to app.py's auto-migration-on-startup chain
+  this time (unlike every other table change this session) — the task
+  explicitly asked to be reminded to run it manually on Render, so
+  manual control was respected rather than silently adding the usual
+  safeguard.
+
+  AUTHENTICITY_PROMPT (helpers/authenticity_check.py) extended with a
+  new signal_boxes object in the requested JSON — one [ymin,xmin,ymax,
+  xmax] (normalized 0-1000) per signal that's true, keys omitted for
+  false signals. All 4 existing boolean fields, upload_source, and
+  notes are unchanged. run_authenticity_check() now also parses and
+  stores signal_boxes, filtered so a box only survives if its signal
+  is independently parsed as true AND Gemini actually returned a
+  well-formed 4-element box for it — keeps the stored boxes consistent
+  with the boolean flags regardless of what Gemini returns.
+
+  routes/authenticity.py: added ac.signal_boxes to the shared SELECT.
+  Also added po.po_id/gr.gr_id to that same SELECT — needed because
+  the file-serving routes for PO/GR documents are keyed by po_id/gr_id,
+  not document_id (GET /documents/po/<po_id>/file, GET /documents/gr/
+  <gr_id>/file), unlike the invoice route which takes document_id
+  directly. Without these the detail page couldn't construct the
+  correct image URL for non-invoice document types.
+
+  Frontend overlay math: each bbox is scaled from its 0-1000 space to
+  the <img> element's actual rendered clientWidth/clientHeight (not
+  its natural pixel size, since CSS scales it down to fit the panel).
+  A ResizeObserver on the image recomputes marker positions on any
+  resize (window, sidebar toggle, responsive breakpoint) — verified
+  this actually re-fires and repositions markers correctly, not just
+  wired up. Wide/text signals (company_name) and signature render as a
+  rounded-rectangle outline; compact marks (chop, logo) render as a
+  circle — signature isn't explicitly bucketed in the request (only
+  company_name->rect and chop/logo->circle are named), grouped with
+  company_name since a handwritten signature is a stroke/mark, not a
+  compact round/square shape.
+
+  Side panel: verdict banner (green passed / amber warning), a 4-row
+  checklist with ✓/✗ per signal (plus a small "📍 located" tag when
+  that signal also has a box), upload_source, ai_notes, a legend, and
+  the Re-check button. Old rows (signal_boxes = null, from before this
+  feature) render the checklist normally but show a hint — "No
+  location data for this document yet — Re-check to locate signals on
+  the image" — instead of attempting to draw markers with no data,
+  exactly as specified. PDF documents (not jpg/png) show a "overlay
+  markers aren't available for PDF files" fallback instead of a broken
+  image, since bounding-box overlays only make sense drawn over an
+  <img> — this wasn't addressed in the request, which spoke of "the
+  invoice image" throughout; flagging the assumption rather than
+  guessing silently.
+
+  PART 3 — RE-CHECK:
+  POST /authenticity/<document_id>/recheck?document_type=invoice|po|gr,
+  auditor only. Looks up the correct file_path for the given
+  document_id + document_type (documents.file_path for invoice,
+  purchase_orders/goods_receipts.file_path — most recent by
+  uploaded_at — for po/gr), calls the existing run_authenticity_check()
+  unchanged, and returns the fresh row. This is the only code path
+  that calls Gemini after upload, as required. The detail page's
+  Re-check button calls it and recomputes markers directly against
+  the response (the underlying file/img src doesn't change, so the
+  image's own 'load' event won't re-fire — recomputeMarkers() is
+  called directly instead of relying on it).
+
+  QUOTA DISCIPLINE: zero real Gemini calls were made at any point
+  while building or verifying this. Every test — backend and frontend
+  — used a hardcoded sample response in place of a real Gemini call.
+
+Why:
+  Review Queue was pure duplication with the dashboard and worth
+  removing for demo clarity, and Record Detail as a nav item was a
+  drill-in target, not a destination. The Authenticity Detail view
+  turns the existing pass/warning verdict into something an auditor
+  can actually visually verify — instead of just trusting 4 booleans,
+  they can see exactly where on the document Gemini found each signal.
+
+  Verified without ever touching the real Gemini API:
+    - Backend: mocked _call_gemini_vision's return value only (matching
+      this session's established safe-testing pattern) and ran
+      run_authenticity_check(), the GET endpoint, and the new recheck
+      endpoint for real against the local dev DB. Confirmed
+      signal_boxes stores only present-signal boxes (false signals
+      correctly get no key), the GET endpoint returns them plus po_id/
+      gr_id, and POST recheck force-updates the same row (not a
+      duplicate) including a changed signal_boxes value. All synthetic
+      test data cleaned up afterward.
+    - Frontend: ran the actual dev server with NO backend running at
+      all (eliminating any possible path to Gemini), and used
+      Playwright's route interception to serve a hardcoded sample
+      JSON response plus a real 800x1000 test PNG (generated locally
+      with known exact dimensions) in place of both API calls. Verified
+      the rendered marker pixel positions match an independently
+      computed expected value from the same bbox math, to sub-pixel
+      precision, for both a rect and a circle marker. Verified markers
+      recompute correctly after an actual viewport resize (527px ->
+      564px rendered width, marker positions changed proportionally,
+      not stuck). Verified the Re-check button's mocked response adds
+      a 3rd marker correctly. Verified the old-row case (signal_boxes
+      = null) renders zero markers plus the exact expected hint text,
+      no console errors. Confirmed via captured request logs that zero
+      requests during any of this contained "gemini" or
+      "generativelanguage" in the URL.
+    - Also confirmed the Part 1 sidebar changes visually in the same
+      screenshots (nav order, Review Queue/Record Detail both absent).
+  `ng build --configuration=production` passes clean (771.84 kB
+  initial — actually slightly smaller than before despite the new
+  component, since deleting review-queue offset it).
+
+Setup/config needed:
+  1. Run migrations/2026-07-15_add_signal_boxes.sql against the Render
+     production DB manually — this one was deliberately NOT added to
+     the startup auto-migration chain (see note above).
+  2. Redeploy the Render backend for the new recheck endpoint and the
+     signal_boxes field.
+  3. Redeploy the Render frontend for the sidebar cleanup and the new
+     Authenticity Detail page.
+  4. Run the real Gemini calls yourself (upload a new invoice, or hit
+     Re-check on an existing one) — this was never done from this
+     session, by design.
