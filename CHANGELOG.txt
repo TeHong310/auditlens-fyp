@@ -2650,3 +2650,152 @@ Setup/config needed:
      Authenticity Detail view / DB row for that document — chop/logo/
      signature and their signal_boxes should now be populated instead
      of everything defaulting to False with empty boxes.
+
+------------------------------------------------------------------------------
+2026-07-16 - Root-caused the 404: GEMINI_MODEL env var had a stray
+             "models/" prefix, doubling up in the URL; unify anomaly
+             detection onto the same model; fix total_amount for PO/GR
+             too (extract_gr_fields had a pre-existing indentation bug)
+
+FOUND THE ROOT CAUSE of the 404:
+  - config.py built GEMINI_URL as
+    f".../v1beta/models/{Config.GEMINI_MODEL}:generateContent" directly
+    from the raw GEMINI_MODEL env var, with no validation. The
+    ListModels endpoint (helpers/gemini_extractor.py's
+    log_available_gemini_models, added two entries ago) logs model
+    names in their full resource-name form, e.g.
+    "models/gemini-2.5-flash" — and this session's own prior changelog
+    entry told you to copy that logged value into GEMINI_MODEL in
+    Render. If GEMINI_MODEL got set to "models/gemini-2.5-flash"
+    (matching exactly what was logged) instead of the bare
+    "gemini-2.5-flash", the URL becomes
+    ".../v1beta/models/models/gemini-2.5-flash:generateContent" — a
+    real, distinct, non-existent path, hence 404, even though the key
+    is correct and "models/gemini-2.5-flash" genuinely is in the
+    account's model list. This exactly matches the reported symptom
+    (correct key, model confirmed available via ListModels, still
+    404). A trailing space/newline in the env var (e.g. from a
+    copy-paste) would silently break the URL the same way.
+
+What was changed:
+  - config.py: `GEMINI_MODEL` is now normalized once, centrally, right
+    after being read from the env var: `.strip()`, then a leading
+    "models/" prefix is stripped if present. Every consumer
+    (gemini_extractor.py, authenticity_check.py, anomaly_detector.py)
+    reads the already-normalized `Config.GEMINI_MODEL`, so this one
+    fix protects all three regardless of what's actually sitting in
+    Render's env var. Added a startup log:
+    "DEBUG Gemini model loaded: raw_env=repr(...) normalized=repr(...)"
+    — repr() so hidden whitespace/newlines are visible, and printing
+    both the raw and normalized value makes exactly this class of bug
+    visible immediately at boot, not just as a mystery 404 later.
+  - helpers/gemini_extractor.py: added `log_gemini_request(url,
+    context)`, logging "DEBUG Gemini request (<context>):
+    model=repr(...) url=repr(...) key=...XXXX" immediately before
+    every generateContent call. repr() on both the model and the full
+    URL (safe to log — the key is header-based, never in the URL) so a
+    malformed model string is visible at the exact point of failure,
+    not just inferred from a 404 message. Replaced the earlier, less
+    detailed "DEBUG Gemini call: model=... key=..." lines with this.
+  - helpers/authenticity_check.py: uses the same `log_gemini_request`
+    (imported from gemini_extractor.py) before its vision call.
+  - helpers/anomaly_detector.py: previously had its OWN separate
+    hardcoded `GEMINI_URL = ".../gemini-2.0-flash:generateContent"`,
+    completely independent of Config.GEMINI_MODEL — this was the
+    third, different Gemini call in the codebase the earlier "grep
+    every Gemini key/model read" pass had correctly identified but
+    left alone as out of scope. Now explicitly requested: GEMINI_URL
+    is built from `Config.GEMINI_MODEL` (same as the other two files),
+    and the same `log_gemini_request()` + 404-safety-net
+    (`log_available_gemini_models()`) are wired into
+    `get_gemini_explanation()`. All three Gemini call sites in the
+    codebase now use one model and one key, unconditionally.
+  - helpers/ocr_helper.py — total_amount, now fixed for ALL THREE
+    document types, not just invoices:
+    - `extract_po_fields()`: its total-amount regex
+      (`(?:total|amount|grand\s*total)\s*[:\-]?...`) had no \b word-
+      boundary protection at all (worse than the invoice pattern this
+      session already fixed) and, critically, had NO tolerance for a
+      "(RM)" parenthetical currency label — "TOTAL (RM): 1,965.60"
+      didn't match this pattern AT ALL (the "(" broke it immediately
+      after "TOTAL"), so it fell through to a much looser fallback.
+      Applied the same fix as extract_fields(): skip Subtotal/SST/GST/
+      Tax lines, collect every remaining total-labeled amount across
+      all lines into `total_candidates`, take the max afterward
+      (Total = Subtotal + tax, so it's always the largest), and made
+      the currency segment tolerate optional parens.
+    - `extract_gr_fields()`: same regex fix, PLUS a genuine pre-
+      existing bug found while fixing this — the receipt_date and
+      total_amount blocks were indented one level too deep (nested
+      inside `if fields['gr_number'] is None:`, itself inside a
+      second, unrelated `for` loop), so they only ever ran against
+      whatever `line_clean` happened to be left as after the FIRST,
+      unrelated per-line loop finished (effectively just the last line
+      of the document), and only when the GR number lookup failed.
+      Moved both blocks into the main per-line loop where they belong
+      (matching the structure already used in extract_fields() and
+      extract_po_fields()), so they now check every line like they
+      were always supposed to.
+
+Why:
+  - The 404/429 investigation two entries ago concluded the code only
+    has one key/model source, which was correct — but didn't explain
+    the actual mechanism by which a single Config.GEMINI_MODEL value
+    could still produce a 404 for a model confirmed available. The
+    "models/" prefix duplication is that mechanism, and it's a trap
+    this session's own earlier advice ("copy the ListModels line into
+    GEMINI_MODEL") could easily have caused.
+  - anomaly_detector.py's separate hardcoded model was flagged as out
+    of scope in two prior entries; this entry's request explicitly
+    asked for it to be unified, so it now is.
+  - total_amount for PO/GR was never actually fixed before — the
+    "STRENGTHEN the regex extraction" and "fix total_amount" requests
+    earlier in this session only touched extract_fields() (invoices).
+    PO/GR use their own separate, less robust total-amount regex with
+    the same class of bug (and, for GR, an unrelated structural bug
+    that broke date/amount extraction entirely).
+
+Testing:
+  - `python -m py_compile` on config.py, helpers/gemini_extractor.py,
+    helpers/authenticity_check.py, helpers/anomaly_detector.py,
+    helpers/ocr_helper.py, routes/documents.py — compiles clean.
+  - Offline-only test script (scratchpad, not committed) spawns the
+    venv Python as a subprocess with 5 different simulated
+    GEMINI_MODEL env var values (unset/default, the exact
+    "models/gemini-2.5-flash" bug, leading/trailing whitespace, a
+    trailing newline, and a legitimate override to a different model)
+    and checks the resulting Config.GEMINI_MODEL and GEMINI_URL in
+    each case — confirms the double "models/" case is fixed, hidden
+    whitespace is stripped, a real override still works, and no
+    network call is made anywhere in the test.
+  - Imported gemini_extractor.py, authenticity_check.py, and
+    anomaly_detector.py together (no live key) and confirmed all
+    three now build byte-for-byte identical GEMINI_URL values.
+  - Re-ran the earlier offline 404-safety-net mock test (requests
+    monkeypatched, no real network) — still passes with the new
+    log_gemini_request() line in place.
+  - Offline-only test against extract_fields(), extract_po_fields(),
+    and extract_gr_fields() with the literal "Subtotal (RM): 1,820.00
+    / SST 8% (RM): 145.60 / TOTAL (RM): 1,965.60" example from the
+    report — all three now return total_amount=1965.6 (previously PO
+    and GR returned None, since their pattern didn't match the "(RM)"
+    format at all). Also confirmed the GR indentation fix directly:
+    a document with GRN No/Receipt Date/Subtotal/SST/TOTAL lines now
+    gets a non-None receipt_date (previously it was silently None
+    because the wrong `line_clean` value was checked).
+  - Re-ran the PDF-rendering offline test from the prior entry — still
+    passes, unaffected by these changes.
+
+Setup/config needed:
+  1. Redeploy the Render backend for this fix to take effect.
+  2. IMPORTANT: check Render's dashboard for an existing GEMINI_MODEL
+     env var. If it's currently set to "models/gemini-2.5-flash" (or
+     anything with a "models/" prefix, or has stray whitespace), the
+     code now strips that automatically — but it's worth correcting
+     the env var itself to the bare "gemini-2.5-flash" (or just
+     removing it, since that's the default) to avoid confusion later.
+  3. After redeploying, check the boot log for "DEBUG Gemini model
+     loaded: raw_env=... normalized=..." to see exactly what's in the
+     env var right now, and the "DEBUG Gemini request (...): model=...
+     url=..." line on the next Gemini call to confirm the final URL is
+     well-formed.

@@ -476,6 +476,7 @@ def extract_po_fields(ocr_text):
     }
 
     lines = ocr_text.split('\n')
+    total_candidates = []
 
     for i, line in enumerate(lines):
         line_clean = line.strip()
@@ -508,15 +509,24 @@ def extract_po_fields(ocr_text):
             if match:
                 fields['po_date'] = normalize_date_string(match.group(1).strip())
 
-        if fields['total_amount'] is None:
+        # TOTAL AMOUNT — collect every "total"-labeled amount (skipping
+        # Subtotal/Sub Total/SST/Tax lines) and take the max once the loop
+        # finishes, same fix as extract_fields(): Total = Subtotal + tax,
+        # so it's always the largest labeled amount, and this is immune to
+        # a Subtotal/SST line matching before the real Total line does.
+        if not re.search(r'\bsub[\s\-]?total\b', line_clean, re.IGNORECASE) and \
+           not re.search(r'\b(?:sst|gst|tax)\b', line_clean, re.IGNORECASE):
             match = re.search(
-                r'(?:total|amount|grand\s*total)\s*[:\-]?\s*(?:rm|myr)?\s*([\d,]+\.?\d*)',
+                r'\b(?:total|amount|grand\s*total)\s*\(?\s*(?:rm|myr)?\s*\)?\s*[:\-]?\s*([\d,]+\.?\d*)',
                 line_clean, re.IGNORECASE
             )
             if match:
                 val = extract_amount(match.group(1))
-                if val:
-                    fields['total_amount'] = val
+                if val and val > 1:
+                    total_candidates.append(val)
+
+    if total_candidates:
+        fields['total_amount'] = max(total_candidates)
 
     if fields['po_number'] is None:
         match = re.search(r'PO[-\s]?(\d+)', ocr_text, re.IGNORECASE)
@@ -573,6 +583,7 @@ def extract_gr_fields(ocr_text):
     }
 
     lines = ocr_text.split('\n')
+    total_candidates = []
 
     for i, line in enumerate(lines):
         line_clean = line.strip()
@@ -604,7 +615,37 @@ def extract_gr_fields(ocr_text):
                 if len(vendor) > 5:
                     fields['vendor_name'] = clean_vendor_name(vendor)
 
-                    # Fallback for GR number
+        if fields['receipt_date'] is None:
+            match = re.search(
+                r'(?:receipt\s*date|delivery\s*date|date\s*received|date)\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{1,2}\s+\w+\s+\d{4})',
+                line_clean, re.IGNORECASE
+            )
+            if match:
+                fields['receipt_date'] = normalize_date_string(match.group(1).strip())
+
+        # TOTAL AMOUNT — same fix as extract_fields()/extract_po_fields():
+        # collect every "total"-labeled amount (skipping Subtotal/SST/Tax
+        # lines) and take the max once the loop finishes, instead of
+        # keeping whichever "total"-ish line matched first.
+        if not re.search(r'\bsub[\s\-]?total\b', line_clean, re.IGNORECASE) and \
+           not re.search(r'\b(?:sst|gst|tax)\b', line_clean, re.IGNORECASE):
+            match = re.search(
+                r'\b(?:total|amount|grand\s*total)\s*\(?\s*(?:rm|myr)?\s*\)?\s*[:\-]?\s*([\d,]+\.?\d*)',
+                line_clean, re.IGNORECASE
+            )
+            if match:
+                val = extract_amount(match.group(1))
+                if val and val > 1:
+                    total_candidates.append(val)
+
+    if total_candidates:
+        fields['total_amount'] = max(total_candidates)
+
+    # Fallback for GR number — this previously ran INSIDE the block above
+    # by accident (bad indentation nested it under `if fields['gr_number']
+    # is None`, which also silently broke receipt_date/total_amount
+    # extraction, now moved into the main loop above). Kept as its own
+    # top-level pass, unrelated to the main loop.
     if fields['gr_number'] is None:
         lines_list = ocr_text.split('\n')
         for i, line in enumerate(lines_list):
@@ -618,24 +659,6 @@ def extract_gr_fields(ocr_text):
                                          next_val, re.IGNORECASE)):
                             fields['gr_number'] = next_val
                             break
-
-        if fields['receipt_date'] is None:
-            match = re.search(
-                r'(?:receipt\s*date|delivery\s*date|date\s*received|date)\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{1,2}\s+\w+\s+\d{4})',
-                line_clean, re.IGNORECASE
-            )
-            if match:
-                fields['receipt_date'] = normalize_date_string(match.group(1).strip())
-
-        if fields['total_amount'] is None:
-            match = re.search(
-                r'(?:total|amount|grand\s*total)\s*[:\-]?\s*(?:rm|myr)?\s*([\d,]+\.?\d*)',
-                line_clean, re.IGNORECASE
-            )
-            if match:
-                val = extract_amount(match.group(1))
-                if val:
-                    fields['total_amount'] = val
 
     if fields['receipt_date'] is None:
         match = re.search(r'(\d{1,2}\/\d{1,2}\/\d{4})', ocr_text)

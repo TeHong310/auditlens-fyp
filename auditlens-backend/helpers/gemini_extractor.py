@@ -213,6 +213,20 @@ def gemini_key_suffix():
     return key[-4:] if key and len(key) >= 4 else '????'
 
 
+def log_gemini_request(url, context=''):
+    """
+    Logs repr(model) and the EXACT request URL right before every
+    generateContent call, so a malformed model string (stray "models/"
+    prefix, trailing whitespace/newline) is immediately visible in
+    production logs instead of only surfacing as a mysterious 404. The
+    key is sent via the x-goog-api-key header, never in the URL, so the
+    URL is always safe to log in full — no redaction needed.
+    """
+    label = f" ({context})" if context else ''
+    print(f"DEBUG Gemini request{label}: model={Config.GEMINI_MODEL!r} "
+          f"url={url!r} key=...{gemini_key_suffix()}")
+
+
 def log_available_gemini_models():
     """
     Safety net for a 404 from generateContent (wrong/unavailable model name
@@ -257,7 +271,7 @@ def _call_gemini(template, ocr_text):
                 "responseMimeType": "application/json"
             }
         }
-        print(f"DEBUG Gemini call: model={Config.GEMINI_MODEL} key=...{gemini_key_suffix()}")
+        log_gemini_request(GEMINI_URL, context='text extraction')
         response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=GEMINI_TIMEOUT)
         if response.status_code == 404:
             print(f"DEBUG Gemini call error: 404 Not Found for model '{Config.GEMINI_MODEL}'")
@@ -334,7 +348,7 @@ def gemini_extract_invoice_full(file_path):
             'Content-Type': 'application/json',
             'x-goog-api-key': Config.GEMINI_API_KEY
         }
-        print(f"DEBUG Gemini call: model={Config.GEMINI_MODEL} key=...{gemini_key_suffix()}")
+        log_gemini_request(GEMINI_URL, context='merged invoice extraction+authenticity')
         response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=GEMINI_VISION_TIMEOUT)
         if response.status_code == 404:
             print(f"DEBUG Gemini merged invoice call error: 404 Not Found for model '{Config.GEMINI_MODEL}'")

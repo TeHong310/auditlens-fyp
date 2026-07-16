@@ -6,8 +6,12 @@ from datetime import datetime, timedelta, date
 import psycopg2.extras
 from db import get_db_connection
 from config import Config
+from helpers.gemini_extractor import log_gemini_request, log_available_gemini_models
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+# Same single model/key as every other Gemini call in the codebase
+# (field extraction, authenticity) — previously hardcoded to
+# "gemini-2.0-flash" separately from Config.GEMINI_MODEL.
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{Config.GEMINI_MODEL}:generateContent"
 GEMINI_TIMEOUT = 15
 
 AMOUNT_HISTORY_SAMPLE_LIMIT = 50
@@ -286,7 +290,11 @@ def get_gemini_explanation(anomaly_signals, vendor_context):
                 "responseMimeType": "application/json"
             }
         }
+        log_gemini_request(GEMINI_URL, context='anomaly explanation')
         response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=GEMINI_TIMEOUT)
+        if response.status_code == 404:
+            print(f"DEBUG Anomaly Gemini error: 404 Not Found for model '{Config.GEMINI_MODEL}'")
+            log_available_gemini_models()
         response.raise_for_status()
         result = response.json()
 

@@ -24,12 +24,24 @@ class Config:
     # Google Cloud Vision API
     GOOGLE_VISION_API_KEY = os.environ.get('GOOGLE_VISION_API_KEY')
 
-    # Gemini API — single source of truth for both the field-extraction
-    # call (gemini_extractor.py) and the authenticity call
-    # (authenticity_check.py). Both read Config.GEMINI_API_KEY /
-    # Config.GEMINI_MODEL only — never a hardcoded key or a second env var.
+    # Gemini API — single source of truth for every Gemini call in the
+    # codebase (field extraction, authenticity, anomaly explanation). All
+    # of them read Config.GEMINI_API_KEY / Config.GEMINI_MODEL only —
+    # never a hardcoded key/model or a second env var.
     GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
-    GEMINI_MODEL   = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')
+
+    # Normalized so a common env-var mistake can't silently break the
+    # request URL: the ListModels endpoint (see
+    # gemini_extractor.log_available_gemini_models) returns names like
+    # "models/gemini-2.5-flash" — pasting that whole string into
+    # GEMINI_MODEL would build ".../models/models/gemini-2.5-flash" and
+    # 404. Strip a leading "models/" and any surrounding whitespace here,
+    # once, so every caller gets a clean bare model name regardless of
+    # what's actually in the env var.
+    _raw_gemini_model = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')
+    GEMINI_MODEL = _raw_gemini_model.strip()
+    if GEMINI_MODEL.startswith('models/'):
+        GEMINI_MODEL = GEMINI_MODEL[len('models/'):]
 
     # CORS - comma-separated list of allowed frontend origins
     FRONTEND_ORIGINS = [
@@ -43,8 +55,12 @@ class Config:
 
 
 # Startup log (once per process) so it's possible to confirm in Render logs
-# that every Gemini call in this process is using the same key.
+# that every Gemini call in this process is using the same key and a
+# correctly-formed model name. repr() on the raw vs. normalized model
+# value makes a stray "models/" prefix or hidden whitespace visible
+# immediately instead of only surfacing as a mysterious 404 later.
 if Config.GEMINI_API_KEY:
     print(f"DEBUG Gemini key loaded: ...{Config.GEMINI_API_KEY[-4:]}")
 else:
     print("DEBUG Gemini key loaded: none (GEMINI_API_KEY not set)")
+print(f"DEBUG Gemini model loaded: raw_env={Config._raw_gemini_model!r} normalized={Config.GEMINI_MODEL!r}")
