@@ -4,8 +4,9 @@ import base64
 import requests
 from config import Config
 from db import get_db_connection
+from helpers.gemini_extractor import log_available_gemini_models
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{Config.GEMINI_MODEL}:generateContent"
 GEMINI_TIMEOUT = 20
 
 AUTHENTICITY_PROMPT = """You are analyzing a business document from a Malaysian SME.
@@ -106,6 +107,9 @@ def _call_gemini_vision(file_path):
             'x-goog-api-key': Config.GEMINI_API_KEY
         }
         response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=GEMINI_TIMEOUT)
+        if response.status_code == 404:
+            print(f"DEBUG Authenticity Gemini error: 404 Not Found for model '{Config.GEMINI_MODEL}'")
+            log_available_gemini_models()
         response.raise_for_status()
         text = response.json()['candidates'][0]['content']['parts'][0]['text']
         return json.loads(_strip_markdown_fences(text))

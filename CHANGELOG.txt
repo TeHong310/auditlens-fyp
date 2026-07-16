@@ -2367,3 +2367,77 @@ Setup/config needed:
   1. Redeploy the Render backend — until redeployed, invoice uploads
      keep making the old two Gemini calls and keep the old total_amount/
      tax_amount regex bugs.
+
+------------------------------------------------------------------------------
+2026-07-16 - Fix Gemini 404s (bad model name), make model configurable,
+             add a ListModels safety net
+
+What was changed:
+  - config.py: added `GEMINI_MODEL = os.environ.get('GEMINI_MODEL',
+    'gemini-flash-latest')`.
+  - helpers/gemini_extractor.py and helpers/authenticity_check.py:
+    `GEMINI_URL` is now built from `Config.GEMINI_MODEL` instead of the
+    hardcoded literal "gemini-2.5-flash" (which 404s for this API key —
+    a model-name problem, not quota/rate-limit). Both files now point at
+    the same configurable model.
+  - helpers/gemini_extractor.py: added `log_available_gemini_models()` —
+    on a 404 from generateContent, makes ONE GET call to
+    `https://generativelanguage.googleapis.com/v1beta/models?key=<KEY>`,
+    filters the response to models whose supportedGenerationMethods
+    includes "generateContent", and logs them as "DEBUG available Gemini
+    models: [...]". No retry, no loop — a single diagnostic call. Wired
+    into all three generateContent call sites: `_call_gemini()` (PO/GR
+    text extraction), `gemini_extract_invoice_full()` (merged invoice
+    vision call), and authenticity_check.py's `_call_gemini_vision()`
+    (which imports `log_available_gemini_models` from gemini_extractor.py
+    rather than duplicating it). Each site checks
+    `response.status_code == 404` right after the POST, before
+    `raise_for_status()`, so the check fires regardless of how the
+    subsequent exception is handled.
+  - helpers/anomaly_detector.py: NOT changed. It calls a different,
+    separate model ("gemini-2.0-flash") for a different purpose (anomaly
+    reasoning, not field/authenticity extraction) and wasn't named in
+    this request's scope ("field extraction + authenticity in
+    gemini_extractor.py and authenticity_check.py"). If that model name
+    is also unavailable for this key, it would need the same treatment
+    separately — flagging this now rather than silently leaving it
+    broken or silently changing it without being asked.
+  - Regex/text fallbacks (ocr_helper.py regex, authenticity_check.py's
+    `_fallback_from_ocr_text`) are unchanged — a 404 is just another
+    "Gemini failed" case they already handle.
+  - Google Vision OCR (helpers/ocr_helper.py's `run_google_vision_ocr`)
+    not touched, as instructed.
+
+Why:
+  - Gemini calls were failing with "404 Not Found ...
+    models/gemini-2.5-flash:generateContent" — this API key doesn't have
+    access to that exact model name/version, unrelated to the quota
+    fixes made earlier this session. Hardcoding one literal model name
+    also meant every future "this model got deprecated/renamed" incident
+    would require a code change + redeploy instead of an env var change.
+
+Testing:
+  - `python -m py_compile` on config.py, helpers/gemini_extractor.py,
+    helpers/authenticity_check.py, routes/documents.py — compiles clean.
+  - Imported helpers.gemini_extractor and helpers.authenticity_check
+    directly with a fake (non-live) GEMINI_API_KEY and confirmed
+    GEMINI_URL is built from GEMINI_MODEL correctly: defaults to
+    ".../gemini-flash-latest:generateContent" with no env var set, and
+    switches to ".../gemini-3.0-pro:generateContent" when
+    GEMINI_MODEL=gemini-3.0-pro is set — confirms the env var actually
+    controls the URL.
+  - Offline-only test script (scratchpad, not committed) monkeypatches
+    `requests.post`/`requests.get` to fake a 404 response and a fake
+    ListModels response — no real network call anywhere in the test.
+    Confirmed: the 404 triggers exactly ONE ListModels call (not a
+    loop), the log line correctly lists only the model that supports
+    generateContent, and `_call_gemini()` still returns `{}` afterward
+    (falls through to the existing fallback path unchanged).
+
+Setup/config needed:
+  1. Redeploy the Render backend for this fix to take effect.
+  2. If "gemini-flash-latest" also 404s for this key, check the Render
+     logs for the new "DEBUG available Gemini models: [...]" line (it
+     will appear automatically on the next 404) to see exactly which
+     model name this key supports, then set GEMINI_MODEL to that value
+     in Render's environment variables — no code change needed.

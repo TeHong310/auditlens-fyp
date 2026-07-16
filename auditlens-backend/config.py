@@ -26,6 +26,7 @@ class Config:
 
     # Gemini API (semantic fallback for OCR field extraction)
     GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+    GEMINI_MODEL   = os.environ.get('GEMINI_MODEL', 'gemini-flash-latest')
 
     # CORS - comma-separated list of allowed frontend origins
     FRONTEND_ORIGINS = [

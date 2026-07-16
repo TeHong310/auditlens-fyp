@@ -4,7 +4,8 @@ import base64
 import requests
 from config import Config
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{Config.GEMINI_MODEL}:generateContent"
+GEMINI_MODELS_LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 GEMINI_TIMEOUT = 15
 GEMINI_VISION_TIMEOUT = 20
 
@@ -203,6 +204,30 @@ def _strip_markdown_fences(text):
     return text.strip()
 
 
+def log_available_gemini_models():
+    """
+    Safety net for a 404 from generateContent (wrong/unavailable model name
+    for this API key). Makes ONE call to the ListModels endpoint and logs
+    which model IDs this key can actually use — no retry, no loop, just
+    a diagnostic log line.
+    """
+    try:
+        response = requests.get(
+            GEMINI_MODELS_LIST_URL,
+            params={"key": Config.GEMINI_API_KEY},
+            timeout=10
+        )
+        response.raise_for_status()
+        models = response.json().get('models', [])
+        usable = [
+            m.get('name') for m in models
+            if 'generateContent' in m.get('supportedGenerationMethods', [])
+        ]
+        print(f"DEBUG available Gemini models: {usable}")
+    except Exception as e:
+        print(f"DEBUG ListModels call failed: {type(e).__name__}: {e}")
+
+
 def _call_gemini(template, ocr_text):
     if not Config.GEMINI_API_KEY:
         print("DEBUG Gemini: GEMINI_API_KEY not set, skipping")
@@ -224,6 +249,9 @@ def _call_gemini(template, ocr_text):
             }
         }
         response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=GEMINI_TIMEOUT)
+        if response.status_code == 404:
+            print(f"DEBUG Gemini call error: 404 Not Found for model '{Config.GEMINI_MODEL}'")
+            log_available_gemini_models()
         response.raise_for_status()
         result = response.json()
 
@@ -279,6 +307,9 @@ def gemini_extract_invoice_full(file_path):
             'x-goog-api-key': Config.GEMINI_API_KEY
         }
         response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=GEMINI_VISION_TIMEOUT)
+        if response.status_code == 404:
+            print(f"DEBUG Gemini merged invoice call error: 404 Not Found for model '{Config.GEMINI_MODEL}'")
+            log_available_gemini_models()
         response.raise_for_status()
         text = response.json()['candidates'][0]['content']['parts'][0]['text']
         result = json.loads(_strip_markdown_fences(text))
