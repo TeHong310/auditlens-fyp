@@ -2441,3 +2441,101 @@ Setup/config needed:
      will appear automatically on the next 404) to see exactly which
      model name this key supports, then set GEMINI_MODEL to that value
      in Render's environment variables — no code change needed.
+
+------------------------------------------------------------------------------
+2026-07-16 - Investigate reported "two different Gemini keys" (404 vs 429
+             on the same model, same upload); add key/model diagnostic
+             logging; default GEMINI_MODEL back to gemini-2.5-flash
+
+What was changed:
+  - Grepped the entire backend for every place a Gemini key or model name
+    is read (os.environ.get, Config, hardcoded strings, alternate env var
+    names). Result: helpers/gemini_extractor.py,
+    helpers/authenticity_check.py, and helpers/anomaly_detector.py all
+    already read the key via `Config.GEMINI_API_KEY` only, and the first
+    two already share `Config.GEMINI_MODEL` (from the prior entry in this
+    file). No hardcoded key, no differently-named env var, no second
+    source exists anywhere in the code. The only other GEMINI_API_KEY
+    reference found was a local, gitignored `auditlens-backend/.env` file
+    that has never been committed and is not part of what Render deploys
+    — unrelated to production.
+  - config.py: `GEMINI_MODEL` default changed from "gemini-flash-latest"
+    back to "gemini-2.5-flash", now that ListModels has confirmed
+    "models/gemini-2.5-flash" is available to this key and supports
+    generateContent (see prior entry — the earlier 404 was investigated
+    with a different, unconfirmed model name).
+    Added a startup log, printed once per process when config.py is
+    first imported: "DEBUG Gemini key loaded: ...XXXX" (last 4 chars) or
+    "DEBUG Gemini key loaded: none" if unset.
+  - helpers/gemini_extractor.py: added `gemini_key_suffix()` (last 4
+    chars of `Config.GEMINI_API_KEY`, for log lines only). Every
+    generateContent call now logs "DEBUG Gemini call: model=<model>
+    key=...<suffix>" immediately before the request — in `_call_gemini()`
+    (PO/GR text extraction) and `gemini_extract_invoice_full()` (merged
+    invoice vision call).
+  - helpers/authenticity_check.py: imports `gemini_key_suffix` from
+    gemini_extractor.py (alongside the already-imported
+    `log_available_gemini_models`) and logs the same "DEBUG Gemini call:
+    model=... key=..." line in `_call_gemini_vision()` before its
+    request.
+  - helpers/anomaly_detector.py: NOT changed — it already reads
+    `Config.GEMINI_API_KEY` (same single source) but calls a separate
+    model (gemini-2.0-flash) for a different purpose, and wasn't named
+    in this request's scope (field extraction + authenticity).
+  - Google Vision OCR not touched, as instructed.
+
+Why:
+  - Reported symptom: the same upload logged a 404 from the field-
+    extraction call and a 429 from the authenticity call, both citing
+    "models/gemini-2.5-flash:generateContent" — read as evidence of two
+    different API keys (one without the model, one with exhausted
+    quota). Static analysis of the current code doesn't support that:
+    both call sites already funnel through the same `Config.
+    GEMINI_API_KEY` / `Config.GEMINI_MODEL`, so there is only one key in
+    play in this codebase today. Two plausible non-code explanations:
+    (a) Render was still serving a pre-redeploy build when those log
+    lines were captured (the prior session's fix hadn't been deployed
+    yet), or (b) the field-extraction and authenticity calls send
+    different payload shapes (text-only vs image) in close succession,
+    and Google's API can genuinely return different errors for each
+    even under one key. This can't be fully resolved by reading source
+    alone — the new "DEBUG Gemini call: model=... key=..." line on every
+    call, right next to any 404/429, is what actually answers it: if the
+    key suffix ever differs between two such log lines in Render's logs,
+    something outside this codebase (a second Render service, a
+    dashboard env var not what's expected, etc.) is involved; if it's
+    always identical, the 404/429 split is a Google-side or stale-
+    deploy artifact, not a two-key problem.
+
+Testing:
+  - `python -m py_compile` on config.py, helpers/gemini_extractor.py,
+    helpers/authenticity_check.py — compiles clean.
+  - Ran the module imports directly with a fake, non-live GEMINI_API_KEY
+    (no network call) and confirmed: the startup log fires with the
+    correct suffix; `gemini_extractor.GEMINI_URL` and
+    `authenticity_check.GEMINI_URL` are byte-for-byte identical and
+    contain "gemini-2.5-flash"; `gemini_extractor.gemini_key_suffix()`
+    and the same function imported into authenticity_check.py return
+    the identical suffix. This confirms, at the code level, that both
+    files are structurally incapable of using different keys or models
+    right now.
+  - Re-ran the existing offline mocked-404 test (scratchpad, not
+    committed, requests.post/get monkeypatched — no real network call)
+    to confirm the new per-call log line doesn't change the existing
+    404 -> ListModels -> fallback behavior.
+
+Setup/config needed:
+  1. Redeploy the Render backend for this fix to take effect.
+  2. After redeploying, trigger one invoice/PO/GR upload and check
+     Render's logs for the "DEBUG Gemini key loaded: ...XXXX" line
+     (once, at boot) and the "DEBUG Gemini call: model=... key=..."
+     lines (one per Gemini call) — confirm the key suffix is identical
+     everywhere. If it isn't, that points to something outside this
+     codebase (check Render's dashboard env vars directly, and confirm
+     there's only one backend service running).
+  3. If GEMINI_MODEL was previously set explicitly in Render's
+     environment variables (e.g. to "gemini-flash-latest" per the prior
+     entry's suggestion), you may want to unset it or change it to
+     "gemini-2.5-flash" now that that's confirmed available — the code
+     default is gemini-2.5-flash, but an explicit Render env var
+     overrides the code default.

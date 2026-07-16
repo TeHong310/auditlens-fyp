@@ -204,6 +204,13 @@ def _strip_markdown_fences(text):
     return text.strip()
 
 
+def gemini_key_suffix():
+    """Last 4 chars of the configured Gemini key, for log lines only —
+    lets two log lines be compared to confirm they used the same key."""
+    key = Config.GEMINI_API_KEY
+    return key[-4:] if key and len(key) >= 4 else '????'
+
+
 def log_available_gemini_models():
     """
     Safety net for a 404 from generateContent (wrong/unavailable model name
@@ -248,6 +255,7 @@ def _call_gemini(template, ocr_text):
                 "responseMimeType": "application/json"
             }
         }
+        print(f"DEBUG Gemini call: model={Config.GEMINI_MODEL} key=...{gemini_key_suffix()}")
         response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=GEMINI_TIMEOUT)
         if response.status_code == 404:
             print(f"DEBUG Gemini call error: 404 Not Found for model '{Config.GEMINI_MODEL}'")
@@ -306,6 +314,7 @@ def gemini_extract_invoice_full(file_path):
             'Content-Type': 'application/json',
             'x-goog-api-key': Config.GEMINI_API_KEY
         }
+        print(f"DEBUG Gemini call: model={Config.GEMINI_MODEL} key=...{gemini_key_suffix()}")
         response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=GEMINI_VISION_TIMEOUT)
         if response.status_code == 404:
             print(f"DEBUG Gemini merged invoice call error: 404 Not Found for model '{Config.GEMINI_MODEL}'")

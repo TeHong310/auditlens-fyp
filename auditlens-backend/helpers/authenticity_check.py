@@ -4,7 +4,7 @@ import base64
 import requests
 from config import Config
 from db import get_db_connection
-from helpers.gemini_extractor import log_available_gemini_models
+from helpers.gemini_extractor import log_available_gemini_models, gemini_key_suffix
 
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{Config.GEMINI_MODEL}:generateContent"
 GEMINI_TIMEOUT = 20
@@ -106,6 +106,7 @@ def _call_gemini_vision(file_path):
             'Content-Type': 'application/json',
             'x-goog-api-key': Config.GEMINI_API_KEY
         }
+        print(f"DEBUG Gemini call: model={Config.GEMINI_MODEL} key=...{gemini_key_suffix()}")
         response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=GEMINI_TIMEOUT)
         if response.status_code == 404:
             print(f"DEBUG Authenticity Gemini error: 404 Not Found for model '{Config.GEMINI_MODEL}'")

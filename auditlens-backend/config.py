@@ -24,9 +24,12 @@ class Config:
     # Google Cloud Vision API
     GOOGLE_VISION_API_KEY = os.environ.get('GOOGLE_VISION_API_KEY')
 
-    # Gemini API (semantic fallback for OCR field extraction)
+    # Gemini API — single source of truth for both the field-extraction
+    # call (gemini_extractor.py) and the authenticity call
+    # (authenticity_check.py). Both read Config.GEMINI_API_KEY /
+    # Config.GEMINI_MODEL only — never a hardcoded key or a second env var.
     GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
-    GEMINI_MODEL   = os.environ.get('GEMINI_MODEL', 'gemini-flash-latest')
+    GEMINI_MODEL   = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')
 
     # CORS - comma-separated list of allowed frontend origins
     FRONTEND_ORIGINS = [
@@ -37,3 +40,11 @@ class Config:
 
     # Temp diagnostic-endpoint guard (see routes/admin.py rerun-anomaly route)
     ADMIN_TOKEN = os.environ.get('ADMIN_TOKEN')
+
+
+# Startup log (once per process) so it's possible to confirm in Render logs
+# that every Gemini call in this process is using the same key.
+if Config.GEMINI_API_KEY:
+    print(f"DEBUG Gemini key loaded: ...{Config.GEMINI_API_KEY[-4:]}")
+else:
+    print("DEBUG Gemini key loaded: none (GEMINI_API_KEY not set)")
