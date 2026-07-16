@@ -2237,3 +2237,133 @@ Setup/config needed:
   1. Redeploy the Render backend for this fix to take effect — until
      redeployed, authenticity_checks will keep staying empty on
      Gemini failures.
+
+------------------------------------------------------------------------------
+2026-07-16 - Merge invoice field extraction + authenticity into ONE
+             Gemini call per upload; fix total_amount/tax_amount regex
+             grabbing the wrong line
+
+What was changed:
+  - helpers/gemini_extractor.py:
+    - Replaced the text-only `INVOICE_PROMPT` / `gemini_extract_invoice()`
+      (which sent OCR text and only extracted fields) with
+      `INVOICE_FULL_PROMPT` / `gemini_extract_invoice_full(file_path)` — a
+      single multimodal (image) call that returns BOTH the extracted
+      fields (invoice_number, vendor_name, invoice_date, total_amount,
+      tax_amount, currency) AND the authenticity signals (has_company_
+      chop/logo/name/signature, upload_source, signal_boxes) in one JSON
+      response. Added `_mime_type()` (mirrors the one already in
+      authenticity_check.py) and a separate `GEMINI_VISION_TIMEOUT = 20`
+      (image calls run slower than the existing text-only PO/GR calls,
+      which keep using `GEMINI_TIMEOUT = 15`, unchanged).
+    - The prompt explicitly tells Gemini: the total is the "Total"/"Grand
+      Total"/"Amount Due"/"Total (incl..." line, NEVER the Subtotal line
+      or the tax line itself, and that Total = Subtotal + tax (so it's
+      arithmetically the largest labeled amount) — this is the primary
+      fix for total_amount picking the wrong line, since Gemini reads the
+      actual table layout instead of linearized OCR text.
+    - PO/GR extraction (`gemini_extract_po`/`gemini_extract_gr`, text-only)
+      are untouched — out of scope, see note below.
+  - helpers/ocr_helper.py (`extract_fields`, invoice regex — the
+    always-available fallback for when the Gemini call above fails):
+    - Removed the old Gemini text-fallback block at the end of
+      `extract_fields()` — it used to fire whenever regex missed a field
+      and was the SECOND Gemini call per invoice upload (the reported
+      cause of hitting the free-tier per-minute limit, alongside the
+      authenticity vision call). `extract_fields()` is now regex-only;
+      the single merged vision call above is the primary source and
+      overrides these regex values in routes/documents.py when it
+      succeeds.
+    - Fixed total_amount: the per-line loop used to stop at the FIRST
+      "total"-labeled line and never look further. Reproduced two real
+      bugs this way — confirmed with an offline script before fixing:
+        - "Sub Total (RM): 1,820.00" (space, not "Subtotal") has a word
+          boundary before "total", so it matched the same \btotal
+          patterns as the real Total line and won by being first.
+        - More generally, nothing stopped an early Subtotal/SST-derived
+          match from being kept even if the real Total line appeared
+          later in the OCR text.
+      Now every line is checked (skipping lines matching \bsub[ -]?total\b
+      explicitly) and all matched amounts are collected into
+      `total_candidates`; the total is `max(total_candidates)` once the
+      line loop finishes. This is correct by construction for standard
+      Malaysian SME invoices (Total = Subtotal + SST/GST, so Total is
+      always the largest of the three) and is order-independent. Also
+      added "Amount Due" and "Total (incl..." as recognized labels, and
+      added \b to one unprotected fallback pattern
+      (`\btotal\s*(?:paid|amount|...)`).
+    - Fixed tax_amount: "SST 8% (RM): 145.60" was matching "8" (from the
+      "8%") instead of "145.60" — the SST/GST pattern's currency segment
+      didn't tolerate the "(RM)" parentheses between the percentage and
+      the amount, so the regex engine backtracked onto the bare digit
+      before the "%". Made the currency segment parenthesis-tolerant.
+      Also added a bare "Tax:" label pattern (anchored to a line start/end
+      so it can't fire inside e.g. "Tax Invoice No.").
+  - helpers/authenticity_check.py (`run_authenticity_check`):
+    - Added `precomputed_result` and `skip_gemini` params. When the
+      merged invoice call above already produced authenticity signals,
+      they're passed in as `precomputed_result` and NO second Gemini
+      vision call is made for authenticity. When the merged call fails,
+      `skip_gemini=True` is passed so this function goes straight to the
+      existing OCR-text fallback (see 2026-07-16 entry above) instead of
+      retrying Gemini — a retry would likely just hit the same 429/
+      timeout again and spend a call for nothing.
+  - routes/documents.py (`upload_document`, invoice path only):
+    - Calls `gemini_extract_invoice_full(file_path)` once, right after
+      OCR + regex extraction. If it succeeds, its fields override the
+      regex fields (only for keys it returned non-null); the same result
+      is passed straight into `run_authenticity_check(..., precomputed_
+      result=gemini_result, skip_gemini=not gemini_result)`. Net effect:
+      exactly one Gemini call per invoice upload, not two.
+    - PO/GR upload paths (`upload_purchase_order`/`upload_goods_receipt`)
+      are untouched. They already make only one Gemini call each today
+      (PO/GR field extraction is text-based and separate from the
+      authenticity vision call) — NOT the two-call problem reported here,
+      so left alone. Worth noting: they still make a *combined* two calls
+      total per PO/GR upload (one for fields, one for authenticity) the
+      same way invoices used to; merging those the same way was not part
+      of this request and hasn't been done.
+
+Why:
+  - Each invoice upload was making TWO separate Gemini calls (field
+    extraction fallback + authenticity vision), which on the free Gemini
+    tier's per-minute limit meant one of the two would frequently 429 —
+    usually authenticity, so chop/signature went undetected even when
+    Gemini was otherwise working.
+  - total_amount was empirically confirmed (via an offline script, not
+    guesswork) to grab the Subtotal value instead of the real Total on a
+    "Sub Total (RM)" / "SST 8% (RM)" / "TOTAL (RM)" layout — a first-
+    match-wins bug, not the exact scenario in the original bug report
+    (which used "Subtotal" as one word, already handled correctly by the
+    existing \b word-boundary), but the same underlying defect and very
+    plausibly what real invoices are triggering.
+
+Testing:
+  - `python -m py_compile` on all four changed files — compiles clean.
+  - Imported helpers.gemini_extractor, helpers.authenticity_check,
+    helpers.ocr_helper, and routes.documents directly with
+    GEMINI_API_KEY cleared — imports succeed, no network calls (both
+    gemini_extract_invoice_full() and the authenticity Gemini call
+    short-circuit and return None when the key is unset).
+  - Offline-only test script (scratchpad, not committed) calls
+    extract_fields() directly on four hardcoded OCR text samples — no
+    network, no DB, no Gemini call. Confirms:
+      - "Subtotal (RM): 1,820.00 / SST 8% (RM): 145.60 / TOTAL (RM):
+        1,965.60" -> total_amount=1965.6, tax_amount=145.6 (this exact
+        literal layout actually already worked before this session's
+        regex change, since "Subtotal" is one word with no \b before
+        "total" — confirmed by running the OLD code against it first).
+      - "Sub Total (RM): ..." (space) -> was total_amount=1820.0 (WRONG,
+        confirmed against the pre-fix code) -> now 1965.6, tax_amount=
+        145.6 (both correct after the fix).
+      - A "Grand Total" + 6% SST layout and an "Amount Due" + bare "Tax:"
+        layout -> both extract the correct total and tax amounts.
+  - Did not, and could not, test gemini_extract_invoice_full()'s actual
+    output quality against a live Gemini call, per "no live API in
+    tests" — its prompt correctness can only be confirmed once you
+    upload a real invoice after redeploying.
+
+Setup/config needed:
+  1. Redeploy the Render backend — until redeployed, invoice uploads
+     keep making the old two Gemini calls and keep the old total_amount/
+     tax_amount regex bugs.

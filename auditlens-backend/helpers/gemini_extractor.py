@@ -1,10 +1,12 @@
 import json
 import re
+import base64
 import requests
 from config import Config
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 GEMINI_TIMEOUT = 15
+GEMINI_VISION_TIMEOUT = 20
 
 DOCUMENT_QUALITY_NOTE = """These documents may be:
 - Scanned (CamScanner watermark visible)
@@ -18,47 +20,90 @@ Guidelines:
 - Prefer LABELED values over positional guessing
 - For amounts, always return numeric (float), never string with commas"""
 
-INVOICE_PROMPT = """You are an expert at extracting structured data from Malaysian SME business documents.
-""" + DOCUMENT_QUALITY_NOTE + """
+INVOICE_FULL_PROMPT = """You are an expert at extracting structured data from Malaysian SME
+business documents AND detecting authenticity signals on them. You are looking
+directly at the invoice IMAGE (not OCR text), so read the actual layout.
 
-Below is OCR-extracted text from an INVOICE document. Extract the fields listed.
+=== PART 1: FIELD EXTRACTION ===
+""" + DOCUMENT_QUALITY_NOTE + """
 
 IMPORTANT RULES:
 - The VENDOR is the entity ISSUING the invoice (the seller), typically shown as the company name in the document header at the top
 - The BUYER is who the invoice is billed TO ("Bill To", "Invoice To"), which is NOT the vendor
 - INVOICE NUMBER: Look for the invoice number in these labels (case-insensitive), in priority order:
-  1. "No.", "No :", "No. :", "No:", "Invoice No.", "Invoice No", "Invoice #", "Invoice Number", "Bill No.", "Doc No."
+  1. "No.", "No :", "No. :", "No:", "Invoice No.", "Invoice No", "Invoice #", "Invoice Number", "Bill No.", "Doc No.", "Tax Invoice No."
   2. If the label is followed by ":" or wide whitespace, the value is what comes after
   3. Value may contain letters, digits, slashes "/", hyphens "-", dots "."
   4. Return the FULL value including all slashes and special chars
-  5. Common Malaysian SME formats:
-     - INV-YYYY-NNNN (e.g. INV-2025-1004)
-     - AAA-YYYY-NN/NNN (e.g. SLP2026-01/004)
-     - Plain numeric (e.g. 12345)
-  6. Do NOT return partial values. If you see "SLP2026-01/004", return the whole thing.
-  7. Do NOT confuse invoice number with:
-     - PO Number / PO No. / Purchase Order No.
-     - Debtor Code / Customer Code
-     - Contact Person / Person In Charge
-     - Page number (e.g. "Page 1 of 1")
+  5. Do NOT confuse invoice number with PO Number, Debtor/Customer Code, Contact Person, or a page number
+- TOTAL AMOUNT: invoices list several amount lines — Subtotal, SST/GST/Tax, and the final Total.
+  1. Return the amount on the line labeled "Total", "Grand Total", "Amount Due", or "Total (incl ...)" —
+     this is the FINAL amount the customer must pay, after tax.
+  2. NEVER return the "Subtotal"/"Sub Total" line — that is the pre-tax amount, not the total.
+  3. NEVER return the SST/GST/tax line itself as the total — that is tax_amount, a separate field.
+  4. The total is arithmetically the LARGEST of the amount lines (Total = Subtotal + tax). If unsure
+     which line is which, the largest clearly-labeled amount is the total.
+- TAX AMOUNT: the SST/GST/service tax amount (e.g. the "SST 6%" or "SST 8%" line), not the percentage itself.
 - Return null for any field you cannot confidently extract
 - Amounts must be numbers only (no currency symbols, no commas, no "RM")
 - Dates in ISO format: YYYY-MM-DD
-- Return ONLY valid JSON, no markdown, no explanation, no code fences
 
-OCR TEXT:
----
-{ocr_text}
----
+=== PART 2: AUTHENTICITY SIGNALS ===
+Detect the following signals AND identify how this document was captured/uploaded.
 
-Return this exact JSON structure:
-{{
+Signal definitions:
+- has_company_chop: Round/square colored physical stamp (e.g. "IQC PASSED",
+  "RECEIVED", company chop with red/blue ink). NOT a printed logo.
+- has_company_logo: Distinct graphic/visual company logo (icon, stylized mark).
+  NOT just text.
+- has_company_name: Company's registered name printed clearly, usually in header.
+  Typed text counts.
+- has_signature: Handwritten signature (cursive strokes, ink pen marks).
+  NOT a typed name or printed name.
+
+Upload source definitions:
+- phone_photo: Handheld phone photo — visible perspective distortion, uneven
+  lighting, shadows, possibly angled or slightly blurred edges
+- scanned: Uniform lighting, straight edges, may have CamScanner/scanner
+  watermark visible, cleaner than phone photo
+- digital_native: Perfectly clean text and lines, no image compression
+  artifacts, appears to be direct PDF export from software (SAP, Word, etc.)
+- webcam: Low resolution, front-lit, static composition
+
+Be strict — only mark a signal true if clearly visible.
+
+signal_boxes rules:
+- Only include a key in signal_boxes for a signal that is true above. If a
+  signal is false, omit its key from signal_boxes entirely.
+- Each box is [ymin, xmin, ymax, xmax], normalized to a 0-1000 scale relative
+  to the full image (top-left is [0,0], bottom-right is [1000,1000]).
+- If has_company_chop or has_company_logo is true, the box should tightly
+  bound that specific mark (compact box).
+- If has_company_name or has_signature is true, the box should bound that
+  specific text/mark.
+
+Return ONLY valid JSON, no markdown, no explanation, no code fences. Return
+this exact JSON structure:
+{
   "invoice_number": "string or null",
   "vendor_name": "string or null (the SELLER shown in the header)",
   "invoice_date": "YYYY-MM-DD or null",
   "total_amount": number or null,
-  "tax_amount": number or null
-}}"""
+  "tax_amount": number or null,
+  "currency": "string or null (e.g. RM, MYR, USD)",
+  "has_company_chop": false,
+  "has_company_logo": false,
+  "has_company_name": false,
+  "has_signature": false,
+  "upload_source": "phone_photo",
+  "notes": "<one short sentence>",
+  "signal_boxes": {
+    "has_company_chop": [0, 0, 0, 0],
+    "has_company_logo": [0, 0, 0, 0],
+    "has_company_name": [0, 0, 0, 0],
+    "has_signature": [0, 0, 0, 0]
+  }
+}"""
 
 PO_PROMPT = """You are an expert at extracting structured data from Malaysian SME business documents.
 """ + DOCUMENT_QUALITY_NOTE + """
@@ -191,10 +236,57 @@ def _call_gemini(template, ocr_text):
         return {}
 
 
-def gemini_extract_invoice(ocr_text):
-    result = _call_gemini(INVOICE_PROMPT, ocr_text)
-    print(f"DEBUG Gemini extracted invoice: {result}")
-    return result
+def _mime_type(file_path):
+    ext = file_path.lower().rsplit('.', 1)[-1]
+    if ext == 'pdf':
+        return 'application/pdf'
+    if ext == 'png':
+        return 'image/png'
+    return 'image/jpeg'
+
+
+def gemini_extract_invoice_full(file_path):
+    """
+    Single merged Gemini vision call for an invoice: extracted fields AND
+    authenticity signals in one request/response, so an invoice upload only
+    ever spends one Gemini call (avoids the free-tier per-minute limit that
+    two separate calls — field extraction + authenticity — used to hit).
+    Returns the parsed dict, or None if the call fails for any reason
+    (429, timeout, network, bad JSON) or GEMINI_API_KEY is unset.
+    """
+    if not Config.GEMINI_API_KEY:
+        print("DEBUG Gemini: GEMINI_API_KEY not set, skipping merged invoice call")
+        return None
+
+    try:
+        with open(file_path, 'rb') as f:
+            data = base64.b64encode(f.read()).decode('utf-8')
+
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"inline_data": {"mime_type": _mime_type(file_path), "data": data}},
+                    {"text": INVOICE_FULL_PROMPT}
+                ]
+            }],
+            "generationConfig": {
+                "temperature": 0,
+                "responseMimeType": "application/json"
+            }
+        }
+        headers = {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': Config.GEMINI_API_KEY
+        }
+        response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=GEMINI_VISION_TIMEOUT)
+        response.raise_for_status()
+        text = response.json()['candidates'][0]['content']['parts'][0]['text']
+        result = json.loads(_strip_markdown_fences(text))
+        print(f"DEBUG Gemini merged invoice+authenticity result: {result}")
+        return result
+    except Exception as e:
+        print(f"DEBUG Gemini merged invoice call error: {type(e).__name__}: {e}")
+        return None
 
 
 def gemini_extract_po(ocr_text):

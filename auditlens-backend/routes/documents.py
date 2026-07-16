@@ -9,6 +9,7 @@ from helpers.audit_log import log_audit
 from helpers.ocr_helper import run_ocr, extract_fields, extract_po_fields, extract_gr_fields, calculate_confidence, parse_date
 from helpers.anomaly_detector import run_anomaly_detection
 from helpers.authenticity_check import run_authenticity_check
+from helpers.gemini_extractor import gemini_extract_invoice_full
 from config import Config
 
 documents_bp = Blueprint('documents', __name__)
@@ -73,6 +74,18 @@ def upload_document():
         confidence = float(confidence)
         fields     = extract_fields(ocr_text)
 
+        # Single merged Gemini vision call: fields + authenticity signals
+        # in one request, so an invoice upload never spends more than one
+        # Gemini call (avoids the free-tier per-minute limit that two
+        # separate calls — field extraction + authenticity — used to hit).
+        # Falls back to the regex fields above and the OCR-text
+        # authenticity heuristic (below) if this call fails.
+        gemini_result = gemini_extract_invoice_full(file_path)
+        if gemini_result:
+            for key in ('invoice_number', 'vendor_name', 'invoice_date', 'total_amount', 'tax_amount'):
+                if gemini_result.get(key) is not None:
+                    fields[key] = gemini_result[key]
+
         if fields['total_amount'] is not None:
             fields['total_amount'] = float(fields['total_amount'])
         if fields['tax_amount'] is not None:
@@ -105,7 +118,9 @@ def upload_document():
             print(f"DEBUG anomaly detection error: {type(e).__name__}: {e}")
 
         try:
-            run_authenticity_check(document_id, file_path, 'invoice', ocr_text)
+            run_authenticity_check(document_id, file_path, 'invoice', ocr_text,
+                                    precomputed_result=gemini_result,
+                                    skip_gemini=not gemini_result)
         except Exception as e:
             print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
 

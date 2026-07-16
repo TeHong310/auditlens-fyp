@@ -211,6 +211,8 @@ def extract_fields(ocr_text):
             invoice_to_index = i
             break
 
+    total_candidates = []
+
     for i, line in enumerate(lines):
         line_clean = line.strip()
         next_line  = lines[i + 1].strip() if i + 1 < len(lines) else ''
@@ -302,17 +304,26 @@ def extract_fields(ocr_text):
                         break
 
         # ── TOTAL AMOUNT ──────────────────────────────────
-        if fields['total_amount'] is None:
+        # Collect every "total"-labeled amount on the invoice (skipping
+        # Subtotal/Sub Total lines) instead of stopping at the first match —
+        # OCR line order doesn't guarantee Subtotal comes before Total, and
+        # "Sub Total (RM)" (with a space) would otherwise match the same
+        # \btotal patterns as the real "Total (RM)" line. The true total is
+        # always the largest of these (Total = Subtotal + tax), so the max
+        # is taken once the whole line loop finishes.
+        if not re.search(r'\bsub[\s\-]?total\b', line_clean, re.IGNORECASE):
             amount_patterns = [
                 r'\btotal\s*\(\s*(?:rm|myr)\s*\)\s*[:\-]?\s*([\d,]+\.?\d*)',
                 r'total\s*net\s*amount\s*(?:\(rm\))?\s*[:\-]?\s*([\d,]+\.?\d*)',
                 r'total\s*payable\s*amount\s*[:\-]?\s*([\d,]+\.?\d*)',
                 r'total\s*including\s*(?:tax|sst|gst)\s*[:\-]?\s*([\d,]+\.?\d*)',
+                r'total\s*\(?\s*incl\.?(?:uding)?\s*(?:tax|sst|gst)?\s*\)?\s*[:\-]?\s*([\d,]+\.?\d*)',
                 r'total\s*sales\s*\(inclusive\s*of\s*sst\)\s*([\d,]+\.?\d*)',
                 r'total\s*paid\s*(?:rm|myr)?\s*([\d,]+\.?\d*)',
                 r'total\s*amount\s*[:\-]?\s*(?:rm|myr)?\s*([\d,]+\.?\d*)',
                 r'total\s*current\s*charges\s*(?:myr|rm)?\s*([\d,]+\.?\d*)',
                 r'grand\s*total\s*[:\-]?\s*(?:rm|myr)?\s*([\d,]+\.?\d*)',
+                r'amount\s*due\s*[:\-]?\s*(?:rm|myr)?\s*([\d,]+\.?\d*)',
                 r'^total\s*[:\-]?\s*(?:rm|myr)?\s*([\d,]+\.?\d*)$',
                 r'^amount\s*:\s*([\d,]+\.?\d*)$',
             ]
@@ -321,23 +332,28 @@ def extract_fields(ocr_text):
                 if match:
                     val = extract_amount(match.group(1))
                     if val and val > 1:
-                        fields['total_amount'] = val
-                        break
+                        total_candidates.append(val)
+                    break
 
-            if fields['total_amount'] is None:
-                if re.search(r'^total\s*$', line_clean, re.IGNORECASE):
-                    val = extract_amount(next_line)
-                    if val and val > 1:
-                        fields['total_amount'] = val
+            if re.search(r'^total\s*$', line_clean, re.IGNORECASE):
+                val = extract_amount(next_line)
+                if val and val > 1:
+                    total_candidates.append(val)
 
         # ── TAX AMOUNT ────────────────────────────────────
         if fields['tax_amount'] is None:
             tax_patterns = [
                 r'service\s*tax\s*\(\d+%.*?\)\s*([\d,]+\.?\d*)',
                 r'service\s*tax\s*@\s*\d+%.*?([\d,]+\.?\d*)',
-                r'(?:service\s*tax|sst|gst)\s*[:\-@]?\s*\d*%?\s*(?:rm|myr)?\s*([\d,]+\.?\d*)',
+                # "SST 8% (RM): 145.60" — the %-then-currency gap may be
+                # wrapped in parens ("(RM)"), which the currency group must
+                # tolerate or it backtracks onto the bare percentage digit.
+                r'(?:service\s*tax|sst|gst)\s*[:\-@]?\s*\d*%?\s*\(?\s*(?:rm|myr)?\s*\)?\s*[:\-]?\s*([\d,]+\.?\d*)',
                 r'total\s*tax\s*amount\s*[:\-]?\s*([\d,]+\.?\d*)',
                 r'tax\s*amount\s*[:\-]?\s*(?:rm|myr)?\s*([\d,]+\.?\d*)',
+                # Bare "Tax:" label (anchored so it doesn't fire mid-line,
+                # e.g. inside "Tax Invoice No.")
+                r'^tax\s*[:\-]\s*(?:rm|myr)?\s*([\d,]+\.?\d*)$',
             ]
             for p in tax_patterns:
                 match = re.search(p, line_clean, re.IGNORECASE)
@@ -346,6 +362,9 @@ def extract_fields(ocr_text):
                     if val is not None:
                         fields['tax_amount'] = val
                         break
+
+    if total_candidates:
+        fields['total_amount'] = max(total_candidates)
 
     # ══════════════════════════════════════════════════════
     # FALLBACKS — Generic, works for any invoice
@@ -388,7 +407,7 @@ def extract_fields(ocr_text):
         for pattern in [
             r'\btotal\s*\(\s*(?:rm|myr)\s*\)\s*[:\-]?\s*([\d,]+\.?\d*)',
             r'total\s*net\s*amount\s*(?:\(rm\))?\s*[:\-]?\s*([\d,]+\.?\d*)',
-            r'total\s*(?:paid|amount|charges?|due|payable|net)\s*(?:rm|myr)?\s*([\d,]+\.?\d*)',
+            r'\btotal\s*(?:paid|amount|charges?|due|payable|net)\s*(?:rm|myr)?\s*([\d,]+\.?\d*)',
             r'grand\s*total\s*[:\-]?\s*(?:rm|myr)?\s*([\d,]+\.?\d*)',
             r'(?:rm|myr)\s*:?\s*([\d,]+\.?\d*)\s*$',
             r'cash\s*amt\s*[:\-]?\s*([\d,]+\.?\d*)',
@@ -438,20 +457,11 @@ def extract_fields(ocr_text):
                             fields['invoice_number'] = next_val
                             break
 
-    # ── Gemini semantic fallback for missed fields ──
-    missing = [k for k, v in fields.items() if v is None]
-    if missing:
-        print(f"DEBUG Regex missed invoice fields: {missing}, calling Gemini fallback")
-        try:
-            from helpers.gemini_extractor import gemini_extract_invoice
-            g = gemini_extract_invoice(ocr_text)
-            for k in missing:
-                if g.get(k) is not None:
-                    fields[k] = g[k]
-                    print(f"DEBUG Gemini filled invoice.{k} = {g[k]}")
-        except Exception as e:
-            print(f"DEBUG Gemini invoice fallback error: {e}")
-
+    # Note: no Gemini call here — extract_fields() is regex-only. The
+    # single merged Gemini vision call (fields + authenticity in one
+    # request) happens in routes/documents.py's upload_document() and
+    # overrides these regex values when it succeeds, so an invoice
+    # upload never makes more than one Gemini call.
     print(f"DEBUG extracted fields: {fields}")
     return fields
 

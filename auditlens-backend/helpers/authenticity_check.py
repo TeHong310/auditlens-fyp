@@ -166,7 +166,8 @@ def _compute_authenticity_status(document_type, signals):
     return 'passed' if passed else 'warning'
 
 
-def run_authenticity_check(document_id, file_path, document_type, ocr_text=None):
+def run_authenticity_check(document_id, file_path, document_type, ocr_text=None,
+                            precomputed_result=None, skip_gemini=False):
     """
     Main entry. NEVER raises — pipeline safe.
     document_type: 'invoice' | 'po' | 'gr' (from upload endpoint, required)
@@ -174,18 +175,32 @@ def run_authenticity_check(document_id, file_path, document_type, ocr_text=None)
     when available and falling back to OCR-text heuristics when it isn't
     (429/timeout/network/parse failure) — Gemini is best-effort, not a
     hard dependency.
+
+    precomputed_result: authenticity signals already obtained from a Gemini
+      vision call made elsewhere (e.g. the merged invoice extraction +
+      authenticity call) — skips calling Gemini again here.
+    skip_gemini: the caller already tried a Gemini vision call for this
+      document and it failed — go straight to the OCR-text fallback
+      instead of retrying Gemini (a retry would likely just hit the same
+      429/timeout again and spend a call for nothing).
+
     Returns check_id on success, None on failure (e.g. document doesn't exist).
     """
     try:
-        result = _call_gemini_vision(file_path)
-        if result:
+        if precomputed_result:
+            result = precomputed_result
             engine = 'gemini'
-            print("DEBUG Authenticity: engine=gemini")
+            print("DEBUG Authenticity: engine=gemini (merged call)")
         else:
-            engine = 'fallback'
-            print("DEBUG Authenticity: gemini failed (no result — see error above, "
-                  "or GEMINI_API_KEY unset), using fallback")
-            result = _fallback_from_ocr_text(ocr_text)
+            result = None if skip_gemini else _call_gemini_vision(file_path)
+            if result:
+                engine = 'gemini'
+                print("DEBUG Authenticity: engine=gemini")
+            else:
+                engine = 'fallback'
+                print("DEBUG Authenticity: gemini failed (no result — see error above, "
+                      "or GEMINI_API_KEY unset), using fallback")
+                result = _fallback_from_ocr_text(ocr_text)
 
         chop = bool(result.get('has_company_chop', False))
         logo = bool(result.get('has_company_logo', False))
