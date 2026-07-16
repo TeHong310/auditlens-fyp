@@ -2539,3 +2539,114 @@ Setup/config needed:
      "gemini-2.5-flash" now that that's confirmed available — the code
      default is gemini-2.5-flash, but an explicit Render env var
      overrides the code default.
+
+------------------------------------------------------------------------------
+2026-07-16 - Re-verify single Gemini key/model source; render PDF pages
+             to images so authenticity vision can actually see them
+
+FIX 1 — re-verified single Gemini key/model source:
+  - Grepped the whole backend again for every Gemini key/model read
+    (os.environ.get, Config, hardcoded strings, alternate env var
+    names). Result unchanged from the prior entry: helpers/
+    gemini_extractor.py, helpers/authenticity_check.py, and helpers/
+    anomaly_detector.py all read `Config.GEMINI_API_KEY` only; the
+    first two share `Config.GEMINI_MODEL`; the startup key-suffix log
+    and per-call "model=... key=..." log lines added in the prior
+    entry are already in place. No hardcoded key, no second env var,
+    no code change needed here — this entry's actual code changes are
+    entirely FIX 2 below.
+  - Re-confirmed offline (fake key, no network) that both files still
+    build byte-identical GEMINI_URL values and report the identical
+    key suffix from one Config source.
+  - If a 404 (field extraction) and a 429 (authenticity) are still
+    seen together in Render's logs after redeploying this and the
+    prior entry, the "DEBUG Gemini call: model=... key=..." line
+    immediately before each request is the way to settle it — compare
+    the key suffix on the two lines directly in the logs. See the
+    prior entry's Why section for the two non-key-mixup explanations
+    that remain possible (stale pre-redeploy build, or Google
+    returning different errors for the text-only vs image-based
+    request shapes under the same key).
+
+FIX 2 — render PDF pages to images for the authenticity vision call:
+What was changed:
+  - helpers/gemini_extractor.py: added `prepare_gemini_image_payload
+    (file_path)`, returning (mime_type, base64_data) ready for a
+    Gemini inline_data part. For a .pdf file, it renders the FIRST
+    PAGE to a PNG image via PyMuPDF (`fitz`) at 2x zoom (~144 DPI —
+    enough detail for chop/signature, keeps the payload small) instead
+    of sending the raw PDF bytes; for image files it reads and
+    base64-encodes them unchanged, same as before. Chose PyMuPDF over
+    pdf2image because it needs no system dependency (no poppler-utils,
+    no Dockerfile change) — pdf2image is already used elsewhere in
+    this codebase (ocr_helper.py, for Google Vision OCR) but that's a
+    separate, already-working pipeline that wasn't touched.
+  - `gemini_extract_invoice_full()` (gemini_extractor.py) and
+    `_call_gemini_vision()` (authenticity_check.py) both now call this
+    shared helper instead of sending the file's raw bytes with a
+    guessed mime type. The old duplicate `_mime_type()` helper in each
+    file is gone, replaced by the one shared function.
+  - Scope note: the request named only helpers/authenticity_check.py
+    for this fix, but `gemini_extract_invoice_full()` is the call that
+    actually supplies authenticity signals for INVOICE uploads (the
+    merged call from a prior session) — `_call_gemini_vision()` in
+    authenticity_check.py is only reached for PO/GR uploads, or as a
+    fallback when the merged call's `precomputed_result` isn't
+    available. Fixing only authenticity_check.py would have left
+    invoice PDFs (probably the most common PDF case) still sending raw
+    PDF bytes and missing the point of this fix, so both call sites
+    were updated with the same shared helper. Flagging this scope
+    extension explicitly rather than silently doing it.
+  - requirements.txt: added `PyMuPDF==1.28.0`.
+  - Dockerfile: NOT changed. PyMuPDF ships prebuilt wheels and needs no
+    system package (confirmed by installing and rendering a real
+    sample PDF locally without any extra apt packages) — poppler-utils
+    stays in the Dockerfile only because pdf2image (OCR pipeline)
+    still needs it.
+  - Frontend: NOT changed. The PDF overlay UI limitation ("overlay
+    markers aren't available for PDF files" in auditor-authenticity-
+    detail.component.html) is about rendering the ORIGINAL PDF file
+    with marker overlays in the browser, which is a separate,
+    later piece of work per the request ("this also enables the
+    overlay markers for PDFs later ... for now at least populate the
+    signals + boxes correctly") — signal_boxes are now correctly
+    populated and stored for PDFs, ready for that later frontend work.
+
+Why:
+  - Gemini vision calls for PDFs were sending the raw PDF bytes with
+    mime_type "application/pdf". Even though Gemini's API accepts PDF
+    as inline_data, it doesn't reliably produce visual-signal
+    detection or bounding boxes for a rasterized-page-level task like
+    spotting a chop stamp or a signature — those need an actual page
+    image. Rendering the first page to a PNG and sending that instead
+    is what the vision call actually needs to do this task.
+
+Testing:
+  - `python -m py_compile` on helpers/gemini_extractor.py, helpers/
+    authenticity_check.py, routes/documents.py — compiles clean.
+  - Imported both modules directly with GEMINI_API_KEY unset (no
+    network call) — confirms no import-time errors from the new
+    `fitz` dependency or the refactor.
+  - Installed PyMuPDF locally and ran `prepare_gemini_image_payload()`
+    directly (offline, no Gemini call) against a real sample PDF
+    already in uploads/ (20260407_142009_Dental.pdf): confirmed the
+    output is mime_type "image/png" and the decoded bytes start with
+    the PNG signature (\x89PNG\r\n\x1a\n), NOT the PDF signature
+    (%PDF) — i.e. it's genuinely a rendered image, not a pass-through
+    of the original file. Also confirmed a non-PDF (fake .jpg) file is
+    passed through byte-for-byte unchanged. Re-ran the prior two
+    offline regression scripts (404 safety net, total_amount/
+    tax_amount regex) to confirm neither regressed.
+  - Did not, and could not, verify actual Gemini-side chop/logo/
+    signature/bbox detection quality against a live call, per "verify
+    offline where possible" — that can only be confirmed by uploading
+    a real PDF after redeploying.
+
+Setup/config needed:
+  1. This changes requirements.txt (new dependency) — Render needs a
+     FULL rebuild, not just a restart, for PyMuPDF to actually be
+     installed. Redeploy accordingly.
+  2. After redeploying, upload a PDF invoice/PO/GR and check the
+     Authenticity Detail view / DB row for that document — chop/logo/
+     signature and their signal_boxes should now be populated instead
+     of everything defaulting to False with empty boxes.

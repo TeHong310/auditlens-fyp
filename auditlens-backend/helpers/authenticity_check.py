@@ -1,10 +1,11 @@
 import re
 import json
-import base64
 import requests
 from config import Config
 from db import get_db_connection
-from helpers.gemini_extractor import log_available_gemini_models, gemini_key_suffix
+from helpers.gemini_extractor import (
+    log_available_gemini_models, gemini_key_suffix, prepare_gemini_image_payload
+)
 
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{Config.GEMINI_MODEL}:generateContent"
 GEMINI_TIMEOUT = 20
@@ -64,15 +65,6 @@ Upload source definitions:
 Be strict — only mark signal true if clearly visible."""
 
 
-def _mime_type(file_path):
-    ext = file_path.lower().rsplit('.', 1)[-1]
-    if ext == 'pdf':
-        return 'application/pdf'
-    if ext == 'png':
-        return 'image/png'
-    return 'image/jpeg'
-
-
 def _strip_markdown_fences(text):
     text = text.strip()
     text = re.sub(r'^```(?:json)?\s*', '', text)
@@ -81,19 +73,24 @@ def _strip_markdown_fences(text):
 
 
 def _call_gemini_vision(file_path):
-    """Call Gemini vision with the document. Returns parsed JSON dict or None."""
+    """
+    Call Gemini vision with the document. PDFs are rendered to their first
+    page as an image first (see prepare_gemini_image_payload in
+    gemini_extractor.py) so chop/logo/signature and their bounding boxes
+    can actually be detected — raw PDF bytes don't reliably produce that.
+    Returns parsed JSON dict or None.
+    """
     if not Config.GEMINI_API_KEY:
         print("DEBUG Authenticity: GEMINI_API_KEY not set, skipping")
         return None
 
     try:
-        with open(file_path, 'rb') as f:
-            data = base64.b64encode(f.read()).decode('utf-8')
+        mime_type, data = prepare_gemini_image_payload(file_path)
 
         payload = {
             "contents": [{
                 "parts": [
-                    {"inline_data": {"mime_type": _mime_type(file_path), "data": data}},
+                    {"inline_data": {"mime_type": mime_type, "data": data}},
                     {"text": AUTHENTICITY_PROMPT}
                 ]
             }],

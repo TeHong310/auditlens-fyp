@@ -2,12 +2,14 @@ import json
 import re
 import base64
 import requests
+import fitz  # PyMuPDF
 from config import Config
 
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{Config.GEMINI_MODEL}:generateContent"
 GEMINI_MODELS_LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 GEMINI_TIMEOUT = 15
 GEMINI_VISION_TIMEOUT = 20
+PDF_RENDER_ZOOM = 2.0  # ~144 DPI — enough detail for chop/logo/signature, keeps payload small
 
 DOCUMENT_QUALITY_NOTE = """These documents may be:
 - Scanned (CamScanner watermark visible)
@@ -272,13 +274,31 @@ def _call_gemini(template, ocr_text):
         return {}
 
 
-def _mime_type(file_path):
+def prepare_gemini_image_payload(file_path):
+    """
+    Returns (mime_type, base64_data) for a Gemini inline_data part.
+
+    PDFs are rendered to their FIRST PAGE as a PNG image (PyMuPDF/fitz —
+    no system dependency, unlike pdf2image+poppler) rather than sent as
+    raw PDF bytes: sending a PDF's raw bytes doesn't reliably produce
+    visual-signal detection or [ymin,xmin,ymax,xmax] bounding boxes for
+    chop/logo/signature, since that's a rasterized-page-image task, not
+    a document-text task. Image files are sent through unchanged.
+    """
     ext = file_path.lower().rsplit('.', 1)[-1]
     if ext == 'pdf':
-        return 'application/pdf'
-    if ext == 'png':
-        return 'image/png'
-    return 'image/jpeg'
+        doc = fitz.open(file_path)
+        try:
+            pix = doc[0].get_pixmap(matrix=fitz.Matrix(PDF_RENDER_ZOOM, PDF_RENDER_ZOOM))
+            png_bytes = pix.tobytes('png')
+        finally:
+            doc.close()
+        return 'image/png', base64.b64encode(png_bytes).decode('utf-8')
+
+    with open(file_path, 'rb') as f:
+        data = base64.b64encode(f.read()).decode('utf-8')
+    mime = 'image/png' if ext == 'png' else 'image/jpeg'
+    return mime, data
 
 
 def gemini_extract_invoice_full(file_path):
@@ -288,20 +308,20 @@ def gemini_extract_invoice_full(file_path):
     ever spends one Gemini call (avoids the free-tier per-minute limit that
     two separate calls — field extraction + authenticity — used to hit).
     Returns the parsed dict, or None if the call fails for any reason
-    (429, timeout, network, bad JSON) or GEMINI_API_KEY is unset.
+    (429, timeout, network, bad JSON, PDF render failure) or GEMINI_API_KEY
+    is unset.
     """
     if not Config.GEMINI_API_KEY:
         print("DEBUG Gemini: GEMINI_API_KEY not set, skipping merged invoice call")
         return None
 
     try:
-        with open(file_path, 'rb') as f:
-            data = base64.b64encode(f.read()).decode('utf-8')
+        mime_type, data = prepare_gemini_image_payload(file_path)
 
         payload = {
             "contents": [{
                 "parts": [
-                    {"inline_data": {"mime_type": _mime_type(file_path), "data": data}},
+                    {"inline_data": {"mime_type": mime_type, "data": data}},
                     {"text": INVOICE_FULL_PROMPT}
                 ]
             }],
