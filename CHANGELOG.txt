@@ -2799,3 +2799,148 @@ Setup/config needed:
      env var right now, and the "DEBUG Gemini request (...): model=...
      url=..." line on the next Gemini call to confirm the final URL is
      well-formed.
+
+------------------------------------------------------------------------------
+2026-07-16 - Switch every Gemini call from raw HTTP to the official
+             google-genai SDK — this account's "AQ."-prefixed API key
+             is rejected by raw REST calls to generateContent
+
+Root cause (per your diagnosis, and consistent with everything found in
+the prior three entries — the key and model were never the problem):
+  Google now issues some API keys with an "AQ." prefix instead of the
+  older "AIza" format. AQ. keys are rejected (404/401) by raw HTTP calls
+  to generativelanguage.googleapis.com's generateContent endpoint, even
+  with a valid key and a model confirmed available via ListModels — but
+  work correctly through the official google-genai SDK, which handles
+  that key format's auth internally. This explains why ListModels (a
+  simpler REST call) always worked while every generateContent call
+  (field extraction, authenticity, anomaly explanation) kept failing
+  with 404/429 no matter what was fixed about the model name or key
+  wiring in the previous three entries — the actual problem was the
+  HTTP transport itself, not anything this session's earlier fixes
+  could reach.
+
+What was changed:
+  - requirements.txt: added `google-genai==2.12.1`.
+  - helpers/gemini_extractor.py — this is now the ONLY place that talks
+    to the Gemini SDK; every other file goes through it:
+    - Added `_get_client()`: a lazily-built, shared
+      `google.genai.Client(api_key=Config.GEMINI_API_KEY)`, constructed
+      once per process.
+    - Added `call_gemini_sdk(text_prompt, image=None, context='',
+      timeout_ms=...)` — the single choke point every generateContent
+      call in the codebase now goes through. Builds
+      `[Part.from_bytes(...), Part.from_text(...)]` (or just
+      `Part.from_text` for text-only calls), calls
+      `client.models.generate_content(model=Config.GEMINI_MODEL,
+      contents=parts, config=GenerateContentConfig(temperature=0,
+      response_mime_type='application/json',
+      http_options=HttpOptions(timeout=timeout_ms)))`, and returns
+      `response.text` (or None on any failure). Catches
+      `google.genai.errors.APIError` specifically to read `.code`/
+      `.status`/`.message` and re-trigger `log_available_gemini_models()`
+      on a 404, same diagnostic behavior as the raw-HTTP version had.
+    - `_call_gemini()` (PO/GR text extraction), `gemini_extract_
+      invoice_full()` (merged invoice extraction+authenticity vision
+      call) both now call `call_gemini_sdk()` instead of building a
+      `requests.post(...)` call by hand.
+    - `prepare_gemini_image_payload()` now returns (mime_type,
+      RAW BYTES) instead of (mime_type, base64 string) — it feeds
+      `Part.from_bytes` directly, which wants raw bytes; the SDK
+      handles its own encoding, so the manual base64 step (and the
+      `base64` import) is gone.
+    - Removed: `GEMINI_URL`, `GEMINI_TIMEOUT`, `GEMINI_VISION_TIMEOUT`
+      (no more URL to build — the SDK takes `model=` as a parameter),
+      `log_gemini_request()` (its repr(model)/URL logging is folded
+      directly into `call_gemini_sdk()`, simplified since there's no
+      URL to show anymore). `log_available_gemini_models()` is
+      unchanged — ListModels stays a plain `requests.get` call since
+      it's confirmed to work fine even with an AQ. key.
+  - helpers/authenticity_check.py: `_call_gemini_vision()` now calls
+    `call_gemini_sdk(AUTHENTICITY_PROMPT, image=..., context=
+    'authenticity', timeout_ms=GEMINI_VISION_TIMEOUT_MS)` instead of
+    building its own `requests.post`. Removed the now-unused `requests`
+    import and the local `GEMINI_URL`/`GEMINI_TIMEOUT` constants.
+  - helpers/anomaly_detector.py: `get_gemini_explanation()` now calls
+    `call_gemini_sdk(prompt, context='anomaly explanation')`. Removed
+    the now-unused `requests` import and local `GEMINI_URL`/
+    `GEMINI_TIMEOUT` constants (these had already been pointed at
+    `Config.GEMINI_MODEL` in the prior entry — now they're gone
+    entirely along with the raw HTTP call itself).
+  - Google Vision OCR (helpers/ocr_helper.py's `run_google_vision_ocr`)
+    not touched, as instructed — it's a different Google API, already
+    working, and was never part of the generateContent 404/429 issue.
+  - The text/regex fallback paths (`extract_fields`/`extract_po_fields`/
+    `extract_gr_fields` regex, `authenticity_check._fallback_from_
+    ocr_text`, `anomaly_detector._fallback_explanation`) are completely
+    unchanged — `call_gemini_sdk()` returning None on any failure is
+    exactly the same signal these fallbacks were already built to react
+    to, so no caller-side logic needed to change.
+  - GEMINI_MODEL stays "gemini-2.5-flash" (Config.py's normalization
+    from the prior entry — strip a stray "models/" prefix and
+    whitespace — is untouched and still applies; it's equally relevant
+    for the SDK, which also takes a bare model string).
+
+Testing:
+  - `python -m py_compile` on gemini_extractor.py, authenticity_check.py,
+    anomaly_detector.py, config.py, ocr_helper.py, routes/documents.py —
+    compiles clean.
+  - Installed the `google-genai` package and inspected its actual
+    installed API (not assumed from memory) before writing any code
+    against it: `genai.Client(api_key=...)` constructs without
+    validating the key synchronously; `client.models.generate_content`
+    signature; `types.Part.from_bytes`/`from_text`;
+    `types.GenerateContentConfig` field names (`temperature`,
+    `response_mime_type`, `http_options`); `types.HttpOptions.timeout`
+    (milliseconds); `errors.APIError.code`/`.status`/`.message`.
+  - Full offline import of gemini_extractor.py, authenticity_check.py,
+    anomaly_detector.py, and routes/documents.py together with
+    GEMINI_API_KEY unset — imports cleanly, `call_gemini_sdk()` with no
+    key returns None immediately with no network attempt (confirmed by
+    absence of any call).
+  - Offline-only test script (scratchpad, not committed) mocks
+    `_get_client()` to return a fake client whose
+    `models.generate_content` is fully controlled — no live network
+    call anywhere in this test:
+      - Text-only call: confirms `contents` has 1 part and `model=
+        'gemini-2.5-flash'` is passed through.
+      - Image+text call: confirms `contents` has 2 parts (image part
+        first, text part second).
+      - A REAL `google.genai.errors.APIError(code=404, ...)` raised by
+        the mocked `generate_content` (not a fabricated exception type —
+        the actual SDK exception class, constructed the way the SDK
+        itself constructs it) is caught, logged, and triggers
+        `log_available_gemini_models()` exactly once (mocked
+        `requests.get`, still no live call) — confirms the diagnostic
+        safety net survived the migration intact.
+  - Second offline test script confirms the three higher-level callers
+    (`_call_gemini`, `gemini_extract_invoice_full`,
+    `authenticity_check._call_gemini_vision`) correctly parse markdown-
+    fenced JSON out of a mocked `call_gemini_sdk()` return value, handle
+    a `None` return (simulated failure) by returning `{}`/`None` as
+    before, and pass a real (mime_type, bytes) image tuple through to
+    `call_gemini_sdk` when given a real sample PDF from uploads/.
+  - Re-ran the two most relevant tests from prior entries — PDF-
+    rendering (updated to check raw bytes instead of base64, matching
+    `prepare_gemini_image_payload`'s new return type) and the
+    total_amount/tax_amount regex regression suite — both still pass,
+    confirming this transport-layer change didn't touch the regex
+    fallback paths.
+  - Could not, and did not, make a real generateContent call against
+    the live AQ. key in any test — that can only be confirmed by
+    redeploying and uploading a real document, which is explicitly the
+    point of the SDK switch: if the SDK-based call also fails, the
+    error will now be a proper SDK exception with a clear code/status/
+    message instead of an opaque raw-HTTP 404.
+
+Setup/config needed:
+  1. This changes requirements.txt (new dependency, google-genai) —
+     Render needs a FULL rebuild, not just a restart. Redeploy
+     accordingly.
+  2. After redeploying, upload a document and check the logs for
+     "DEBUG Gemini request (...): model='gemini-2.5-flash' key=...XXXX
+     via google-genai SDK" followed by either a successful "DEBUG
+     Gemini ... result: {...}" line or a "DEBUG Gemini call error
+     (...): <code> <status>: <message>" line — the SDK's error messages
+     are more specific than the old raw-HTTP ones, so if it still
+     fails, the log line itself should say why.

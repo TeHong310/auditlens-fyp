@@ -1,18 +1,11 @@
 import re
 import json
 import statistics
-import requests
 from datetime import datetime, timedelta, date
 import psycopg2.extras
 from db import get_db_connection
 from config import Config
-from helpers.gemini_extractor import log_gemini_request, log_available_gemini_models
-
-# Same single model/key as every other Gemini call in the codebase
-# (field extraction, authenticity) — previously hardcoded to
-# "gemini-2.0-flash" separately from Config.GEMINI_MODEL.
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{Config.GEMINI_MODEL}:generateContent"
-GEMINI_TIMEOUT = 15
+from helpers.gemini_extractor import call_gemini_sdk
 
 AMOUNT_HISTORY_SAMPLE_LIMIT = 50
 DUPLICATE_DATE_WINDOW_DAYS = 7
@@ -279,26 +272,9 @@ def get_gemini_explanation(anomaly_signals, vendor_context):
             signals_json=json.dumps(pattern, indent=2, default=str),
             vendor_context=vendor_context
         )
-        headers = {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': Config.GEMINI_API_KEY
-        }
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0,
-                "responseMimeType": "application/json"
-            }
-        }
-        log_gemini_request(GEMINI_URL, context='anomaly explanation')
-        response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=GEMINI_TIMEOUT)
-        if response.status_code == 404:
-            print(f"DEBUG Anomaly Gemini error: 404 Not Found for model '{Config.GEMINI_MODEL}'")
-            log_available_gemini_models()
-        response.raise_for_status()
-        result = response.json()
-
-        text = result['candidates'][0]['content']['parts'][0]['text']
+        text = call_gemini_sdk(prompt, context='anomaly explanation')
+        if text is None:
+            return fallback
         parsed = json.loads(_strip_markdown_fences(text))
 
         explanation = parsed.get('explanation')

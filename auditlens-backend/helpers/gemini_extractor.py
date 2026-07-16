@@ -1,15 +1,41 @@
 import json
 import re
-import base64
 import requests
 import fitz  # PyMuPDF
+from google import genai
+from google.genai import types, errors
 from config import Config
 
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{Config.GEMINI_MODEL}:generateContent"
+# ListModels is still a plain REST call — confirmed working even with
+# this account's "AQ."-prefixed key (only generateContent rejects it over
+# raw HTTP), so there's no need to route it through the SDK too.
 GEMINI_MODELS_LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models"
-GEMINI_TIMEOUT = 15
-GEMINI_VISION_TIMEOUT = 20
+GEMINI_TIMEOUT_MS = 15_000
+GEMINI_VISION_TIMEOUT_MS = 20_000
 PDF_RENDER_ZOOM = 2.0  # ~144 DPI — enough detail for chop/logo/signature, keeps payload small
+
+_client = None
+
+
+def _get_client():
+    """
+    Lazily-built, shared google.genai.Client — the single client used by
+    every Gemini call in the codebase (field extraction, authenticity,
+    anomaly explanation), constructed once per process from
+    Config.GEMINI_API_KEY.
+
+    Required because this account's Gemini key uses Google's newer "AQ."
+    prefix format. Those keys are rejected (404/401) by raw HTTP calls to
+    generativelanguage.googleapis.com's generateContent endpoint — even
+    though the key is valid and the model is confirmed available via
+    ListModels — but work correctly through the official SDK, which
+    handles "AQ." keys' auth internally. This is why every generateContent
+    call in this codebase goes through the SDK, not requests/urllib.
+    """
+    global _client
+    if _client is None:
+        _client = genai.Client(api_key=Config.GEMINI_API_KEY)
+    return _client
 
 DOCUMENT_QUALITY_NOTE = """These documents may be:
 - Scanned (CamScanner watermark visible)
@@ -213,20 +239,6 @@ def gemini_key_suffix():
     return key[-4:] if key and len(key) >= 4 else '????'
 
 
-def log_gemini_request(url, context=''):
-    """
-    Logs repr(model) and the EXACT request URL right before every
-    generateContent call, so a malformed model string (stray "models/"
-    prefix, trailing whitespace/newline) is immediately visible in
-    production logs instead of only surfacing as a mysterious 404. The
-    key is sent via the x-goog-api-key header, never in the URL, so the
-    URL is always safe to log in full — no redaction needed.
-    """
-    label = f" ({context})" if context else ''
-    print(f"DEBUG Gemini request{label}: model={Config.GEMINI_MODEL!r} "
-          f"url={url!r} key=...{gemini_key_suffix()}")
-
-
 def log_available_gemini_models():
     """
     Safety net for a 404 from generateContent (wrong/unavailable model name
@@ -251,46 +263,67 @@ def log_available_gemini_models():
         print(f"DEBUG ListModels call failed: {type(e).__name__}: {e}")
 
 
-def _call_gemini(template, ocr_text):
+def call_gemini_sdk(text_prompt, image=None, context='', timeout_ms=GEMINI_TIMEOUT_MS):
+    """
+    Shared low-level call through the official google-genai SDK — the
+    single choke point every Gemini generateContent call in the codebase
+    goes through (text extraction, merged invoice extraction+
+    authenticity, authenticity-only, anomaly explanation).
+
+    image: optional (mime_type, raw_bytes) tuple, e.g. from
+      prepare_gemini_image_payload(), for a vision call.
+    Returns response.text (str) on success, or None on any failure
+    (missing key, network, timeout, bad model) — callers are responsible
+    for JSON-parsing/stripping markdown fences from the returned text.
+    """
     if not Config.GEMINI_API_KEY:
-        print("DEBUG Gemini: GEMINI_API_KEY not set, skipping")
-        return {}
+        print(f"DEBUG Gemini ({context}): GEMINI_API_KEY not set, skipping")
+        return None
 
+    parts = []
+    if image is not None:
+        mime_type, data = image
+        parts.append(types.Part.from_bytes(data=data, mime_type=mime_type))
+    parts.append(types.Part.from_text(text=text_prompt))
+
+    print(f"DEBUG Gemini request ({context}): model={Config.GEMINI_MODEL!r} "
+          f"key=...{gemini_key_suffix()} via google-genai SDK")
     try:
-        prompt = template.format(ocr_text=ocr_text)
-        # Key goes in a header, never the URL, so it can't leak into
-        # exception messages, proxy logs, or redirect chains.
-        headers = {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': Config.GEMINI_API_KEY
-        }
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0,
-                "responseMimeType": "application/json"
-            }
-        }
-        log_gemini_request(GEMINI_URL, context='text extraction')
-        response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=GEMINI_TIMEOUT)
-        if response.status_code == 404:
-            print(f"DEBUG Gemini call error: 404 Not Found for model '{Config.GEMINI_MODEL}'")
+        response = _get_client().models.generate_content(
+            model=Config.GEMINI_MODEL,
+            contents=parts,
+            config=types.GenerateContentConfig(
+                temperature=0,
+                response_mime_type='application/json',
+                http_options=types.HttpOptions(timeout=timeout_ms),
+            ),
+        )
+        return response.text
+    except errors.APIError as e:
+        print(f"DEBUG Gemini call error ({context}): {e.code} {e.status}: {e.message}")
+        if e.code == 404:
             log_available_gemini_models()
-        response.raise_for_status()
-        result = response.json()
-
-        text = result['candidates'][0]['content']['parts'][0]['text']
-        text = _strip_markdown_fences(text)
-        return json.loads(text)
-
+        return None
     except Exception as e:
-        print(f"DEBUG Gemini call error: {type(e).__name__}: {e}")
+        print(f"DEBUG Gemini call error ({context}): {type(e).__name__}: {e}")
+        return None
+
+
+def _call_gemini(template, ocr_text):
+    prompt = template.format(ocr_text=ocr_text)
+    text = call_gemini_sdk(prompt, context='text extraction')
+    if text is None:
+        return {}
+    try:
+        return json.loads(_strip_markdown_fences(text))
+    except Exception as e:
+        print(f"DEBUG Gemini call error: bad JSON: {type(e).__name__}: {e}")
         return {}
 
 
 def prepare_gemini_image_payload(file_path):
     """
-    Returns (mime_type, base64_data) for a Gemini inline_data part.
+    Returns (mime_type, raw_bytes) ready for google.genai.types.Part.from_bytes.
 
     PDFs are rendered to their FIRST PAGE as a PNG image (PyMuPDF/fitz —
     no system dependency, unlike pdf2image+poppler) rather than sent as
@@ -307,10 +340,10 @@ def prepare_gemini_image_payload(file_path):
             png_bytes = pix.tobytes('png')
         finally:
             doc.close()
-        return 'image/png', base64.b64encode(png_bytes).decode('utf-8')
+        return 'image/png', png_bytes
 
     with open(file_path, 'rb') as f:
-        data = base64.b64encode(f.read()).decode('utf-8')
+        data = f.read()
     mime = 'image/png' if ext == 'png' else 'image/jpeg'
     return mime, data
 
@@ -325,36 +358,15 @@ def gemini_extract_invoice_full(file_path):
     (429, timeout, network, bad JSON, PDF render failure) or GEMINI_API_KEY
     is unset.
     """
-    if not Config.GEMINI_API_KEY:
-        print("DEBUG Gemini: GEMINI_API_KEY not set, skipping merged invoice call")
-        return None
-
     try:
-        mime_type, data = prepare_gemini_image_payload(file_path)
-
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"inline_data": {"mime_type": mime_type, "data": data}},
-                    {"text": INVOICE_FULL_PROMPT}
-                ]
-            }],
-            "generationConfig": {
-                "temperature": 0,
-                "responseMimeType": "application/json"
-            }
-        }
-        headers = {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': Config.GEMINI_API_KEY
-        }
-        log_gemini_request(GEMINI_URL, context='merged invoice extraction+authenticity')
-        response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=GEMINI_VISION_TIMEOUT)
-        if response.status_code == 404:
-            print(f"DEBUG Gemini merged invoice call error: 404 Not Found for model '{Config.GEMINI_MODEL}'")
-            log_available_gemini_models()
-        response.raise_for_status()
-        text = response.json()['candidates'][0]['content']['parts'][0]['text']
+        image = prepare_gemini_image_payload(file_path)
+        text = call_gemini_sdk(
+            INVOICE_FULL_PROMPT, image=image,
+            context='merged invoice extraction+authenticity',
+            timeout_ms=GEMINI_VISION_TIMEOUT_MS,
+        )
+        if text is None:
+            return None
         result = json.loads(_strip_markdown_fences(text))
         print(f"DEBUG Gemini merged invoice+authenticity result: {result}")
         return result

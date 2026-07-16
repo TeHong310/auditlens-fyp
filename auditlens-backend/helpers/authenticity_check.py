@@ -1,14 +1,8 @@
 import re
 import json
-import requests
 from config import Config
 from db import get_db_connection
-from helpers.gemini_extractor import (
-    log_available_gemini_models, log_gemini_request, prepare_gemini_image_payload
-)
-
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{Config.GEMINI_MODEL}:generateContent"
-GEMINI_TIMEOUT = 20
+from helpers.gemini_extractor import call_gemini_sdk, prepare_gemini_image_payload, GEMINI_VISION_TIMEOUT_MS
 
 AUTHENTICITY_PROMPT = """You are analyzing a business document from a Malaysian SME.
 
@@ -74,42 +68,21 @@ def _strip_markdown_fences(text):
 
 def _call_gemini_vision(file_path):
     """
-    Call Gemini vision with the document. PDFs are rendered to their first
-    page as an image first (see prepare_gemini_image_payload in
-    gemini_extractor.py) so chop/logo/signature and their bounding boxes
-    can actually be detected — raw PDF bytes don't reliably produce that.
-    Returns parsed JSON dict or None.
+    Call Gemini vision with the document via the google-genai SDK (not raw
+    HTTP — see call_gemini_sdk in gemini_extractor.py for why). PDFs are
+    rendered to their first page as an image first (see
+    prepare_gemini_image_payload) so chop/logo/signature and their
+    bounding boxes can actually be detected — raw PDF bytes don't
+    reliably produce that. Returns parsed JSON dict or None.
     """
-    if not Config.GEMINI_API_KEY:
-        print("DEBUG Authenticity: GEMINI_API_KEY not set, skipping")
-        return None
-
     try:
-        mime_type, data = prepare_gemini_image_payload(file_path)
-
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"inline_data": {"mime_type": mime_type, "data": data}},
-                    {"text": AUTHENTICITY_PROMPT}
-                ]
-            }],
-            "generationConfig": {
-                "temperature": 0,
-                "responseMimeType": "application/json"
-            }
-        }
-        headers = {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': Config.GEMINI_API_KEY
-        }
-        log_gemini_request(GEMINI_URL, context='authenticity')
-        response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=GEMINI_TIMEOUT)
-        if response.status_code == 404:
-            print(f"DEBUG Authenticity Gemini error: 404 Not Found for model '{Config.GEMINI_MODEL}'")
-            log_available_gemini_models()
-        response.raise_for_status()
-        text = response.json()['candidates'][0]['content']['parts'][0]['text']
+        image = prepare_gemini_image_payload(file_path)
+        text = call_gemini_sdk(
+            AUTHENTICITY_PROMPT, image=image, context='authenticity',
+            timeout_ms=GEMINI_VISION_TIMEOUT_MS,
+        )
+        if text is None:
+            return None
         return json.loads(_strip_markdown_fences(text))
     except Exception as e:
         print(f"DEBUG Authenticity Gemini error: {type(e).__name__}: {e}")
