@@ -2162,3 +2162,78 @@ Setup/config needed:
   4. Run the real Gemini calls yourself (upload a new invoice, or hit
      Re-check on an existing one) — this was never done from this
      session, by design.
+
+------------------------------------------------------------------------------
+2026-07-16 - Make authenticity checks always write a row (Gemini now
+             best-effort, not a hard dependency)
+
+What was changed:
+  - helpers/authenticity_check.py:
+    - Added `_fallback_from_ocr_text(ocr_text)`, a non-Gemini heuristic
+      that derives has_company_name from the OCR text (regex for "Sdn
+      Bhd"/"Berhad"/"Enterprise"/"Trading"/"Corporation"/"Ltd" style
+      suffixes). has_company_chop, has_company_logo, has_signature
+      default to False in this path — plain OCR text carries no visual
+      or positional information to detect them from, so we don't
+      guess. signal_boxes is empty for the same reason (no coordinates
+      available without a vision call).
+    - `run_authenticity_check()` now takes an optional `ocr_text`
+      param. If `_call_gemini_vision()` returns nothing (429, timeout,
+      network error, bad JSON — it already catches and logs the actual
+      exception internally), the function no longer returns None and
+      aborts. It falls back to `_fallback_from_ocr_text()` and
+      continues through the exact same status-computation and
+      INSERT/UPDATE path Gemini would have used. Every call now either
+      writes/updates a row or hits the outer catch-all (e.g. document
+      doesn't exist / FK violation) — there is no longer a path where
+      OCR + extraction succeed but authenticity_checks silently stays
+      empty.
+    - Added engine tracking (`engine = 'gemini' | 'fallback'`) purely
+      for logging: "DEBUG Authenticity: engine=gemini" /
+      "DEBUG Authenticity: gemini failed (...), using fallback" /
+      "DEBUG Authenticity: saved row for doc=<id> status=<...>
+      engine=<...>". No new DB column — engine is not persisted, only
+      logged, per the instruction not to touch the schema.
+  - routes/documents.py: all three call sites
+    (upload_document/upload_purchase_order/upload_goods_receipt) now
+    pass the already-in-scope `ocr_text` variable into
+    `run_authenticity_check(...)` so the fallback has text to work
+    with. The existing try/except around each call is untouched — it
+    was already non-blocking; the actual fix is that the row now gets
+    written even when Gemini fails, instead of the fallback simply not
+    existing.
+  - No changes to the DB schema, the /authenticity API routes, or any
+    frontend file.
+
+Why:
+  - authenticity_checks was completely empty (SELECT ... returned
+    Total rows: 0) despite OCR and field extraction working correctly.
+    Root cause: run_authenticity_check() had a hard `if not result:
+    return None` right after the Gemini call, so any Gemini failure
+    (free-tier per-minute 429, or Render's free-tier backend spinning
+    down and timing out mid-request) meant the function returned
+    early and no row was ever inserted or updated. Gemini vision was
+    effectively a hard dependency for a table that should always have
+    a row per uploaded document.
+
+Testing:
+  - `python -m py_compile helpers/authenticity_check.py
+    routes/documents.py` — both compile clean.
+  - Offline-only test script (scratchpad, not committed) imports
+    `_fallback_from_ocr_text` and `_compute_authenticity_status`
+    directly and feeds them two hardcoded OCR text blocks — a
+    realistic Malaysian invoice ("TECH SOLUTIONS SDN. BHD." / "ABC
+    Trading Enterprise") and a block with no company suffix. No
+    network call, no DB connection, no Gemini call anywhere in the
+    test. Confirmed: has_company_name=True for the realistic sample
+    (matched both "Sdn. Bhd." and "Enterprise"), has_company_name=False
+    for the no-match sample, chop/logo/signature=False in both (as
+    designed), and authenticity_status='warning' for the invoice case
+    since the fallback can't confirm chop/signature — this is the
+    intended conservative behavior: the row is now written and
+    inspectable by an auditor, instead of silently missing.
+
+Setup/config needed:
+  1. Redeploy the Render backend for this fix to take effect — until
+     redeployed, authenticity_checks will keep staying empty on
+     Gemini failures.

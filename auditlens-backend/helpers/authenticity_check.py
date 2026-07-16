@@ -114,6 +114,33 @@ def _call_gemini_vision(file_path):
         return None
 
 
+COMPANY_SUFFIX_RE = re.compile(
+    r'(?:sdn\.?\s*bhd\.?|berhad|enterprise|trading|corporation|corp\.?|ltd\.?)',
+    re.IGNORECASE
+)
+
+
+def _fallback_from_ocr_text(ocr_text):
+    """Non-Gemini fallback used when Gemini vision is unavailable/fails.
+    Only has_company_name can be inferred from plain OCR text; chop/logo/
+    signature are visual marks we have no positional data for here, so they
+    default to False rather than guessing. signal_boxes stays empty since
+    OCR text alone carries no coordinates.
+    """
+    text = ocr_text or ''
+    has_name = bool(COMPANY_SUFFIX_RE.search(text))
+    return {
+        'has_company_chop': False,
+        'has_company_logo': False,
+        'has_company_name': has_name,
+        'has_signature': False,
+        'upload_source': None,
+        'notes': ('Automated fallback (Gemini unavailable): checked OCR text only. '
+                  'Visual signals (chop/logo/signature) could not be verified.'),
+        'signal_boxes': {},
+    }
+
+
 def _compute_authenticity_status(document_type, signals):
     """
     Returns 'passed' or 'warning' based on document type rules.
@@ -139,16 +166,26 @@ def _compute_authenticity_status(document_type, signals):
     return 'passed' if passed else 'warning'
 
 
-def run_authenticity_check(document_id, file_path, document_type):
+def run_authenticity_check(document_id, file_path, document_type, ocr_text=None):
     """
     Main entry. NEVER raises — pipeline safe.
     document_type: 'invoice' | 'po' | 'gr' (from upload endpoint, required)
-    Returns check_id on success, None on failure.
+    Always writes/updates an authenticity_checks row, using Gemini vision
+    when available and falling back to OCR-text heuristics when it isn't
+    (429/timeout/network/parse failure) — Gemini is best-effort, not a
+    hard dependency.
+    Returns check_id on success, None on failure (e.g. document doesn't exist).
     """
     try:
         result = _call_gemini_vision(file_path)
-        if not result:
-            return None
+        if result:
+            engine = 'gemini'
+            print("DEBUG Authenticity: engine=gemini")
+        else:
+            engine = 'fallback'
+            print("DEBUG Authenticity: gemini failed (no result — see error above, "
+                  "or GEMINI_API_KEY unset), using fallback")
+            result = _fallback_from_ocr_text(ocr_text)
 
         chop = bool(result.get('has_company_chop', False))
         logo = bool(result.get('has_company_logo', False))
@@ -203,6 +240,8 @@ def run_authenticity_check(document_id, file_path, document_type):
             print(f"DEBUG Authenticity: doc={document_id} type={document_type} "
                   f"chop={chop} sig={sig} logo={logo} name={name} "
                   f"source={upload_source} status={status} boxes={list(signal_boxes.keys())}")
+            print(f"DEBUG Authenticity: saved row for doc={document_id} "
+                  f"status={status} engine={engine}")
             return check_id
         finally:
             conn.close()
