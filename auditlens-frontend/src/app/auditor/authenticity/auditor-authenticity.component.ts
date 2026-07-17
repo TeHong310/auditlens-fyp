@@ -5,6 +5,7 @@ import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 
 type Filter = 'all' | 'passed' | 'warning';
+type DocTypeFilter = 'all' | 'invoice' | 'po' | 'gr';
 
 @Component({
   selector: 'app-auditor-authenticity',
@@ -19,6 +20,7 @@ export class AuditorAuthenticityComponent implements OnInit {
   isLoading: boolean = false;
   errorMessage: string = '';
   activeFilter: Filter = 'all';
+  activeDocTypeFilter: DocTypeFilter = 'all';
 
   private apiUrl = environment.apiUrl;
 
@@ -58,18 +60,42 @@ export class AuditorAuthenticityComponent implements OnInit {
     this.activeFilter = f;
   }
 
-  get filteredChecks() {
-    if (this.activeFilter === 'passed') return this.checks.filter(c => c.authenticity_status === 'passed');
-    if (this.activeFilter === 'warning') return this.checks.filter(c => c.authenticity_status === 'warning');
-    return this.checks;
+  setDocTypeFilter(f: DocTypeFilter) {
+    this.activeDocTypeFilter = f;
   }
 
+  // Status filter and document-type filter combine with AND — e.g.
+  // Invoice + Passed shows only passed invoices. Client-side only, over
+  // the already-loaded list (no pagination on this endpoint currently).
+  get filteredChecks() {
+    return this.checks.filter(c =>
+      (this.activeFilter === 'all' || c.authenticity_status === this.activeFilter) &&
+      (this.activeDocTypeFilter === 'all' || c.document_type === this.activeDocTypeFilter)
+    );
+  }
+
+  // Each chip's count reflects only its own dimension (all documents
+  // matching that status/type), same convention as the existing
+  // All/Passed/Warning chips — independent of whatever else is
+  // currently selected in the other filter row.
   get passedCount(): number {
     return this.checks.filter(c => c.authenticity_status === 'passed').length;
   }
 
   get warningCount(): number {
     return this.checks.filter(c => c.authenticity_status === 'warning').length;
+  }
+
+  get invoiceCount(): number {
+    return this.checks.filter(c => c.document_type === 'invoice').length;
+  }
+
+  get poCount(): number {
+    return this.checks.filter(c => c.document_type === 'po').length;
+  }
+
+  get grCount(): number {
+    return this.checks.filter(c => c.document_type === 'gr').length;
   }
 
   viewDocument(check: any) {

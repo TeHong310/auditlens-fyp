@@ -3,10 +3,10 @@
   <!-- Header -->
   <div class="header">
     <h1 class="page-title">🛡️ Authenticity Lens</h1>
-    <p class="page-subtitle">AI-powered visual signal detection • {{ checks.length }} documents checked</p>
+    <p class="page-subtitle">AI-powered visual signal detection • {{ filteredChecks.length }} documents checked</p>
   </div>
 
-  <!-- Filter -->
+  <!-- Filter: status -->
   <div class="filter-row">
     <button class="filter-chip" [class.active]="activeFilter === 'all'" (click)="setFilter('all')">
       All <span class="chip-count">{{ checks.length }}</span>
@@ -16,6 +16,22 @@
     </button>
     <button class="filter-chip" [class.active]="activeFilter === 'warning'" (click)="setFilter('warning')">
       ⚠️ Warning <span class="chip-count">{{ warningCount }}</span>
+    </button>
+  </div>
+
+  <!-- Filter: document type -->
+  <div class="filter-row">
+    <button class="filter-chip" [class.active]="activeDocTypeFilter === 'all'" (click)="setDocTypeFilter('all')">
+      All <span class="chip-count">{{ checks.length }}</span>
+    </button>
+    <button class="filter-chip" [class.active]="activeDocTypeFilter === 'invoice'" (click)="setDocTypeFilter('invoice')">
+      Invoice <span class="chip-count">{{ invoiceCount }}</span>
+    </button>
+    <button class="filter-chip" [class.active]="activeDocTypeFilter === 'po'" (click)="setDocTypeFilter('po')">
+      PO <span class="chip-count">{{ poCount }}</span>
+    </button>
+    <button class="filter-chip" [class.active]="activeDocTypeFilter === 'gr'" (click)="setDocTypeFilter('gr')">
+      GR <span class="chip-count">{{ grCount }}</span>
     </button>
   </div>
 

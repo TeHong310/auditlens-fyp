@@ -3204,3 +3204,60 @@ Setup/config needed:
      likely no missing-signal boxes yet) — click Re-check on a document
      to get Gemini to (optionally) supply a location for a missing
      signal under the new prompt.
+
+------------------------------------------------------------------------------
+2026-07-17 - Add a document-type filter row to the Authenticity Lens
+             list page, combined (AND) with the existing status filter
+
+What was changed (frontend only — no backend call added):
+  - auditor-authenticity.component.ts:
+    - Added `DocTypeFilter = 'all' | 'invoice' | 'po' | 'gr'` and
+      `activeDocTypeFilter` (defaults to 'all'), alongside the existing
+      `Filter`/`activeFilter` for status.
+    - `filteredChecks` now applies BOTH filters with AND — a record must
+      match the active status filter AND the active document-type
+      filter (each check is "pass through" when its filter is 'all').
+    - Added `setDocTypeFilter()` and count getters `invoiceCount`/
+      `poCount`/`grCount`, following the exact same pattern as the
+      existing `passedCount`/`warningCount` — each chip's count reflects
+      only its own dimension (e.g. invoiceCount = all invoices,
+      regardless of the currently active status filter), matching how
+      passedCount/warningCount already ignore document-type. Only the
+      card list itself gets the AND-combined result — the counts on
+      chips answer "how many of X exist", not "how many match the
+      current filter combo."
+  - auditor-authenticity.component.html:
+    - Added a second `.filter-row` (All/Invoice/PO/GR) directly below
+      the existing status row, reusing the exact same `.filter-chip`/
+      `.chip-count`/`.active` classes — no CSS file changes were needed
+      at all, since it's structurally identical to the existing row.
+    - The "N documents checked" subtitle now reads `filteredChecks.length`
+      instead of the unfiltered `checks.length` — chose to reflect the
+      active filter (rather than staying a fixed total) so the number
+      always matches what's actually visible in the card list below it,
+      consistent with what a user scanning the page would expect "N
+      documents checked" to mean when filters are active.
+
+Why: auditors reviewing this list needed to narrow by document type
+  (e.g. "just show me POs") the same way they can already narrow by
+  status, and combine the two (e.g. "warning invoices only").
+
+Testing:
+  - `ng build --configuration=production` passes clean (772.59 kB
+    initial) — no type errors.
+  - Full browser-level verification with Playwright against the live
+    dev server (scratchpad, not committed): a hardcoded 6-record mocked
+    /authenticity response (2 invoices/2 POs/2 GRs, mixed passed/
+    warning) — no real backend call, network intercepted with
+    route.fulfill(). Confirmed: 2 filter rows render; chip counts read
+    "Invoice 2"/"PO 2"/"GR 2" correctly; selecting Invoice alone shows 2
+    cards; ALSO selecting Passed (AND) narrows to exactly 1 card (the
+    one actually-passed invoice, verified by document number, not just
+    count); switching document-type to GR while Passed stays active
+    correctly swaps to the one passed GR record; resetting document-type
+    back to All while Passed stays active shows all 4 passed records
+    across every type; the subtitle count updates to match the filtered
+    result at each step (6 -> 1 -> 1 -> 4).
+
+Setup/config needed:
+  1. Redeploy the Render frontend for this to go live.
