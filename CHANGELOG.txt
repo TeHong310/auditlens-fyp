@@ -3261,3 +3261,89 @@ Testing:
 
 Setup/config needed:
   1. Redeploy the Render frontend for this to go live.
+
+------------------------------------------------------------------------------
+2026-07-17 - GET /authenticity/<id>/image now renders on demand for
+             older records that never got a saved image — no Gemini
+             call, ever
+
+What was changed:
+  - routes/authenticity.py (`get_authenticity_image`): previously, a
+    PDF with no cached rendered PNG (i.e. any record from before the
+    image-saving feature existed, or one where the save silently
+    failed) returned a 404 telling the auditor to "try Re-check" — the
+    only way to get an image was to trigger a full Gemini re-analysis.
+    Now, on a cache miss for a PDF, the endpoint calls the existing
+    `save_rendered_authenticity_image()` helper (already used at upload
+    time) directly from the route to render page 1 from the ORIGINAL
+    uploaded file and cache it under the same deterministic path
+    (`uploads/authenticity/<document_id>_<document_type>.png`) — so the
+    very next request for the same document is an instant cache hit.
+    Non-PDF (jpg/png) uploads are unaffected — still served directly,
+    as before. If the original file itself no longer exists on disk,
+    returns a clean 404 ("Original file unavailable for this
+    document") instead of the old generic message.
+  - No new function was added — this reuses
+    `save_rendered_authenticity_image()` from helpers/authenticity_check.py
+    exactly as-is (imported into routes/authenticity.py alongside the
+    existing `run_authenticity_check`/`AUTHENTICITY_IMAGE_DIR`
+    imports). That helper was already pure PyMuPDF rendering with zero
+    Gemini/network calls (confirmed again this session, not just
+    assumed — see Testing below); the only change is calling it from a
+    second place (the image GET route, not just the upload/authenticity
+    flow).
+  - Added the requested log line, printed only on an actual successful
+    on-demand render: "DEBUG authenticity image: rendered from original
+    for doc=<id> (no Gemini)".
+  - signal_boxes / circle overlays: NOT touched, as instructed — still
+    served exactly as stored in the DB from the existing
+    `GET /authenticity/<document_id>` endpoint. A record with no
+    signal_boxes still shows the image + checklist with no circles;
+    this change never calls Gemini to backfill them.
+
+Why: older records (uploaded before the image-saving feature existed)
+  had signal_boxes in the DB but no cached image to draw them on top
+  of, so the detail page showed "Could not load the document file" for
+  every pre-existing PDF record even though everything needed to
+  display it (the original file) was still sitting in storage the
+  whole time.
+
+Confirmed this path never calls Gemini (per explicit request to verify,
+not just assert):
+  - Read `save_rendered_authenticity_image()` and its only dependency,
+    `prepare_gemini_image_payload()` (gemini_extractor.py) — the entire
+    call chain is `fitz.open()` / `get_pixmap()` / `tobytes()` (PyMuPDF,
+    local rendering) or a plain `open(file_path, 'rb').read()` for
+    non-PDFs, plus local file I/O to save the result. No `requests`,
+    no `call_gemini_sdk`, no `genai.Client`, no network call of any
+    kind anywhere in this chain.
+  - Offline test (scratchpad, not committed): monkeypatched
+    `gemini_extractor.requests.post/get`, `gemini_extractor._get_client`,
+    and `authenticity_check.call_gemini_sdk` to all raise
+    AssertionError if called — a real (non-empty) GEMINI_API_KEY was
+    also set, so if anything in the render path had silently reached
+    for the network, it would have hit one of these poisoned functions
+    instead of quietly succeeding or quietly no-op'ing on a missing
+    key. Then ran `save_rendered_authenticity_image()` against a real
+    sample PDF from uploads/ for a fake document_id with no pre-existing
+    cached image: it rendered and cached a real PNG (confirmed PNG
+    signature bytes) with none of the poisoned functions ever firing —
+    proof, not assumption, that this path makes zero Gemini/network
+    calls.
+
+Testing:
+  - `python -m py_compile` on routes/authenticity.py,
+    helpers/authenticity_check.py — compiles clean.
+  - See the Gemini-call verification above (same test also exercises
+    the actual render+cache+serve logic end to end).
+
+Setup/config needed:
+  1. Redeploy the Render backend for this to take effect.
+  2. After redeploying, open Authenticity Detail for any older PDF
+     record that previously showed "Could not load the document file"
+     — it should now render the image on the first load (a little
+     slower, since it's rendering) and be instant on every load after
+     that (cached). Circles only appear if that record already has
+     signal_boxes stored; this change does not add or refresh boxes for
+     old records — only Re-check does that (and only Re-check ever
+     calls Gemini).

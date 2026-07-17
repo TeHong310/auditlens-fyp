@@ -4,7 +4,9 @@ from flask import Blueprint, jsonify, request, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
 import psycopg2.extras
 from db import get_db_connection, get_user_by_id
-from helpers.authenticity_check import run_authenticity_check, AUTHENTICITY_IMAGE_DIR
+from helpers.authenticity_check import (
+    run_authenticity_check, save_rendered_authenticity_image, AUTHENTICITY_IMAGE_DIR
+)
 
 authenticity_bp = Blueprint('authenticity', __name__)
 
@@ -107,11 +109,16 @@ def get_authenticity_check(document_id):
 # ------------------------------------------------------------
 # GET AUTHENTICITY IMAGE — the image to show + draw overlay markers on.
 # GET /authenticity/<document_id>/image?document_type=invoice|po|gr
-# For a PDF upload, serves the rendered first-page PNG saved by
-# run_authenticity_check() (the same image sent to Gemini vision) — a
-# PDF can't be shown directly in an <img> tag. For an image upload
-# (jpg/png), serves the original file directly, since it already is one.
-# Auditor only.
+# Serves a cached rendered PNG if one already exists (saved either at
+# upload time or by an earlier call to this route). Otherwise, for a
+# PDF, renders page 1 from the ORIGINAL uploaded file on demand and
+# caches it — this is the fix for older records uploaded before image
+# saving existed, so every record can display its image regardless of
+# when it was uploaded. For an image upload (jpg/png), serves the
+# original file directly, since it already is one. PURE RENDERING ONLY
+# (PyMuPDF/fitz via save_rendered_authenticity_image) — this route never
+# calls Gemini or makes any AI/network call; it only ever reads/renders
+# the already-stored original file. Auditor only.
 # ------------------------------------------------------------
 @authenticity_bp.route('/<int:document_id>/image', methods=['GET'])
 @jwt_required()
@@ -139,12 +146,23 @@ def get_authenticity_image(document_id):
         return jsonify({'error': str(e)}), 500
 
     if not file_path or not os.path.exists(file_path):
-        return jsonify({'error': 'No image available for this document'}), 404
-    if file_path.lower().endswith('.pdf'):
-        return jsonify({'error': 'No rendered image available for this PDF yet — try Re-check'}), 404
+        return jsonify({'error': 'Original file unavailable for this document'}), 404
 
-    mimetype = mimetypes.guess_type(file_path)[0] or 'image/jpeg'
-    return send_file(file_path, mimetype=mimetype)
+    if not file_path.lower().endswith('.pdf'):
+        mimetype = mimetypes.guess_type(file_path)[0] or 'image/jpeg'
+        return send_file(file_path, mimetype=mimetype)
+
+    # No cached render yet for this PDF — render page 1 on demand from
+    # the original file and cache it, so every future request for this
+    # document is instant. save_rendered_authenticity_image() is pure
+    # PyMuPDF rendering, no Gemini/network call whatsoever.
+    save_rendered_authenticity_image(document_id, document_type, file_path)
+
+    if not os.path.exists(rendered_path):
+        return jsonify({'error': 'Could not render document image'}), 500
+
+    print(f"DEBUG authenticity image: rendered from original for doc={document_id} (no Gemini)")
+    return send_file(rendered_path, mimetype='image/png')
 
 
 # ------------------------------------------------------------
