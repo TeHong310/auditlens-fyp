@@ -1,8 +1,10 @@
-from flask import Blueprint, jsonify, request
+import os
+import mimetypes
+from flask import Blueprint, jsonify, request, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
 import psycopg2.extras
 from db import get_db_connection, get_user_by_id
-from helpers.authenticity_check import run_authenticity_check
+from helpers.authenticity_check import run_authenticity_check, AUTHENTICITY_IMAGE_DIR
 
 authenticity_bp = Blueprint('authenticity', __name__)
 
@@ -100,6 +102,49 @@ def get_authenticity_check(document_id):
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# GET AUTHENTICITY IMAGE — the image to show + draw overlay markers on.
+# GET /authenticity/<document_id>/image?document_type=invoice|po|gr
+# For a PDF upload, serves the rendered first-page PNG saved by
+# run_authenticity_check() (the same image sent to Gemini vision) — a
+# PDF can't be shown directly in an <img> tag. For an image upload
+# (jpg/png), serves the original file directly, since it already is one.
+# Auditor only.
+# ------------------------------------------------------------
+@authenticity_bp.route('/<int:document_id>/image', methods=['GET'])
+@jwt_required()
+def get_authenticity_image(document_id):
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    if user['role'] != 'auditor':
+        return jsonify({'error': 'Access denied. Auditor only.'}), 403
+
+    document_type = request.args.get('document_type', 'invoice')
+    if document_type not in VALID_DOC_TYPES:
+        return jsonify({'error': f'document_type must be one of {VALID_DOC_TYPES}'}), 400
+
+    rendered_path = os.path.join(AUTHENTICITY_IMAGE_DIR, f'{document_id}_{document_type}.png')
+    if os.path.exists(rendered_path):
+        return send_file(rendered_path, mimetype='image/png')
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        file_path = _lookup_file_path(cursor, document_id, document_type)
+        conn.close()
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({'error': 'No image available for this document'}), 404
+    if file_path.lower().endswith('.pdf'):
+        return jsonify({'error': 'No rendered image available for this PDF yet — try Re-check'}), 404
+
+    mimetype = mimetypes.guess_type(file_path)[0] or 'image/jpeg'
+    return send_file(file_path, mimetype=mimetype)
 
 
 # ------------------------------------------------------------

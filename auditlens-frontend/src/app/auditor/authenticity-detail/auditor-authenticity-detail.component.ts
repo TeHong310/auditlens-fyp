@@ -53,10 +53,11 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   isRechecking = false;
 
   imageBlobUrl: string | null = null;
-  // idle -> loading -> one of: 'image' (renderable, overlay math runs),
-  // 'pdf' (file exists but isn't an image — overlays don't apply to a
-  // raw PDF), 'error' (no file / fetch failed)
-  imageLoadState: 'idle' | 'loading' | 'image' | 'pdf' | 'error' = 'idle';
+  // idle -> loading -> one of: 'image' (loaded, overlay math runs),
+  // 'error' (no file / fetch failed). The backend always serves an
+  // image here — a PDF's rendered first page, or the original file if
+  // it's already an image — so there's no separate PDF state to handle.
+  imageLoadState: 'idle' | 'loading' | 'image' | 'error' = 'idle';
   markers: OverlayMarker[] = [];
 
   signalKeys: SignalKey[] = ['has_company_name', 'has_company_chop', 'has_signature', 'has_company_logo'];
@@ -125,10 +126,11 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
 
   private fileUrl(): string | null {
     if (!this.check || !this.documentId) return null;
-    if (this.documentType === 'invoice') return `${this.apiUrl}/documents/${this.documentId}/file`;
-    if (this.documentType === 'po' && this.check.po_id) return `${this.apiUrl}/documents/po/${this.check.po_id}/file`;
-    if (this.documentType === 'gr' && this.check.gr_id) return `${this.apiUrl}/documents/gr/${this.check.gr_id}/file`;
-    return null;
+    // Always the authenticity image endpoint — it serves the rendered
+    // PDF-page image (the same one Gemini vision saw) or the original
+    // file if it's already an image, so overlay math always has a real
+    // image to measure against, regardless of document_type/file kind.
+    return `${this.apiUrl}/authenticity/${this.documentId}/image?document_type=${this.documentType}`;
   }
 
   loadImage() {
@@ -146,10 +148,7 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
         if (this.rawBlobUrl) URL.revokeObjectURL(this.rawBlobUrl);
         this.rawBlobUrl = URL.createObjectURL(blob);
         this.imageBlobUrl = this.rawBlobUrl;
-        // Bounding boxes only make sense drawn over an <img>. A raw PDF
-        // blob can't be rendered as one, so overlays are skipped for
-        // PDFs — checklist still shows, just without image markers.
-        this.imageLoadState = blob.type === 'application/pdf' ? 'pdf' : 'image';
+        this.imageLoadState = 'image';
         this.cdr.detectChanges();
       },
       error: () => {

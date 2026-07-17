@@ -2944,3 +2944,163 @@ Setup/config needed:
      (...): <code> <status>: <message>" line — the SDK's error messages
      are more specific than the old raw-HTTP ones, so if it still
      fails, the log line itself should say why.
+
+------------------------------------------------------------------------------
+2026-07-16 - Show the rendered PDF page + overlay markers in Authenticity
+             Detail instead of "overlay markers aren't available for PDF
+             files"
+
+What was changed:
+
+BACKEND:
+  - helpers/authenticity_check.py:
+    - Added `save_rendered_authenticity_image(document_id, document_type,
+      file_path)`: if file_path is a PDF, renders its first page the
+      same way prepare_gemini_image_payload() does for the Gemini vision
+      call, and saves it to
+      `uploads/authenticity/<document_id>_<document_type>.png`
+      (AUTHENTICITY_IMAGE_DIR constant). Deterministic filename,
+      overwritten on every re-check — deliberately NOT a DB column,
+      so no migration/schema change was needed for this feature at all.
+      For an image upload (jpg/png), this is a no-op — the original
+      file already is the image to show, served directly (see below).
+      Never raises; a render/save failure here must not break the
+      authenticity row write.
+    - Called unconditionally at the top of `run_authenticity_check()`,
+      before the Gemini/fallback branching — runs regardless of whether
+      Gemini itself succeeds, since the rendered page is useful to show
+      either way (with or without overlay markers).
+  - routes/authenticity.py: added
+    `GET /authenticity/<document_id>/image?document_type=invoice|po|gr`
+    (auditor only). Serves the saved rendered PNG if one exists for this
+    document_id+document_type; otherwise falls back to the original
+    uploaded file directly (the image-upload case) via the existing
+    `_lookup_file_path()` helper (already used by the recheck route).
+    Returns 404 with a "try Re-check" message if the original is itself
+    still a PDF and no rendered image was ever saved (e.g. an
+    authenticity check that predates this feature). document_type is
+    validated against VALID_DOC_TYPES before being used in the file
+    path, since it now feeds into a filename (path-traversal guard).
+  - signal_boxes: NO backend change needed — already selected and
+    returned by the existing `GET /authenticity/<document_id>` endpoint
+    (`_SELECT_WITH_JOINS` already includes `ac.signal_boxes`, confirmed
+    by reading the current route code before assuming otherwise).
+
+FRONTEND (auditor-authenticity-detail component):
+  - The overlay-marker math, ResizeObserver-driven recompute-on-resize,
+    marker CSS (.marker/.marker-rect/.marker-circle), and the legend
+    were ALL ALREADY BUILT (from an earlier session, evidently written
+    in anticipation of this exact follow-up) — the component's own
+    comment literally said "Bounding boxes only make sense drawn over
+    an <img>. A raw PDF blob can't be rendered as one, so overlays are
+    skipped for PDFs." The only thing missing was a backend endpoint
+    that actually served an <img>-renderable file for PDFs. So the
+    frontend change ended up much smaller than the request implied:
+    - `fileUrl()`: now always returns
+      `${apiUrl}/authenticity/${documentId}/image?document_type=...`
+      instead of branching between `/documents/{id}/file`,
+      `/documents/po/{po_id}/file`, `/documents/gr/{gr_id}/file` — the
+      new backend endpoint takes document_id + document_type uniformly
+      for all three types, so the po_id/gr_id branching (and the null
+      fallback when they weren't present on the check row) is gone.
+    - `loadImage()`: removed the `blob.type === 'application/pdf' ?
+      'pdf' : 'image'` branch — the new endpoint always returns a real
+      image (rendered page or original), so success always means
+      `imageLoadState = 'image'`.
+    - Removed the `'pdf'` value from the `imageLoadState` type union
+      (now just `'idle' | 'loading' | 'image' | 'error'`) and the
+      corresponding HTML fallback block ("This document is a PDF —
+      overlay markers aren't available for PDF files.").
+    - `recomputeMarkers()`, the legend, and all CSS: untouched, no
+      changes needed — already correct.
+
+Why:
+  - The Gemini vision call already renders a PDF's first page to an
+    image and returns bounding boxes normalized against THAT rendered
+    image (not the original PDF) — but nothing persisted that render,
+    so the detail page had no image to draw markers on for a PDF and
+    fell back to a "not available for PDF" message, even though the
+    signals + boxes were already correctly detected and stored.
+
+Bbox scaling math — verified, not just re-used blindly:
+  The existing `recomputeMarkers()` formula is
+  `scaleX = renderedWidth / 1000; scaleY = renderedHeight / 1000`, then
+  `left = xmin * scaleX`, etc. This is correct BY CONSTRUCTION for both
+  document kinds, not by coincidence: Gemini's [ymin,xmin,ymax,xmax]
+  boxes are normalized 0-1000 against whatever image it was actually
+  shown. For a PDF, that's the exact PNG saved by
+  `save_rendered_authenticity_image()` (PyMuPDF rasterization is
+  deterministic — same PDF + same 2x zoom matrix always produces
+  byte-identical output, confirmed by re-rendering the same sample PDF
+  twice in this session and comparing bytes). For an image upload,
+  `prepare_gemini_image_payload()` reads the original file's raw bytes
+  unchanged, and the new endpoint's fallback serves that same original
+  file. Either way, the frontend now always displays the literal same
+  image Gemini scored the boxes against, so `renderedWidth`/
+  `renderedHeight` (the *displayed* pixel size, which changes on
+  resize) correctly scale the fixed 0-1000 space regardless of the
+  image's native resolution or the document's original PDF page size.
+  This exact formula and its resize-responsiveness were also
+  end-to-end verified against real rendered pixel positions with
+  Playwright in an earlier session (scratchpad test_overlay.js,
+  sub-pixel precision, confirmed markers move correctly on an actual
+  viewport resize) — not repeated this session since neither the
+  formula nor the CSS changed, only the image source feeding it.
+
+Design note — redundant PDF renders, accepted tradeoff:
+  For an invoice PDF, the first page now gets rendered up to twice per
+  upload: once inside `gemini_extract_invoice_full()` for the Gemini
+  call itself, and once more inside `save_rendered_authenticity_image()`
+  for saving to disk (PO/GR uploads: same doubling, inside
+  `_call_gemini_vision()` + the save call). Threading a single
+  pre-rendered image through both call paths across two files was
+  possible but would have meant changing several function signatures
+  for a marginal gain — PyMuPDF rendering a single page is fast
+  (~confirmed under 100ms against a real sample PDF earlier this
+  session) and fully deterministic, so the simpler "just render twice"
+  approach was chosen instead. Flagging this rather than silently
+  picking it.
+
+Storage note: reuses the existing uploads/ directory mechanism (already
+gitignored wholesale, so uploads/authenticity/ needed no .gitignore
+change) — no new persistence characteristics introduced beyond what
+already applies to originally-uploaded files on Render.
+
+Testing:
+  - `python -m py_compile` on helpers/authenticity_check.py,
+    routes/authenticity.py, app.py — compiles clean.
+  - Imported app.py directly (real DB connection available in this
+    session) and confirmed the new route registers:
+    `/authenticity/<int:document_id>/image` alongside the existing
+    `/authenticity/<int:document_id>` and `.../recheck` routes, with
+    GET/HEAD/OPTIONS methods.
+  - Called `save_rendered_authenticity_image()` directly (offline, no
+    Gemini call — GEMINI_API_KEY unset) against a real sample PDF
+    already in uploads/: confirmed a real PNG (correct signature bytes)
+    was written to uploads/authenticity/999999_invoice.png, then
+    cleaned up the test file.
+  - `ng build --configuration=production` passes clean (771.30 kB
+    initial bundle) after the frontend edits — no type errors from
+    removing the 'pdf' state or changing fileUrl()'s return type.
+  - Did not do a full authenticated HTTP round-trip against the new
+    Flask route (would require either a real JWT against a live DB
+    user or non-trivial auth mocking) — verified by direct code
+    reading instead: the file-existence check, the VALID_DOC_TYPES
+    guard before path construction, and the fallback logic were all
+    read through line-by-line rather than executed live. A true
+    end-to-end check (upload a PDF, open Authenticity Detail, confirm
+    the image and markers actually render in a browser) can only
+    happen after redeploying.
+
+Setup/config needed:
+  1. Redeploy BOTH the backend (new route + image-saving logic) and the
+     frontend (fileUrl()/loadImage() changes) — they depend on each
+     other; deploying only one half will leave the detail page either
+     hitting a 404'ing new endpoint or an old frontend still asking for
+     the wrong URL.
+  2. After redeploying, open Authenticity Detail for a PDF invoice/PO/GR
+     that already has a passed/warning check — if it predates this
+     feature (uploaded before this deploy), there's no saved rendered
+     image yet, so the image will 404 until you click Re-check once.
+     Newly-uploaded PDFs after this deploy get the image saved
+     automatically on first upload.

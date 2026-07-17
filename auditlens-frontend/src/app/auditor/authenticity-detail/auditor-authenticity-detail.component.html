@@ -37,12 +37,6 @@
         <p>Loading document…</p>
       </div>
 
-      <div class="image-fallback" *ngIf="imageLoadState === 'pdf'">
-        <p class="fallback-icon">📄</p>
-        <p>This document is a PDF — overlay markers aren't available for PDF files.</p>
-        <p class="fallback-sub">The checklist still reflects the cached signals.</p>
-      </div>
-
       <div class="image-fallback" *ngIf="imageLoadState === 'error'">
         <p class="fallback-icon">✗</p>
         <p>Could not load the document file.</p>

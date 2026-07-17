@@ -1,8 +1,16 @@
 import re
+import os
 import json
 from config import Config
 from db import get_db_connection
 from helpers.gemini_extractor import call_gemini_sdk, prepare_gemini_image_payload, GEMINI_VISION_TIMEOUT_MS
+
+# Where a PDF's rendered first page (the same image sent to Gemini vision)
+# gets saved so the frontend can display it and draw the overlay markers —
+# PDFs can't be shown directly in an <img> tag. Deterministic filename
+# (document_id_document_type.png), overwritten on every re-check, so no DB
+# column is needed to look it up later — see GET /authenticity/<id>/image.
+AUTHENTICITY_IMAGE_DIR = os.path.join(Config.UPLOAD_FOLDER, 'authenticity')
 
 AUTHENTICITY_PROMPT = """You are analyzing a business document from a Malaysian SME.
 
@@ -141,6 +149,32 @@ def _compute_authenticity_status(document_type, signals):
     return 'passed' if passed else 'warning'
 
 
+def save_rendered_authenticity_image(document_id, document_type, file_path):
+    """
+    If file_path is a PDF, render its first page (the same rendering
+    prepare_gemini_image_payload does for the Gemini vision call) and save
+    it to disk. Image uploads (jpg/png) are served from their original
+    file directly instead — see GET /authenticity/<id>/image — so nothing
+    is saved for those.
+
+    Never raises — a render/save failure here must not break the
+    authenticity row write. Runs unconditionally (regardless of whether
+    Gemini itself succeeds) since the rendered page is useful for display
+    even when Gemini fails and the fallback heuristic is used.
+    """
+    if not file_path.lower().endswith('.pdf'):
+        return
+    try:
+        mime_type, image_bytes = prepare_gemini_image_payload(file_path)
+        os.makedirs(AUTHENTICITY_IMAGE_DIR, exist_ok=True)
+        out_path = os.path.join(AUTHENTICITY_IMAGE_DIR, f'{document_id}_{document_type}.png')
+        with open(out_path, 'wb') as f:
+            f.write(image_bytes)
+        print(f"DEBUG Authenticity: saved rendered PDF page image to {out_path}")
+    except Exception as e:
+        print(f"DEBUG Authenticity: failed to save rendered PDF image: {type(e).__name__}: {e}")
+
+
 def run_authenticity_check(document_id, file_path, document_type, ocr_text=None,
                             precomputed_result=None, skip_gemini=False):
     """
@@ -162,6 +196,8 @@ def run_authenticity_check(document_id, file_path, document_type, ocr_text=None,
     Returns check_id on success, None on failure (e.g. document doesn't exist).
     """
     try:
+        save_rendered_authenticity_image(document_id, document_type, file_path)
+
         if precomputed_result:
             result = precomputed_result
             engine = 'gemini'
