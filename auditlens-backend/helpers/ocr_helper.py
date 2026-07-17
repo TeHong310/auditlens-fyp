@@ -26,14 +26,97 @@ HEADER_WORD_RE = re.compile(
     re.IGNORECASE
 )
 
-# Line-item table ROW: "1  Aluminium Bracket A100  120  8.00  960.00"
-# -> row no. (discarded), description, qty (whole number), unit price,
-# amount. Tried first for both item_description and quantity since it
-# pulls both from the SAME row, so they're always internally consistent
-# with each other (never description from one row and qty from another).
+# Line-item table ROW, all on one line: "1  Aluminium Bracket A100  120
+# 8.00  960.00" -> row no. (discarded), description, qty (whole number),
+# unit price, amount. Kept as a fallback for a document that happens to
+# emit one line per row, but confirmed against REAL Google Vision output
+# that this is NOT how this app's actual invoices/POs/GRs come back —
+# see _extract_first_line_item() below, which is the primary method now.
 LINE_ITEM_ROW_RE = re.compile(
     r'^\s*\d+\s+([A-Za-z][\w\s\-\.\/&]*?)\s+(\d+)\s+[\d,]+\.\d+\s+[\d,]+\.\d+\s*$'
 )
+
+# Google Vision OCR emits this app's line-item table with EACH CELL on
+# its OWN line, confirmed against real OCR output — not one
+# space-separated row per item:
+#   No / Description / Qty / Unit Price (RM) / Amount (RM) / 1 /
+#   Aluminium Bracket A 100 / 120 / 8.00 / 960.00 / 2 / Steel Fastener S200 / ...
+_TABLE_HEADER_LINE_RES = [
+    re.compile(r'^description$', re.IGNORECASE),
+    re.compile(r'^qty\.?$', re.IGNORECASE),
+    re.compile(r'^unit\s*price\s*(?:\(rm\)|\(myr\))?$', re.IGNORECASE),
+    re.compile(r'^amount\s*(?:\(rm\)|\(myr\))?$', re.IGNORECASE),
+]
+_INTEGER_LINE_RE = re.compile(r'^\d+$')
+_DECIMAL_LINE_RE = re.compile(r'^[\d,]+\.\d+$')
+
+
+def _extract_first_line_item(lines):
+    """
+    Primary line-item extraction for this app's actual documents: finds
+    the 4 consecutive standalone header lines "Description"/"Qty"/
+    "Unit Price (RM)"/"Amount (RM)", then parses the FIRST data row that
+    follows — a row-number line, a description line, an integer
+    quantity line, then two decimal price/amount lines, each on its own
+    line, in that order. Returns (description, quantity), or (None,
+    None) if no such table is found or the row doesn't parse cleanly
+    (never guesses).
+    """
+    stripped = [l.strip() for l in lines]
+    n = len(stripped)
+
+    header_start = None
+    for i in range(n - 3):
+        if all(pat.match(stripped[i + j]) for j, pat in enumerate(_TABLE_HEADER_LINE_RES)):
+            header_start = i
+            break
+    if header_start is None:
+        return None, None
+
+    idx = header_start + 4
+    # Skip a leading row-number line (e.g. "1").
+    if idx < n and _INTEGER_LINE_RE.match(stripped[idx]):
+        idx += 1
+
+    # Next non-blank, non-header, non-numeric line is the description.
+    description = None
+    while idx < n:
+        line = stripped[idx]
+        idx += 1
+        if not line or HEADER_WORD_RE.match(line):
+            continue
+        if _INTEGER_LINE_RE.match(line) or _DECIMAL_LINE_RE.match(line):
+            # Hit a number where a description was expected — malformed
+            # table for our purposes, bail out rather than guessing.
+            return None, None
+        if re.search(r'\d+\.\d+', line):
+            # Contains a price/amount-shaped decimal (e.g. "8.00") right
+            # inside what should be a clean single-cell description —
+            # this document isn't actually split one-cell-per-line after
+            # all (row number + description + numbers all landed on one
+            # line instead). Bail so the per-line LINE_ITEM_ROW_RE /
+            # label-based fallbacks can try instead, rather than
+            # swallowing the whole row as a "description".
+            return None, None
+        description = line
+        break
+    if description is None:
+        return None, None
+
+    # From here, the first bare integer line (no decimal point) is the
+    # quantity — decimal lines (unit price, amount) are skipped over.
+    quantity = None
+    while idx < n:
+        line = stripped[idx]
+        if _INTEGER_LINE_RE.match(line):
+            quantity = float(line)
+            break
+        if _DECIMAL_LINE_RE.match(line) or not line:
+            idx += 1
+            continue
+        break
+
+    return description, quantity
 
 
 def clean_vendor_name(vendor):
@@ -231,6 +314,17 @@ def extract_fields(ocr_text):
 
     lines = ocr_text.split('\n')
     full_text_lower = ocr_text.lower()
+
+    # Primary line-item extraction — Google Vision emits this app's
+    # tables with each cell on its own line (confirmed against real OCR
+    # output), so this must run over the whole line list, not per-line
+    # inside the main loop below (which still has a same-line fallback
+    # for simpler non-tabular invoices).
+    item_desc, item_qty = _extract_first_line_item(lines)
+    if item_desc:
+        fields['item_description'] = item_desc
+    if item_qty is not None:
+        fields['quantity'] = item_qty
 
     # ── Track if we passed "Invoice To" section ──────────
     passed_invoice_to = False
@@ -579,6 +673,14 @@ def extract_po_fields(ocr_text):
     lines = ocr_text.split('\n')
     total_candidates = []
 
+    # Primary line-item extraction — see extract_fields() for why this
+    # runs over the whole line list up front rather than per-line below.
+    item_desc, item_qty = _extract_first_line_item(lines)
+    if item_desc:
+        fields['item_description'] = item_desc
+    if item_qty is not None:
+        fields['quantity'] = item_qty
+
     for i, line in enumerate(lines):
         line_clean = line.strip()
         next_line  = lines[i + 1].strip() if i + 1 < len(lines) else ''
@@ -738,6 +840,14 @@ def extract_gr_fields(ocr_text):
 
     lines = ocr_text.split('\n')
     total_candidates = []
+
+    # Primary line-item extraction — see extract_fields() for why this
+    # runs over the whole line list up front rather than per-line below.
+    item_desc, item_qty = _extract_first_line_item(lines)
+    if item_desc:
+        fields['item_description'] = item_desc
+    if item_qty is not None:
+        fields['quantity'] = item_qty
 
     for i, line in enumerate(lines):
         line_clean = line.strip()

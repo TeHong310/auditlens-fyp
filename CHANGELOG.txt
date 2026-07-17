@@ -3761,3 +3761,85 @@ Setup/config needed:
      synthetic text used in this session's offline testing — synthetic
      text can't perfectly replicate whatever line-breaking Google
      Vision OCR actually produces for your specific PDFs' table layout.
+
+------------------------------------------------------------------------------
+2026-07-17 - Rewrite line-item extraction for the REAL Google Vision
+             table structure: every cell on its own line, not one
+             space-separated row per item
+
+Root cause: the previous fix (LINE_ITEM_ROW_RE, one prior entry) assumed
+  a data row looked like "1  Aluminium Bracket A100  120  8.00  960.00"
+  all on one line. Real Google Vision output for this app's tables looks
+  nothing like that — it emits ONE CELL PER LINE:
+    No / Description / Qty / Unit Price (RM) / Amount (RM) / 1 /
+    Aluminium Bracket A 100 / 120 / 8.00 / 960.00 / 2 / ...
+  That old regex could never match this, so item_description fell
+  through to the label-based fallback (which grabbed "Qty" — the next
+  column header — since "Description" appeared as a bare header line
+  with nothing after it) and quantity found nothing at all.
+
+What was changed (helpers/ocr_helper.py):
+  - New `_extract_first_line_item(lines)`: the primary method now.
+    Locates the table by finding 4 CONSECUTIVE standalone lines matching
+    "Description" / "Qty" / "Unit Price (RM)" / "Amount (RM)"
+    (`_TABLE_HEADER_LINE_RES`), then walks forward from there: skips a
+    leading row-number line ("1"), takes the next non-header, non-
+    numeric line as the description, then continues scanning forward
+    for the first bare INTEGER line (no decimal point) as the quantity
+    — skipping over the decimal unit-price/amount lines in between, per
+    the exact algorithm given in the request. Returns (None, None)
+    rather than guessing if the structure doesn't hold up (no header
+    block found, or a number appears where the description should be).
+  - Safety net added after reproducing an edge case myself while
+    testing: if the "description" candidate line itself contains a
+    decimal number (e.g. "8.00"), it's actually an unsplit combined row
+    (this document's cells landed on one line after all, not one-per-
+    line), not a clean single cell — bails out to (None, None) instead
+    of swallowing the whole row as "the description", so the existing
+    LINE_ITEM_ROW_RE / label-based fallbacks (both kept, unchanged) get
+    a chance to parse it correctly instead.
+  - Wired into all three of extract_fields/extract_po_fields/
+    extract_gr_fields: `_extract_first_line_item()` now runs ONCE over
+    the whole line list, before each function's main per-line loop
+    (which still runs afterward and only fills in item_description/
+    quantity via LINE_ITEM_ROW_RE or the label-based fallback if the
+    new primary method didn't find anything) — necessary because,
+    unlike every other field in this file, locating a 4-line header
+    block requires looking across multiple lines at once, which doesn't
+    fit the existing single-line-at-a-time loop.
+  - HEADER_WORD_RE (from the prior entry) is reused as-is as the
+    denylist for what a description/quantity value is never allowed to
+    be — no changes needed there, it already covered the right words.
+
+Testing (all offline, no Gemini/network/DB call):
+  - `python -m py_compile` — compiles clean.
+  - Built OCR text with the EXACT line-by-line structure given in the
+    request (every header and every cell on its own line) for: a MATCH
+    set (qty=120, identical across invoice/PO/GR, two line items per
+    document to confirm only the FIRST is taken) and a MISMATCH set
+    (PO/Invoice qty=100, GR qty=90). Confirmed for every document type:
+    item_description = "Aluminium Bracket A 100" exactly (never "Qty"
+    or any other header word), quantity is the correct integer, and the
+    mismatch set correctly fails `_quantities_match()`.
+  - Also called `_extract_first_line_item()` directly against the
+    LITERAL line list pasted verbatim in the request (not a
+    reconstruction) — confirmed it returns exactly
+    ("Aluminium Bracket A 100", 120.0).
+  - While building this test, hit the edge case above for real (my own
+    earlier "one-line-row" test script's synthetic text has a data row
+    all on one line, right after per-line headers) — this is what led
+    to adding the decimal-number safety net, then re-verified that
+    script's scenarios all pass again with the fallback taking over
+    correctly, rather than just deleting the now-inconvenient test.
+  - Re-ran the total_amount/tax_amount regression suite and the simple
+    non-tabular "Description:"/"Qty:" label-style test — both still
+    pass, confirming no regression to the existing fields or the
+    simpler fallback path.
+
+Setup/config needed:
+  1. Redeploy the Render backend.
+  2. Re-upload (or Re-check) a real invoice/PO/GR set to confirm against
+     actual Google Vision output — this fix was built directly against
+     the real OCR structure you provided this time, so confidence is
+     higher than the previous entry, but your real PDFs are still the
+     authoritative test.
