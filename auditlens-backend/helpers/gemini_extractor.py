@@ -102,14 +102,22 @@ Upload source definitions:
 Be strict — only mark a signal true if clearly visible.
 
 signal_boxes rules:
-- Only include a key in signal_boxes for a signal that is true above. If a
-  signal is false, omit its key from signal_boxes entirely.
+- If a signal is true, include its key in signal_boxes with a tight
+  bounding box around that specific mark/text.
+- If a signal is false, you MAY still include its key with a box if you
+  can identify a specific, plausible location for it — e.g. a blank
+  signature line, an empty area where a company chop/logo would
+  typically appear. This helps the auditor see exactly where to look.
+  If there's no sensible specific location to point at, omit the key
+  entirely.
 - Each box is [ymin, xmin, ymax, xmax], normalized to a 0-1000 scale relative
   to the full image (top-left is [0,0], bottom-right is [1000,1000]).
-- If has_company_chop or has_company_logo is true, the box should tightly
-  bound that specific mark (compact box).
-- If has_company_name or has_signature is true, the box should bound that
-  specific text/mark.
+- If has_company_chop or has_company_logo is present, the box should
+  tightly bound that specific mark (compact box); if absent, bound the
+  empty area where it would go.
+- If has_company_name or has_signature is present, the box should bound
+  that specific text/mark; if absent, bound the blank line/space where
+  it would go.
 
 Return ONLY valid JSON, no markdown, no explanation, no code fences. Return
 this exact JSON structure:

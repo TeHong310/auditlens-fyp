@@ -22,7 +22,7 @@
       <div class="image-wrap" *ngIf="imageLoadState === 'image'">
         <img #docImage [src]="imageBlobUrl" (load)="onImageLoad()" class="doc-image" alt="Document" />
         <div class="marker" *ngFor="let m of markers"
-             [ngClass]="m.shape === 'circle' ? 'marker-circle' : 'marker-rect'"
+             [ngClass]="[m.shape === 'circle' ? 'marker-circle' : 'marker-rect', m.present ? 'marker-present' : 'marker-missing']"
              [style.left.px]="m.left" [style.top.px]="m.top"
              [style.width.px]="m.width" [style.height.px]="m.height">
         </div>
@@ -44,7 +44,7 @@
 
       <div class="legend" *ngIf="imageLoadState === 'image'">
         <span class="legend-item"><span class="legend-swatch legend-green"></span> Present &amp; located</span>
-        <span class="legend-item"><span class="legend-text-red">✗</span> Missing (checklist only)</span>
+        <span class="legend-item"><span class="legend-swatch legend-red"></span> Missing &amp; located</span>
       </div>
     </div>
 

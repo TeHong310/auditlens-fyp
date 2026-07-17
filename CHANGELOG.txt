@@ -3104,3 +3104,103 @@ Setup/config needed:
      image yet, so the image will 404 until you click Re-check once.
      Newly-uploaded PDFs after this deploy get the image saved
      automatically on first upload.
+
+------------------------------------------------------------------------------
+2026-07-17 - Color-code overlay markers: green for present/detected
+             signals, red for missing signals that still have a
+             plausible location; legend updated to show both
+
+What was changed:
+
+BACKEND:
+  - helpers/authenticity_check.py (`run_authenticity_check`): the
+    signal_boxes retention filter used to require `is_present` (drop
+    any box belonging to a signal marked false) before keeping it —
+    that meant a missing signal could NEVER have a location even if
+    Gemini identified one. Now keeps ANY well-formed
+    [ymin,xmin,ymax,xmax] Gemini returns, for a present OR missing
+    signal; presence/absence stays a separate concern (the has_company_
+    chop/logo/name/signature booleans), independent of whether a box
+    exists.
+  - AUTHENTICITY_PROMPT (authenticity_check.py) and INVOICE_FULL_PROMPT
+    (gemini_extractor.py) — both had an identical instruction: "Only
+    include a key in signal_boxes for a signal that is true... If a
+    signal is false, omit its key entirely." Softened to: if false, you
+    MAY still include a box if there's a specific, plausible location
+    (e.g. a blank signature line, an empty area where a chop/logo would
+    typically appear) — otherwise omit it, same as before. Without this
+    prompt change, the code-side fix above would rarely have anything
+    to keep, since Gemini would keep obeying the old "always omit"
+    instruction.
+  - No DB/schema change — signal_boxes is unchanged JSONB, this only
+    changes which keys end up in it.
+
+FRONTEND (auditor-authenticity-detail component):
+  - OverlayMarker interface: added `present: boolean`.
+  - `recomputeMarkers()`: no longer filters markers by presence — draws
+    a marker for every signal that HAS a box in signal_boxes (present
+    or missing), tagging each with `present: !!this.check[key]`. Shape
+    (rect vs circle) is unchanged, still from the existing SHAPE_MAP —
+    only color/meaning changes between present and missing, not shape.
+  - Template: marker div now gets a second class
+    (`marker-present`/`marker-missing`) alongside the existing shape
+    class, via an ngClass array.
+  - Legend: replaced the old "✗ Missing (checklist only)" text-only
+    entry with a proper red swatch, "Missing & located" — matching the
+    new marker meaning (a checklist-only ✗ with no location still shows
+    no swatch/marker at all, same as before; this legend is specifically
+    about the two marker colors now visible on the image).
+  - CSS: `.marker`'s hardcoded green border/background moved into a new
+    `.marker-present` rule; added `.marker-missing` (red, #DC2626,
+    matching the app's existing error-red). Same split for
+    `.legend-swatch`: base sizing/shape stays, color moved into
+    `.legend-green` (this class was referenced in the HTML from an
+    earlier session but never actually defined — now it is) and the new
+    `.legend-red`. Removed `.legend-text-red`, now unused after the
+    legend HTML changed to use a swatch instead of colored ✗ text.
+
+Why:
+  - A missing signal (no chop, no signature, etc.) is often exactly
+    what an auditor needs to SEE on the document — e.g. a blank
+    signature line — not just read as a checklist ✗. Gemini can often
+    point at that blank spot; the code was discarding that location
+    unconditionally before this change.
+
+Testing:
+  - `python -m py_compile` on both changed backend files — compiles
+    clean.
+  - Offline (no Gemini/network call): isolated the exact retention
+    filter logic and confirmed a box for a FALSE signal (has_signature)
+    is now kept, while a signal with no box at all stays correctly
+    absent. Also ran `run_authenticity_check()` directly with a fake
+    precomputed_result containing a mix of present/missing-with-box/
+    missing-without-box signals against a real sample PDF (confirmed
+    the image-save side-effect still works); the DB write itself hit an
+    expected FK violation (test used a non-existent document_id) —
+    unrelated to the logic being tested, and the filter behavior was
+    separately confirmed correct in isolation before the DB write was
+    reached.
+  - `ng build --configuration=production` passes clean (771.54 kB
+    initial) after the TS/HTML/CSS changes.
+  - Full browser-level verification with Playwright against the actual
+    dev server (scratchpad, not committed): a hardcoded, fully mocked
+    check response with 2 present signals (chop, name) and 1 MISSING
+    signal that still has a signal_boxes entry (signature) — no real
+    backend or Gemini call anywhere in the test (network intercepted
+    with route.fulfill(), same technique as the original overlay
+    verification from an earlier session). Confirmed: exactly 3 markers
+    render (not 4 — has_company_logo correctly gets none, since it has
+    no box); 2 are tagged marker-present with computed border-color
+    rgb(16, 185, 129) (#10B981 green); 1 is tagged marker-missing with
+    computed border-color rgb(220, 38, 38) (#DC2626 red); the legend
+    shows exactly 2 items ("Present & located" / "Missing & located")
+    with correctly colored swatches matching the marker colors.
+
+Setup/config needed:
+  1. Redeploy both the backend (prompt + filter change) and the
+     frontend (marker/legend changes) together.
+  2. Existing authenticity_checks rows keep whatever signal_boxes they
+     already have (built under the old "omit if false" behavior, so
+     likely no missing-signal boxes yet) — click Re-check on a document
+     to get Gemini to (optionally) supply a location for a missing
+     signal under the new prompt.

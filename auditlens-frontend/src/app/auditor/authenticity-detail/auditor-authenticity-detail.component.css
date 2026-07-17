@@ -103,13 +103,21 @@
 
 .marker {
   position: absolute;
-  border: 3px solid #10B981;
-  background: rgba(16, 185, 129, 0.10);
   pointer-events: none;
 }
 
 .marker-rect { border-radius: 6px; }
 .marker-circle { border-radius: 50%; }
+
+.marker-present {
+  border: 3px solid #10B981;
+  background: rgba(16, 185, 129, 0.10);
+}
+
+.marker-missing {
+  border: 3px solid #DC2626;
+  background: rgba(220, 38, 38, 0.10);
+}
 
 .image-hint {
   background: #EFF6FF;
@@ -153,12 +161,18 @@
   width: 14px;
   height: 14px;
   border-radius: 4px;
-  border: 2px solid #10B981;
-  background: rgba(16, 185, 129, 0.10);
   display: inline-block;
 }
 
-.legend-text-red { color: #DC2626; font-weight: 700; }
+.legend-green {
+  border: 2px solid #10B981;
+  background: rgba(16, 185, 129, 0.10);
+}
+
+.legend-red {
+  border: 2px solid #DC2626;
+  background: rgba(220, 38, 38, 0.10);
+}
 
 /* Side panel */
 .side-panel {

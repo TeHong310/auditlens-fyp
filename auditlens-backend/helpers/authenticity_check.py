@@ -43,17 +43,25 @@ Signal definitions:
   NOT a typed name or printed name.
 
 signal_boxes rules:
-- Only include a key in signal_boxes for a signal that is true above. If a
-  signal is false, omit its key from signal_boxes entirely (do not include
-  it with a null or empty value).
+- If a signal is true, include its key in signal_boxes with a tight
+  bounding box around that specific mark/text.
+- If a signal is false, you MAY still include its key with a box if you
+  can identify a specific, plausible location for it — e.g. a blank
+  signature line, an empty area where a company chop/logo would
+  typically appear on this type of document. This helps the auditor see
+  exactly where to look. If there's no sensible specific location to
+  point at, omit the key entirely (do not include it with a null or
+  empty value).
 - Each box is [ymin, xmin, ymax, xmax], normalized to a 0-1000 scale relative
   to the full image (top-left is [0,0], bottom-right is [1000,1000]) —
   standard Gemini bounding box format.
-- If has_company_chop or has_company_logo is true, the box should tightly
-  bound that specific mark (compact box).
-- If has_company_name or has_signature is true, the box should bound that
-  specific text/mark (can be wider for text fields, but stay tight to the
-  actual characters, not the whole document).
+- If has_company_chop or has_company_logo is present, the box should
+  tightly bound that specific mark (compact box); if absent, bound the
+  empty area where it would go.
+- If has_company_name or has_signature is present, the box should bound
+  that specific text/mark (can be wider for text fields, but stay tight
+  to the actual characters, not the whole document); if absent, bound
+  the blank line/space where it would go.
 
 Upload source definitions:
 - phone_photo: Handheld phone photo — visible perspective distortion, uneven
@@ -222,21 +230,20 @@ def run_authenticity_check(document_id, file_path, document_type, ocr_text=None,
 
         status = _compute_authenticity_status(document_type, result)
 
-        # Only keep a box for a signal we've actually parsed as present,
-        # and only if Gemini gave a well-formed [ymin,xmin,ymax,xmax] —
-        # keeps signal_boxes' keys consistent with the boolean flags
-        # regardless of what Gemini actually returned.
+        # Keep any well-formed [ymin,xmin,ymax,xmax] Gemini returned, for
+        # a PRESENT signal or a MISSING one — a missing signal can still
+        # have a plausible location (e.g. a blank signature line, an
+        # empty area where a chop would go), and the frontend now draws
+        # those as a red marker (vs. green for present) so the auditor
+        # can see exactly where to look. Only requirement is a
+        # well-formed box; presence/absence is decided separately by the
+        # has_company_chop/logo/name/signature booleans above.
         raw_boxes = result.get('signal_boxes') or {}
-        present_signals = {
-            'has_company_chop': chop,
-            'has_company_logo': logo,
-            'has_company_name': name,
-            'has_signature': sig,
-        }
+        signal_box_keys = ('has_company_chop', 'has_company_logo', 'has_company_name', 'has_signature')
         signal_boxes = {
             key: raw_boxes[key]
-            for key, is_present in present_signals.items()
-            if is_present and isinstance(raw_boxes.get(key), list) and len(raw_boxes[key]) == 4
+            for key in signal_box_keys
+            if isinstance(raw_boxes.get(key), list) and len(raw_boxes[key]) == 4
         }
 
         conn = get_db_connection()

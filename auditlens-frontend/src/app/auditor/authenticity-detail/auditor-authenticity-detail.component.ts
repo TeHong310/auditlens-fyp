@@ -9,6 +9,7 @@ type SignalKey = 'has_company_chop' | 'has_company_logo' | 'has_company_name' | 
 interface OverlayMarker {
   key: SignalKey;
   shape: 'rect' | 'circle';
+  present: boolean; // true = detected (green marker), false = missing but located (red marker)
   left: number;
   top: number;
   width: number;
@@ -184,6 +185,10 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     const scaleX = renderedWidth / 1000;
     const scaleY = renderedHeight / 1000;
 
+    // A signal has a marker whenever the backend kept a box for it,
+    // regardless of present/missing — present=green, missing=red (a
+    // missing signal can still have a plausible location, e.g. a blank
+    // signature line). check[key] is the presence boolean.
     const markers: OverlayMarker[] = [];
     for (const key of this.signalKeys) {
       const box = this.check.signal_boxes[key];
@@ -192,6 +197,7 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
       markers.push({
         key,
         shape: SHAPE_MAP[key],
+        present: !!this.check[key],
         left: xmin * scaleX,
         top: ymin * scaleY,
         width: (xmax - xmin) * scaleX,
