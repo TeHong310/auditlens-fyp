@@ -21,6 +21,16 @@ class Config:
     POPPLER_PATH  = os.environ.get('POPPLER_PATH') or None
     ALLOWED_EXTENSIONS = {'pdf', 'jpg', 'jpeg', 'png'}
 
+    # Render's free tier disk is ephemeral (wiped on every redeploy/
+    # restart), so uploaded files are also persisted as bytes in
+    # Postgres (see documents/purchase_orders/goods_receipts.file_bytes).
+    # Invoices/POs/GRs are small scanned documents — 8MB is generous
+    # headroom while still keeping row sizes sane. A file over this cap
+    # still uploads and processes normally (OCR/Gemini/local disk all
+    # still work for the current request); it just isn't persisted to
+    # the DB, so it won't survive a restart.
+    MAX_DB_FILE_BYTES = 8 * 1024 * 1024
+
     # Google Cloud Vision API
     GOOGLE_VISION_API_KEY = os.environ.get('GOOGLE_VISION_API_KEY')
 

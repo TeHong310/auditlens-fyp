@@ -329,20 +329,25 @@ def _call_gemini(template, ocr_text):
         return {}
 
 
-def prepare_gemini_image_payload(file_path):
+def prepare_gemini_image_payload(file_bytes, file_name):
     """
-    Returns (mime_type, raw_bytes) ready for google.genai.types.Part.from_bytes.
+    Returns (mime_type, raw_bytes) ready for google.genai.types.Part.from_bytes,
+    given the raw bytes of an already-read file (from DB or disk) and its
+    original filename (used only to detect the extension) — takes bytes
+    rather than a file path so it has no dependency on the local
+    filesystem, which is ephemeral on Render's free tier.
 
-    PDFs are rendered to their FIRST PAGE as a PNG image (PyMuPDF/fitz —
-    no system dependency, unlike pdf2image+poppler) rather than sent as
-    raw PDF bytes: sending a PDF's raw bytes doesn't reliably produce
-    visual-signal detection or [ymin,xmin,ymax,xmax] bounding boxes for
-    chop/logo/signature, since that's a rasterized-page-image task, not
-    a document-text task. Image files are sent through unchanged.
+    PDFs are rendered to their FIRST PAGE as a PNG image (PyMuPDF/fitz,
+    opened directly from the in-memory bytes — no temp file needed)
+    rather than sent as raw PDF bytes: sending a PDF's raw bytes doesn't
+    reliably produce visual-signal detection or [ymin,xmin,ymax,xmax]
+    bounding boxes for chop/logo/signature, since that's a rasterized-
+    page-image task, not a document-text task. Image files are passed
+    through unchanged.
     """
-    ext = file_path.lower().rsplit('.', 1)[-1]
+    ext = file_name.lower().rsplit('.', 1)[-1]
     if ext == 'pdf':
-        doc = fitz.open(file_path)
+        doc = fitz.open(stream=file_bytes, filetype='pdf')
         try:
             pix = doc[0].get_pixmap(matrix=fitz.Matrix(PDF_RENDER_ZOOM, PDF_RENDER_ZOOM))
             png_bytes = pix.tobytes('png')
@@ -350,13 +355,11 @@ def prepare_gemini_image_payload(file_path):
             doc.close()
         return 'image/png', png_bytes
 
-    with open(file_path, 'rb') as f:
-        data = f.read()
     mime = 'image/png' if ext == 'png' else 'image/jpeg'
-    return mime, data
+    return mime, file_bytes
 
 
-def gemini_extract_invoice_full(file_path):
+def gemini_extract_invoice_full(file_bytes, file_name):
     """
     Single merged Gemini vision call for an invoice: extracted fields AND
     authenticity signals in one request/response, so an invoice upload only
@@ -367,7 +370,7 @@ def gemini_extract_invoice_full(file_path):
     is unset.
     """
     try:
-        image = prepare_gemini_image_payload(file_path)
+        image = prepare_gemini_image_payload(file_bytes, file_name)
         text = call_gemini_sdk(
             INVOICE_FULL_PROMPT, image=image,
             context='merged invoice extraction+authenticity',

@@ -1,4 +1,5 @@
 import os
+import io
 import mimetypes
 from flask import Blueprint, jsonify, request, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -44,28 +45,58 @@ _SELECT_WITH_JOINS = '''
 '''
 
 
-def _lookup_file_path(cursor, document_id, document_type):
-    """File path for the physical file Gemini needs to (re-)analyze.
-    PO/GR file paths live in their own tables, keyed by document_id but
-    with their own file_path column (a document_id can have multiple PO/GR
-    rows over time; take the most recent, matching this app's existing
-    convention elsewhere for "the current PO/GR for this document")."""
+def _lookup_file_info(cursor, document_id, document_type):
+    """
+    Returns {'file_bytes', 'file_mime', 'file_name', 'file_path'} for the
+    original uploaded file, or None if no row exists. PO/GR file info
+    lives in their own tables, keyed by document_id but with their own
+    row (a document_id can have multiple PO/GR rows over time; take the
+    most recent, matching this app's existing convention elsewhere for
+    "the current PO/GR for this document").
+
+    file_bytes (Postgres) is the durable source — Render's free tier
+    disk is ephemeral and wiped on every redeploy/restart. If file_bytes
+    is NULL (a file over Config.MAX_DB_FILE_BYTES, or a record from
+    before this feature existed) but the local disk copy still happens
+    to exist in this process, that's read and returned instead —
+    degrades gracefully without weakening the DB as the source of truth
+    going forward.
+    """
     if document_type == 'invoice':
-        cursor.execute('SELECT file_path FROM documents WHERE document_id = %s', (document_id,))
+        cursor.execute(
+            'SELECT file_path, file_name, file_bytes, file_mime FROM documents WHERE document_id = %s',
+            (document_id,)
+        )
     elif document_type == 'po':
         cursor.execute(
-            'SELECT file_path FROM purchase_orders WHERE document_id = %s ORDER BY uploaded_at DESC LIMIT 1',
+            '''SELECT file_path, file_name, file_bytes, file_mime FROM purchase_orders
+               WHERE document_id = %s ORDER BY uploaded_at DESC LIMIT 1''',
             (document_id,)
         )
     elif document_type == 'gr':
         cursor.execute(
-            'SELECT file_path FROM goods_receipts WHERE document_id = %s ORDER BY uploaded_at DESC LIMIT 1',
+            '''SELECT file_path, file_name, file_bytes, file_mime FROM goods_receipts
+               WHERE document_id = %s ORDER BY uploaded_at DESC LIMIT 1''',
             (document_id,)
         )
     else:
         return None
+
     row = cursor.fetchone()
-    return row['file_path'] if row else None
+    if not row:
+        return None
+
+    file_bytes = bytes(row['file_bytes']) if row['file_bytes'] is not None else None
+    if file_bytes is None and row['file_path'] and os.path.exists(row['file_path']):
+        with open(row['file_path'], 'rb') as f:
+            file_bytes = f.read()
+
+    return {
+        'file_bytes': file_bytes,
+        'file_mime':  row['file_mime'],
+        'file_name':  row['file_name'],
+        'file_path':  row['file_path'],
+    }
 
 
 # ------------------------------------------------------------
@@ -109,16 +140,16 @@ def get_authenticity_check(document_id):
 # ------------------------------------------------------------
 # GET AUTHENTICITY IMAGE — the image to show + draw overlay markers on.
 # GET /authenticity/<document_id>/image?document_type=invoice|po|gr
-# Serves a cached rendered PNG if one already exists (saved either at
-# upload time or by an earlier call to this route). Otherwise, for a
-# PDF, renders page 1 from the ORIGINAL uploaded file on demand and
-# caches it — this is the fix for older records uploaded before image
-# saving existed, so every record can display its image regardless of
-# when it was uploaded. For an image upload (jpg/png), serves the
-# original file directly, since it already is one. PURE RENDERING ONLY
-# (PyMuPDF/fitz via save_rendered_authenticity_image) — this route never
-# calls Gemini or makes any AI/network call; it only ever reads/renders
-# the already-stored original file. Auditor only.
+# Serves a cached rendered PNG if one already exists in the local
+# (ephemeral) cache. Otherwise, for a PDF, renders page 1 on demand from
+# the ORIGINAL file bytes stored in Postgres — NOT local disk, which is
+# wiped on every Render redeploy/restart — and caches the render
+# locally, so every future request in this process is instant. For an
+# image upload (jpg/png), serves the DB-stored bytes directly, since
+# they already are an image. PURE RENDERING ONLY (PyMuPDF/fitz via
+# save_rendered_authenticity_image) — this route never calls Gemini or
+# makes any AI/network call; it only ever reads/renders bytes already
+# sitting in the database. Auditor only.
 # ------------------------------------------------------------
 @authenticity_bp.route('/<int:document_id>/image', methods=['GET'])
 @jwt_required()
@@ -140,23 +171,24 @@ def get_authenticity_image(document_id):
     try:
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        file_path = _lookup_file_path(cursor, document_id, document_type)
+        info = _lookup_file_info(cursor, document_id, document_type)
         conn.close()
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-    if not file_path or not os.path.exists(file_path):
+    if not info or not info['file_bytes']:
         return jsonify({'error': 'Original file unavailable for this document'}), 404
 
-    if not file_path.lower().endswith('.pdf'):
-        mimetype = mimetypes.guess_type(file_path)[0] or 'image/jpeg'
-        return send_file(file_path, mimetype=mimetype)
+    if not info['file_name'].lower().endswith('.pdf'):
+        mimetype = info['file_mime'] or mimetypes.guess_type(info['file_name'])[0] or 'image/jpeg'
+        return send_file(io.BytesIO(info['file_bytes']), mimetype=mimetype)
 
     # No cached render yet for this PDF — render page 1 on demand from
-    # the original file and cache it, so every future request for this
-    # document is instant. save_rendered_authenticity_image() is pure
-    # PyMuPDF rendering, no Gemini/network call whatsoever.
-    save_rendered_authenticity_image(document_id, document_type, file_path)
+    # the ORIGINAL file bytes (Postgres, not disk) and cache it locally,
+    # so every future request for this document is instant.
+    # save_rendered_authenticity_image() is pure PyMuPDF rendering, no
+    # Gemini/network call whatsoever — confirmed again this session.
+    save_rendered_authenticity_image(document_id, document_type, info['file_bytes'], info['file_name'])
 
     if not os.path.exists(rendered_path):
         return jsonify({'error': 'Could not render document image'}), 500
@@ -224,13 +256,13 @@ def recheck_authenticity(document_id):
     try:
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        file_path = _lookup_file_path(cursor, document_id, document_type)
+        info = _lookup_file_info(cursor, document_id, document_type)
         conn.close()
 
-        if not file_path:
+        if not info or not info['file_bytes']:
             return jsonify({'error': 'No file found for this document/document_type'}), 404
 
-        check_id = run_authenticity_check(document_id, file_path, document_type)
+        check_id = run_authenticity_check(document_id, info['file_bytes'], info['file_name'], document_type)
         if check_id is None:
             return jsonify({'error': 'Re-check failed (Gemini call unsuccessful) — see server logs'}), 502
 

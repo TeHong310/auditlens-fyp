@@ -82,17 +82,19 @@ def _strip_markdown_fences(text):
     return text.strip()
 
 
-def _call_gemini_vision(file_path):
+def _call_gemini_vision(file_bytes, file_name):
     """
     Call Gemini vision with the document via the google-genai SDK (not raw
     HTTP — see call_gemini_sdk in gemini_extractor.py for why). PDFs are
     rendered to their first page as an image first (see
     prepare_gemini_image_payload) so chop/logo/signature and their
     bounding boxes can actually be detected — raw PDF bytes don't
-    reliably produce that. Returns parsed JSON dict or None.
+    reliably produce that. Takes raw bytes (from DB, not a file path) so
+    it has no dependency on the local filesystem. Returns parsed JSON
+    dict or None.
     """
     try:
-        image = prepare_gemini_image_payload(file_path)
+        image = prepare_gemini_image_payload(file_bytes, file_name)
         text = call_gemini_sdk(
             AUTHENTICITY_PROMPT, image=image, context='authenticity',
             timeout_ms=GEMINI_VISION_TIMEOUT_MS,
@@ -157,23 +159,28 @@ def _compute_authenticity_status(document_type, signals):
     return 'passed' if passed else 'warning'
 
 
-def save_rendered_authenticity_image(document_id, document_type, file_path):
+def save_rendered_authenticity_image(document_id, document_type, file_bytes, file_name):
     """
-    If file_path is a PDF, render its first page (the same rendering
-    prepare_gemini_image_payload does for the Gemini vision call) and save
-    it to disk. Image uploads (jpg/png) are served from their original
-    file directly instead — see GET /authenticity/<id>/image — so nothing
-    is saved for those.
+    If file_name is a PDF, render its first page from file_bytes (the
+    same rendering prepare_gemini_image_payload does for the Gemini
+    vision call) and cache it to local disk. Image uploads (jpg/png) are
+    served from their original bytes directly instead — see
+    GET /authenticity/<id>/image — so nothing is cached for those.
+
+    Takes raw bytes (from DB) rather than a file path — this cache
+    directory is itself on Render's ephemeral disk, so it's just a
+    same-process speedup, not the source of truth; it's always
+    rebuildable from the DB-stored bytes after a restart.
 
     Never raises — a render/save failure here must not break the
     authenticity row write. Runs unconditionally (regardless of whether
     Gemini itself succeeds) since the rendered page is useful for display
     even when Gemini fails and the fallback heuristic is used.
     """
-    if not file_path.lower().endswith('.pdf'):
+    if not file_name.lower().endswith('.pdf'):
         return
     try:
-        mime_type, image_bytes = prepare_gemini_image_payload(file_path)
+        mime_type, image_bytes = prepare_gemini_image_payload(file_bytes, file_name)
         os.makedirs(AUTHENTICITY_IMAGE_DIR, exist_ok=True)
         out_path = os.path.join(AUTHENTICITY_IMAGE_DIR, f'{document_id}_{document_type}.png')
         with open(out_path, 'wb') as f:
@@ -183,11 +190,15 @@ def save_rendered_authenticity_image(document_id, document_type, file_path):
         print(f"DEBUG Authenticity: failed to save rendered PDF image: {type(e).__name__}: {e}")
 
 
-def run_authenticity_check(document_id, file_path, document_type, ocr_text=None,
+def run_authenticity_check(document_id, file_bytes, file_name, document_type, ocr_text=None,
                             precomputed_result=None, skip_gemini=False):
     """
     Main entry. NEVER raises — pipeline safe.
     document_type: 'invoice' | 'po' | 'gr' (from upload endpoint, required)
+    file_bytes/file_name: the raw bytes of the uploaded document (from
+      DB, not a disk path) and its original filename (used to detect
+      PDF vs image) — Render's disk is ephemeral, so bytes are always
+      the source of truth here.
     Always writes/updates an authenticity_checks row, using Gemini vision
     when available and falling back to OCR-text heuristics when it isn't
     (429/timeout/network/parse failure) — Gemini is best-effort, not a
@@ -204,14 +215,14 @@ def run_authenticity_check(document_id, file_path, document_type, ocr_text=None,
     Returns check_id on success, None on failure (e.g. document doesn't exist).
     """
     try:
-        save_rendered_authenticity_image(document_id, document_type, file_path)
+        save_rendered_authenticity_image(document_id, document_type, file_bytes, file_name)
 
         if precomputed_result:
             result = precomputed_result
             engine = 'gemini'
             print("DEBUG Authenticity: engine=gemini (merged call)")
         else:
-            result = None if skip_gemini else _call_gemini_vision(file_path)
+            result = None if skip_gemini else _call_gemini_vision(file_bytes, file_name)
             if result:
                 engine = 'gemini'
                 print("DEBUG Authenticity: engine=gemini")

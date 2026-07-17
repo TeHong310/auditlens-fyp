@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
 import psycopg2.extras
 import os
+import io
 import mimetypes
 from datetime import datetime
 from db import get_db_connection, get_user_by_id
@@ -15,16 +16,32 @@ from config import Config
 documents_bp = Blueprint('documents', __name__)
 
 
-def _send_document_file(file_path, file_name):
-    if not os.path.exists(file_path):
-        return jsonify({'error': 'File not found on server'}), 404
-    mimetype = mimetypes.guess_type(file_name)[0] or 'application/octet-stream'
-    return send_file(
-        file_path,
-        mimetype=mimetype,
-        as_attachment=False,
-        download_name=file_name
-    )
+def _send_document_file(file_bytes, file_mime, file_path, file_name):
+    """
+    Serves the DB-stored bytes if present (the durable source — Render's
+    disk is ephemeral, so this is what survives a restart). Falls back
+    to the local disk path if bytes weren't stored (a file over
+    Config.MAX_DB_FILE_BYTES, or a record from before this feature) —
+    only works within the same process's lifetime, but degrades
+    gracefully rather than failing immediately for that case.
+    """
+    if file_bytes:
+        mimetype = file_mime or mimetypes.guess_type(file_name)[0] or 'application/octet-stream'
+        return send_file(
+            io.BytesIO(bytes(file_bytes)),
+            mimetype=mimetype,
+            as_attachment=False,
+            download_name=file_name
+        )
+    if file_path and os.path.exists(file_path):
+        mimetype = mimetypes.guess_type(file_name)[0] or 'application/octet-stream'
+        return send_file(
+            file_path,
+            mimetype=mimetype,
+            as_attachment=False,
+            download_name=file_name
+        )
+    return jsonify({'error': 'File not found on server'}), 404
 
 # ------------------------------------------------------------
 # UPLOAD INVOICE + OCR
@@ -59,12 +76,28 @@ def upload_document():
         file_path = os.path.join(Config.UPLOAD_FOLDER, safe_name)
         file.save(file_path)
 
+        # Render's free tier disk is ephemeral (wiped on redeploy/restart),
+        # so the original bytes are also persisted to Postgres — that's
+        # the durable copy going forward; file_path/disk is only a
+        # same-process convenience for the OCR/Gemini calls below. Files
+        # over the size guard still upload and process normally; they
+        # just aren't persisted to the DB (won't survive a restart).
+        with open(file_path, 'rb') as f:
+            file_bytes_data = f.read()
+        file_mime = mimetypes.guess_type(safe_name)[0] or 'application/octet-stream'
+        db_file_bytes = file_bytes_data if len(file_bytes_data) <= Config.MAX_DB_FILE_BYTES else None
+        if db_file_bytes is None:
+            print(f"DEBUG Document upload: {safe_name} is {len(file_bytes_data)} bytes, "
+                  f"over MAX_DB_FILE_BYTES ({Config.MAX_DB_FILE_BYTES}) — not persisted to DB")
+
         conn   = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            '''INSERT INTO documents (uploaded_by, file_name, file_path, file_type, input_method, status)
-               VALUES (%s, %s, %s, %s, %s, %s) RETURNING document_id''',
-            (user['user_id'], safe_name, file_path, file_ext, input_method, 'ocr_processing')
+            '''INSERT INTO documents
+               (uploaded_by, file_name, file_path, file_type, input_method, status, file_bytes, file_mime)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING document_id''',
+            (user['user_id'], safe_name, file_path, file_ext, input_method, 'ocr_processing',
+             psycopg2.Binary(db_file_bytes) if db_file_bytes is not None else None, file_mime)
         )
         document_id = cursor.fetchone()[0]
         conn.commit()
@@ -80,7 +113,7 @@ def upload_document():
         # separate calls — field extraction + authenticity — used to hit).
         # Falls back to the regex fields above and the OCR-text
         # authenticity heuristic (below) if this call fails.
-        gemini_result = gemini_extract_invoice_full(file_path)
+        gemini_result = gemini_extract_invoice_full(file_bytes_data, safe_name)
         if gemini_result:
             for key in ('invoice_number', 'vendor_name', 'invoice_date', 'total_amount', 'tax_amount'):
                 if gemini_result.get(key) is not None:
@@ -118,7 +151,7 @@ def upload_document():
             print(f"DEBUG anomaly detection error: {type(e).__name__}: {e}")
 
         try:
-            run_authenticity_check(document_id, file_path, 'invoice', ocr_text,
+            run_authenticity_check(document_id, file_bytes_data, safe_name, 'invoice', ocr_text,
                                     precomputed_result=gemini_result,
                                     skip_gemini=not gemini_result)
         except Exception as e:
@@ -175,6 +208,14 @@ def upload_purchase_order(document_id):
         file_path = os.path.join(Config.UPLOAD_FOLDER, safe_name)
         file.save(file_path)
 
+        with open(file_path, 'rb') as f:
+            file_bytes_data = f.read()
+        file_mime = mimetypes.guess_type(safe_name)[0] or 'application/octet-stream'
+        db_file_bytes = file_bytes_data if len(file_bytes_data) <= Config.MAX_DB_FILE_BYTES else None
+        if db_file_bytes is None:
+            print(f"DEBUG PO upload: {safe_name} is {len(file_bytes_data)} bytes, "
+                  f"over MAX_DB_FILE_BYTES ({Config.MAX_DB_FILE_BYTES}) — not persisted to DB")
+
         # ← 改这里
         ocr_results, ocr_text, confidence = run_ocr(file_path, file_ext)
         confidence = float(confidence)
@@ -191,19 +232,20 @@ def upload_purchase_order(document_id):
             '''INSERT INTO purchase_orders
                (document_id, uploaded_by, file_name, file_path,
                 po_number, vendor_name, po_date, total_amount,
-                currency, raw_ocr_text, ocr_confidence)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                currency, raw_ocr_text, ocr_confidence, file_bytes, file_mime)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING po_id''',
             (document_id, user['user_id'], safe_name, file_path,
              fields['po_number'], fields['vendor_name'], po_date,
-             fields['total_amount'], fields['currency'], ocr_text, confidence)
+             fields['total_amount'], fields['currency'], ocr_text, confidence,
+             psycopg2.Binary(db_file_bytes) if db_file_bytes is not None else None, file_mime)
         )
         po_id = cursor.fetchone()[0]
         conn.commit()
         conn.close()
 
         try:
-            run_authenticity_check(document_id, file_path, 'po', ocr_text)
+            run_authenticity_check(document_id, file_bytes_data, safe_name, 'po', ocr_text)
         except Exception as e:
             print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
 
@@ -256,6 +298,14 @@ def upload_goods_receipt(document_id):
         file_path = os.path.join(Config.UPLOAD_FOLDER, safe_name)
         file.save(file_path)
 
+        with open(file_path, 'rb') as f:
+            file_bytes_data = f.read()
+        file_mime = mimetypes.guess_type(safe_name)[0] or 'application/octet-stream'
+        db_file_bytes = file_bytes_data if len(file_bytes_data) <= Config.MAX_DB_FILE_BYTES else None
+        if db_file_bytes is None:
+            print(f"DEBUG GR upload: {safe_name} is {len(file_bytes_data)} bytes, "
+                  f"over MAX_DB_FILE_BYTES ({Config.MAX_DB_FILE_BYTES}) — not persisted to DB")
+
         # ← 改这里
         ocr_results, ocr_text, confidence = run_ocr(file_path, file_ext)
         confidence = float(confidence)
@@ -272,19 +322,20 @@ def upload_goods_receipt(document_id):
             '''INSERT INTO goods_receipts
                (document_id, uploaded_by, file_name, file_path,
                 gr_number, vendor_name, receipt_date, total_amount,
-                currency, raw_ocr_text, ocr_confidence)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                currency, raw_ocr_text, ocr_confidence, file_bytes, file_mime)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING gr_id''',
             (document_id, user['user_id'], safe_name, file_path,
              fields['gr_number'], fields['vendor_name'], receipt_date,
-             fields['total_amount'], fields['currency'], ocr_text, confidence)
+             fields['total_amount'], fields['currency'], ocr_text, confidence,
+             psycopg2.Binary(db_file_bytes) if db_file_bytes is not None else None, file_mime)
         )
         gr_id = cursor.fetchone()[0]
         conn.commit()
         conn.close()
 
         try:
-            run_authenticity_check(document_id, file_path, 'gr', ocr_text)
+            run_authenticity_check(document_id, file_bytes_data, safe_name, 'gr', ocr_text)
         except Exception as e:
             print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
 
@@ -339,6 +390,7 @@ def get_po_list():
         result = []
         for r in rows:
             row = dict(r)
+            row.pop('file_bytes', None)  # BYTEA, not JSON-serializable and huge — file endpoint serves it separately
             for k, v in row.items():
                 if hasattr(v, 'isoformat'):
                     row[k] = v.isoformat()
@@ -381,6 +433,7 @@ def get_gr_list():
         result = []
         for r in rows:
             row = dict(r)
+            row.pop('file_bytes', None)  # BYTEA, not JSON-serializable and huge — file endpoint serves it separately
             for k, v in row.items():
                 if hasattr(v, 'isoformat'):
                     row[k] = v.isoformat()
@@ -527,6 +580,7 @@ def get_documents():
         result = []
         for d in documents:
             row = dict(d)
+            row.pop('file_bytes', None)  # BYTEA, not JSON-serializable and huge — file endpoint serves it separately
             for k, v in row.items():
                 if hasattr(v, 'isoformat'):
                     row[k] = v.isoformat()
@@ -566,6 +620,7 @@ def get_document_detail(document_id):
             return jsonify({'error': 'Document not found'}), 404
 
         row = dict(document)
+        row.pop('file_bytes', None)  # BYTEA, not JSON-serializable and huge — file endpoint serves it separately
         for k, v in row.items():
             if hasattr(v, 'isoformat'):
                 row[k] = v.isoformat()
@@ -590,7 +645,7 @@ def serve_document_file(document_id):
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
-            'SELECT file_name, file_path, uploaded_by FROM documents WHERE document_id = %s',
+            'SELECT file_name, file_path, file_bytes, file_mime, uploaded_by FROM documents WHERE document_id = %s',
             (document_id,)
         )
         document = cursor.fetchone()
@@ -602,7 +657,8 @@ def serve_document_file(document_id):
         if user['role'] == 'finance_executive' and document['uploaded_by'] != user['user_id']:
             return jsonify({'error': 'Access denied'}), 403
 
-        return _send_document_file(document['file_path'], document['file_name'])
+        return _send_document_file(document['file_bytes'], document['file_mime'],
+                                    document['file_path'], document['file_name'])
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -622,7 +678,7 @@ def serve_po_file(po_id):
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
-            'SELECT file_name, file_path, uploaded_by FROM purchase_orders WHERE po_id = %s',
+            'SELECT file_name, file_path, file_bytes, file_mime, uploaded_by FROM purchase_orders WHERE po_id = %s',
             (po_id,)
         )
         po = cursor.fetchone()
@@ -634,7 +690,7 @@ def serve_po_file(po_id):
         if user['role'] == 'finance_executive' and po['uploaded_by'] != user['user_id']:
             return jsonify({'error': 'Access denied'}), 403
 
-        return _send_document_file(po['file_path'], po['file_name'])
+        return _send_document_file(po['file_bytes'], po['file_mime'], po['file_path'], po['file_name'])
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -654,7 +710,7 @@ def serve_gr_file(gr_id):
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
-            'SELECT file_name, file_path, uploaded_by FROM goods_receipts WHERE gr_id = %s',
+            'SELECT file_name, file_path, file_bytes, file_mime, uploaded_by FROM goods_receipts WHERE gr_id = %s',
             (gr_id,)
         )
         gr = cursor.fetchone()
@@ -666,7 +722,7 @@ def serve_gr_file(gr_id):
         if user['role'] == 'finance_executive' and gr['uploaded_by'] != user['user_id']:
             return jsonify({'error': 'Access denied'}), 403
 
-        return _send_document_file(gr['file_path'], gr['file_name'])
+        return _send_document_file(gr['file_bytes'], gr['file_mime'], gr['file_path'], gr['file_name'])
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -788,6 +844,7 @@ def get_supporting_documents(document_id):
             if not row:
                 return None
             r = dict(row)
+            r.pop('file_bytes', None)  # BYTEA, not JSON-serializable and huge — file endpoint serves it separately
             for k, v in r.items():
                 if hasattr(v, 'isoformat'):
                     r[k] = v.isoformat()

@@ -3347,3 +3347,153 @@ Setup/config needed:
      signal_boxes stored; this change does not add or refresh boxes for
      old records — only Re-check does that (and only Re-check ever
      calls Gemini).
+
+------------------------------------------------------------------------------
+2026-07-17 - Root cause of persistent "Could not load the document file":
+             Render's free-tier disk is EPHEMERAL. Store uploaded file
+             bytes in Postgres instead of relying on local disk.
+
+Root cause: Render's free tier filesystem is wiped on every redeploy/
+  restart. The previous fixes in this file (on-demand PDF rendering,
+  etc.) all assumed the original uploaded file was still sitting at its
+  file_path on disk — true only until the next restart. That's why even
+  BRAND NEW uploads eventually showed "Could not load the document
+  file": the disk copy they were rendered from was gone as soon as the
+  dyno restarted, and there was nothing left to render from.
+
+What was changed:
+
+1. New migration (auditlens-backend/migrations/2026-07-17_add_file_bytes.sql),
+   applied to documents, purchase_orders, AND goods_receipts (not just
+   documents — PO/GR each have their own file_path/file_bytes today,
+   same as the existing per-table file_path pattern; a single side
+   table keyed by document_id alone couldn't have distinguished
+   multiple PO/GR rows per document_id, which this app already
+   supports):
+     ALTER TABLE <table> ADD COLUMN file_bytes BYTEA, ADD COLUMN file_mime VARCHAR(100);
+   This ALSO runs automatically at app startup
+   (app.py's new `_ensure_file_bytes_columns()`), matching this
+   session's established pattern for 3 of the 4 prior migrations (no
+   migration runner exists in this repo, so Render never gets a .sql
+   file run against it unless startup does it itself) — confirmed
+   working this session: booting the app actually added the columns
+   to the connected database. The .sql file is kept for local dev /
+   documentation parity with the rest of migrations/, same dual
+   pattern as the others.
+
+2. Upload endpoints (routes/documents.py — upload_document/
+   upload_purchase_order/upload_goods_receipt): after saving to local
+   disk (still done, still needed for the OCR/Gemini calls later in
+   the SAME request), the file is also read back into bytes and stored
+   in the new file_bytes/file_mime columns. A file over
+   Config.MAX_DB_FILE_BYTES (new config.py constant, 8MB — invoices/
+   POs/GRs are small scanned documents) still uploads and processes
+   completely normally; it just isn't persisted to the DB, so it won't
+   survive a restart. Logged when this happens.
+
+3. File-serving endpoints (routes/documents.py's
+   serve_document_file/serve_po_file/serve_gr_file, via a rewritten
+   `_send_document_file`) and the authenticity image/recheck endpoints
+   (routes/authenticity.py) now read the original file from Postgres
+   (file_bytes) FIRST — that's the durable source going forward — and
+   only fall back to the local disk file_path if bytes weren't stored
+   (the size-guard case, or a pre-existing record) AND the disk file
+   still happens to exist in the current process. This degrades
+   gracefully for the size-guard case without weakening the DB as the
+   primary source of truth.
+
+4. `helpers/gemini_extractor.py`'s `prepare_gemini_image_payload()` and
+   `gemini_extract_invoice_full()`, and `helpers/authenticity_check.py`'s
+   `_call_gemini_vision()`/`save_rendered_authenticity_image()`/
+   `run_authenticity_check()` all changed from taking a file_path to
+   taking (file_bytes, file_name) — PDFs are now opened directly from
+   in-memory bytes via `fitz.open(stream=file_bytes, filetype='pdf')`
+   (verified this works identically to opening from a path) instead of
+   `fitz.open(file_path)`, so the entire rendering chain has zero
+   dependency on the local filesystem. Every call site across
+   routes/documents.py (3 upload endpoints) and routes/authenticity.py
+   (image + recheck endpoints) updated accordingly.
+
+5. The local PNG cache in helpers/authenticity_check.py
+   (AUTHENTICITY_IMAGE_DIR, from two entries ago) is UNCHANGED — it's
+   still on Render's ephemeral disk, but that's now fine, exactly as
+   you noted: it's just a same-process speedup, always rebuildable from
+   the DB-stored bytes in milliseconds after a restart. Did NOT persist
+   rendered image bytes to a DB column (your point 3, marked optional)
+   — re-rendering from the now-always-available DB bytes is fast
+   (confirmed ~sub-100ms per an earlier session's benchmark) and this
+   keeps the change smaller; flagging this as a deliberate scope
+   decision rather than silently skipping it.
+
+6. Fixed a knock-on issue this change would otherwise have caused:
+   several existing endpoints do `SELECT po.*`/`SELECT gr.*`/
+   `SELECT d.*, ef.*`/`SELECT *` and jsonify the result directly (PO
+   list, GR list, document list, document detail, supporting
+   documents). Once file_bytes existed, these would have either thrown
+   (Flask's JSON encoder can't serialize bytes/memoryview) or leaked
+   entire file contents into list responses. Added `row.pop('file_bytes',
+   None)` at each of these 5 call sites in routes/documents.py, right
+   next to their existing per-row post-processing loop. Checked every
+   other `SELECT *`-style query against these 3 tables across the rest
+   of the backend (routes/matching.py, routes/reviews.py) — those only
+   ever read specific fields out of the row (never jsonify the whole
+   dict), so they were already safe and left untouched.
+
+Why: this closes the loop the last several entries were working
+  around — every previous fix (on-demand PDF rendering, the local PNG
+  cache, etc.) was still ultimately reading from a file_path on disk,
+  which Render's free tier doesn't guarantee exists past the current
+  process's lifetime. Storing the actual bytes in Postgres removes
+  that assumption entirely.
+
+Existing records: as you noted, records uploaded before this change
+  have no file_bytes stored and their disk files are already gone —
+  they'll still show "Original file unavailable for this document".
+  Only NEW uploads after this deploy get bytes persisted and survive
+  future restarts.
+
+Testing (all against the actual connected database this session has
+access to — real INSERTs were wrapped in a transaction and rolled back,
+never committed, so nothing in the real DB was permanently changed):
+  - `python -m py_compile` on every changed file — compiles clean.
+  - Booted the app for real: `_ensure_file_bytes_columns()` ran and
+    added the columns; confirmed via `information_schema.columns` that
+    file_bytes (bytea) and file_mime (character varying) now exist on
+    all three tables.
+  - Inserted a real test `documents` row with a real sample PDF's bytes
+    (existing user_id, read-only lookup), read it back, confirmed the
+    round-tripped bytes are byte-for-byte identical to the original —
+    then ROLLED BACK the transaction (never committed).
+  - Ran `_lookup_file_info()` (routes/authenticity.py) against a second
+    rolled-back test row whose file_path pointed at a file that does
+    NOT exist on disk — it still returned the correct bytes, sourced
+    from the database, proving the fix directly against the exact
+    failure mode being fixed (disk file gone, DB bytes intact).
+  - Confirmed `fitz.open(stream=..., filetype='pdf')` renders
+    identically to `fitz.open(file_path)` against a real sample PDF.
+  - Re-ran the same network/Gemini-call poisoning test from two entries
+    ago (monkeypatched requests.post/get, _get_client, and
+    call_gemini_sdk to raise if touched, real-looking API key set) —
+    confirmed `prepare_gemini_image_payload()` and
+    `save_rendered_authenticity_image()` both work correctly from pure
+    bytes with zero Gemini/network calls.
+  - Directly tested the rewritten `_send_document_file()` inside a
+    Flask request context (no live HTTP round-trip, but exercises the
+    real function and a real send_file response): confirmed all 3
+    branches — DB bytes present (served correctly, byte-for-byte,
+    correct mimetype), no DB bytes but disk file still exists
+    (fallback correctly serves from disk), neither present (clean 404).
+  - Checked every remaining `SELECT *`/`.* ` query against documents/
+    purchase_orders/goods_receipts across the whole backend (not just
+    documents.py) to confirm nothing else could leak file_bytes into a
+    JSON response.
+
+Setup/config needed:
+  1. Redeploy the Render backend — the migration runs automatically at
+     startup (no manual SQL needed, confirmed this session), but the
+     code changes still require a deploy to take effect.
+  2. Upload a NEW test document after redeploying, then trigger a
+     redeploy/restart (or just wait for Render's next natural restart)
+     and confirm that same document's file and authenticity image still
+     load — that's the actual test of what this fixes. Records uploaded
+     before this deploy will still show unavailable, as expected.

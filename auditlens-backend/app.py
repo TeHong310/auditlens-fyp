@@ -114,6 +114,31 @@ def _ensure_authenticity_v2_columns():
         print(f'WARNING: could not migrate authenticity_checks to v2: {type(e).__name__}: {e}')
 
 
+def _ensure_file_bytes_columns():
+    """Render's free tier filesystem is ephemeral (wiped on every redeploy/
+    restart) — uploaded files can no longer live only on local disk.
+    Adds file_bytes (BYTEA) / file_mime columns to documents/
+    purchase_orders/goods_receipts so the original file survives
+    restarts. Same auto-create-on-startup pattern as the other _ensure_
+    functions above, for the same reason (no migration runner in this
+    repo). Safe to run on every boot: ADD COLUMN IF NOT EXISTS is a
+    no-op once the columns exist."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        for table in ('documents', 'purchase_orders', 'goods_receipts'):
+            cursor.execute(f'''
+                ALTER TABLE {table}
+                  ADD COLUMN IF NOT EXISTS file_bytes BYTEA,
+                  ADD COLUMN IF NOT EXISTS file_mime VARCHAR(100)
+            ''')
+        conn.commit()
+        conn.close()
+        print('File bytes columns ready')
+    except Exception as e:
+        print(f'WARNING: could not add file_bytes columns: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -135,6 +160,7 @@ app.register_blueprint(authenticity_bp, url_prefix='/authenticity')
 _ensure_anomalies_table()
 _ensure_authenticity_checks_table()
 _ensure_authenticity_v2_columns()
+_ensure_file_bytes_columns()
 
 @app.route('/')
 def hello_world():
