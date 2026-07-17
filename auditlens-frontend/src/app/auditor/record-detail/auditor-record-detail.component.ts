@@ -283,6 +283,40 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return 'N/A';
   }
 
+  // ── 3-way row-level match indicator (PO Ref / Item / Quantity) ──
+  // Unlike Vendor/Amount above (pairwise, computed client-side per
+  // cell), these compare all three present values at once and are
+  // computed server-side in match_result — one indicator per row,
+  // shown once next to the field label, not per cell.
+
+  rowMatchClass(match: boolean | null): string {
+    return match === false ? 'row-mismatch' : '';
+  }
+
+  rowMatchPillClass(match: boolean | null): string {
+    if (match === true) return 'pill-match';
+    if (match === false) return 'pill-differ';
+    return 'pill-na';
+  }
+
+  rowMatchIcon(match: boolean | null): string {
+    if (match === true) return '✓';
+    if (match === false) return '⚠';
+    return '—';
+  }
+
+  rowMatchText(match: boolean | null): string {
+    if (match === true) return 'Match';
+    if (match === false) return 'Mismatch';
+    return 'N/A';
+  }
+
+  formatQuantity(qty: any): string {
+    if (qty === null || qty === undefined || qty === '') return '-';
+    const n = parseFloat(qty);
+    return Number.isInteger(n) ? String(n) : n.toFixed(2);
+  }
+
   // ── Formatting ───────────────────────────────────────────
 
   formatAmount(amount: any): string {

@@ -30,6 +30,51 @@ def _amounts_equal(a, b):
         return None
 
 
+def _normalize_ref(val):
+    """Normalize a reference/ID value (PO number) for comparison:
+    uppercase, strip all whitespace. None for empty/missing so it's
+    excluded from the match set rather than compared as ''."""
+    if not val:
+        return None
+    v = re.sub(r'\s+', '', str(val).upper())
+    return v or None
+
+
+def _normalize_text(val):
+    """Normalize free text (item/description) for comparison:
+    lowercase, collapse whitespace."""
+    if not val:
+        return None
+    v = re.sub(r'\s+', ' ', str(val).lower()).strip()
+    return v or None
+
+
+def _three_way_match(values):
+    """True if every present (non-None) value is identical, False if
+    they differ, None if fewer than 2 are present to compare."""
+    present = [v for v in values if v is not None]
+    if len(present) < 2:
+        return None
+    return len(set(present)) <= 1
+
+
+def _quantities_match(values):
+    """Same idea as _three_way_match but with numeric tolerance (OCR/
+    float noise), like _amounts_equal."""
+    present = []
+    for v in values:
+        if v is None:
+            continue
+        try:
+            present.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    if len(present) < 2:
+        return None
+    first = present[0]
+    return all(abs(v - first) < 0.01 for v in present[1:])
+
+
 def _build_comparison(cursor, invoice_document_id):
     """Shared by GET /record/<id>/comparison and the exceptions detector,
     so match logic only lives in one place. Returns None if the invoice
@@ -37,7 +82,8 @@ def _build_comparison(cursor, invoice_document_id):
     cursor.execute(
         '''SELECT d.document_id, d.file_name, d.uploaded_at,
                   ef.invoice_number, ef.vendor_name, ef.invoice_date,
-                  ef.total_amount, ef.ocr_confidence
+                  ef.total_amount, ef.ocr_confidence,
+                  ef.po_reference, ef.item_description, ef.quantity
            FROM documents d
            LEFT JOIN extracted_fields ef ON d.document_id = ef.document_id
            WHERE d.document_id = %s''',
@@ -48,7 +94,8 @@ def _build_comparison(cursor, invoice_document_id):
         return None
 
     cursor.execute(
-        '''SELECT po_id, file_name, po_number, vendor_name, po_date, total_amount
+        '''SELECT po_id, file_name, po_number, vendor_name, po_date, total_amount,
+                  item_description, quantity
            FROM purchase_orders WHERE document_id = %s
            ORDER BY uploaded_at DESC LIMIT 1''',
         (invoice_document_id,)
@@ -56,7 +103,8 @@ def _build_comparison(cursor, invoice_document_id):
     po_row = cursor.fetchone()
 
     cursor.execute(
-        '''SELECT gr_id, file_name, gr_number, vendor_name, receipt_date
+        '''SELECT gr_id, file_name, gr_number, vendor_name, receipt_date,
+                  po_reference, item_description, quantity
            FROM goods_receipts WHERE document_id = %s
            ORDER BY uploaded_at DESC LIMIT 1''',
         (invoice_document_id,)
@@ -64,35 +112,43 @@ def _build_comparison(cursor, invoice_document_id):
     gr_row = cursor.fetchone()
 
     invoice = {
-        'document_id':    inv_row['document_id'],
-        'filename':       inv_row['file_name'],
-        'ocr_confidence': float(inv_row['ocr_confidence']) if inv_row['ocr_confidence'] is not None else None,
-        'invoice_no':     inv_row['invoice_number'],
-        'vendor_name':    inv_row['vendor_name'],
-        'invoice_date':   inv_row['invoice_date'].isoformat() if inv_row['invoice_date'] else None,
-        'total_amount':   float(inv_row['total_amount']) if inv_row['total_amount'] is not None else None,
-        'uploaded_at':    inv_row['uploaded_at'].isoformat() if inv_row['uploaded_at'] else None,
+        'document_id':      inv_row['document_id'],
+        'filename':         inv_row['file_name'],
+        'ocr_confidence':   float(inv_row['ocr_confidence']) if inv_row['ocr_confidence'] is not None else None,
+        'invoice_no':       inv_row['invoice_number'],
+        'vendor_name':      inv_row['vendor_name'],
+        'invoice_date':     inv_row['invoice_date'].isoformat() if inv_row['invoice_date'] else None,
+        'total_amount':     float(inv_row['total_amount']) if inv_row['total_amount'] is not None else None,
+        'uploaded_at':      inv_row['uploaded_at'].isoformat() if inv_row['uploaded_at'] else None,
+        'po_reference':     inv_row['po_reference'],
+        'item_description': inv_row['item_description'],
+        'quantity':         float(inv_row['quantity']) if inv_row['quantity'] is not None else None,
     }
 
     po = None
     if po_row:
         po = {
-            'po_id':        po_row['po_id'],
-            'filename':     po_row['file_name'],
-            'po_no':        po_row['po_number'],
-            'vendor_name':  po_row['vendor_name'],
-            'po_date':      po_row['po_date'].isoformat() if po_row['po_date'] else None,
-            'total_amount': float(po_row['total_amount']) if po_row['total_amount'] is not None else None,
+            'po_id':            po_row['po_id'],
+            'filename':         po_row['file_name'],
+            'po_no':            po_row['po_number'],
+            'vendor_name':      po_row['vendor_name'],
+            'po_date':          po_row['po_date'].isoformat() if po_row['po_date'] else None,
+            'total_amount':     float(po_row['total_amount']) if po_row['total_amount'] is not None else None,
+            'item_description': po_row['item_description'],
+            'quantity':         float(po_row['quantity']) if po_row['quantity'] is not None else None,
         }
 
     gr = None
     if gr_row:
         gr = {
-            'gr_id':        gr_row['gr_id'],
-            'filename':     gr_row['file_name'],
-            'gr_no':        gr_row['gr_number'],
-            'vendor_name':  gr_row['vendor_name'],
-            'receipt_date': gr_row['receipt_date'].isoformat() if gr_row['receipt_date'] else None,
+            'gr_id':            gr_row['gr_id'],
+            'filename':         gr_row['file_name'],
+            'gr_no':            gr_row['gr_number'],
+            'vendor_name':      gr_row['vendor_name'],
+            'receipt_date':     gr_row['receipt_date'].isoformat() if gr_row['receipt_date'] else None,
+            'po_reference':     gr_row['po_reference'],
+            'item_description': gr_row['item_description'],
+            'quantity':         float(gr_row['quantity']) if gr_row['quantity'] is not None else None,
         }
 
     # ── Vendor match: compare normalized vendor_name across every
@@ -109,17 +165,47 @@ def _build_comparison(cursor, invoice_document_id):
     # total by design) ──
     amount_match = _amounts_equal(invoice['total_amount'], po['total_amount']) if po else None
 
-    # ── PO reference match: Invoice/PO/GR are linked by a document_id
-    # foreign key at upload time (not by OCR-extracted PO-number
-    # cross-references, which don't exist as separate fields on the
-    # invoice or GR OCR data), so any PO/GR returned here is already
-    # guaranteed to belong to this invoice by construction. Treated as
-    # not-applicable (no independent field to compare) rather than
-    # invented/hardcoded. ──
-    po_reference_match = None
+    # ── PO reference match: the PO number each document independently
+    # references — Invoice's po_reference (OCR'd "PO No:" line), the
+    # PO's own po_number (its anchor identity), GR's po_reference
+    # (OCR'd "PO No:" line). These are now real, regex-extracted fields
+    # (previously hardcoded None — po_reference didn't exist as a
+    # separate field on the invoice/GR OCR data until this change). ──
+    po_refs = [_normalize_ref(invoice['po_reference'])]
+    if po:
+        po_refs.append(_normalize_ref(po['po_no']))
+    if gr:
+        po_refs.append(_normalize_ref(gr['po_reference']))
+    po_reference_match = _three_way_match(po_refs)
+
+    # ── Item/description match: best-effort regex extraction, so exact
+    # text equality across independently-OCR'd documents is optimistic
+    # — same simplification already used for amount/quantity (a single
+    # representative value, not itemized line-by-line). ──
+    items = [_normalize_text(invoice['item_description'])]
+    if po:
+        items.append(_normalize_text(po['item_description']))
+    if gr:
+        items.append(_normalize_text(gr['item_description']))
+    item_match = _three_way_match(items)
+
+    # ── Quantity match: THE key audit field — PO ordered vs GR received
+    # vs Invoice billed. A mismatch here (e.g. ordered 100 / received 90
+    # / billed 100) is exactly what this comparison exists to surface. ──
+    quantities = [invoice['quantity']]
+    if po:
+        quantities.append(po['quantity'])
+    if gr:
+        quantities.append(gr['quantity'])
+    quantity_match = _quantities_match(quantities)
 
     # ── Date order: PO date <= GR date <= Invoice date, skipping the
-    # check if any required date is missing ──
+    # check if any required date is missing. Still computed for
+    # overall_status below even though the Field Comparison table no
+    # longer displays a Date row — dates naturally differ between PO/GR/
+    # Invoice by design, so showing them as a "should match" row was
+    # misleading, but the chronological sanity check itself is still a
+    # useful overall-status signal, so it's kept. ──
     date_order_valid = None
     if po and gr and po['po_date'] and gr['receipt_date'] and invoice['invoice_date']:
         date_order_valid = po['po_date'] <= gr['receipt_date'] <= invoice['invoice_date']
@@ -128,7 +214,16 @@ def _build_comparison(cursor, invoice_document_id):
     elif gr and invoice['invoice_date'] and gr['receipt_date'] and not po:
         date_order_valid = gr['receipt_date'] <= invoice['invoice_date']
 
-    checks = [vendor_match, amount_match, date_order_valid]
+    # quantity_match is included here (unlike po_reference_match/
+    # item_match) because it's the key audit signal this whole feature
+    # exists to surface — a real ordered-vs-received-vs-billed mismatch
+    # should flip the banner to FAIL and surface in the Exceptions list,
+    # not just sit quietly as a red row in the table. po_reference_match/
+    # item_match stay display-only in match_result: they're best-effort
+    # regex fields more prone to false mismatches from OCR/description
+    # wording differences, so they're not wired into a system that
+    # drives the approve/exception workflow.
+    checks = [vendor_match, amount_match, quantity_match, date_order_valid]
     applicable_checks = [c for c in checks if c is not None]
 
     if any(c is False for c in checks):
@@ -148,6 +243,8 @@ def _build_comparison(cursor, invoice_document_id):
             'vendor_match':        vendor_match,
             'amount_match':        amount_match,
             'po_reference_match':  po_reference_match,
+            'item_match':          item_match,
+            'quantity_match':      quantity_match,
             'date_order_valid':    date_order_valid,
             'overall_status':      overall_status,
         }
@@ -205,6 +302,12 @@ def _classify_exception(cursor, doc_row, comparison):
             po_amt  = comparison['po']['total_amount'] if comparison['po'] else None
             parts.append(f"Amount differs: Invoice RM{inv_amt} vs PO RM{po_amt}")
             label_parts.append('Amount')
+        if mr['quantity_match'] is False:
+            inv_qty = comparison['invoice']['quantity']
+            po_qty  = comparison['po']['quantity'] if comparison['po'] else None
+            gr_qty  = comparison['gr']['quantity'] if comparison['gr'] else None
+            parts.append(f"Quantity differs: PO {po_qty} vs GR {gr_qty} vs Invoice {inv_qty}")
+            label_parts.append('Quantity')
         if mr['date_order_valid'] is False:
             parts.append('Document dates out of expected order')
             label_parts.append('Date')

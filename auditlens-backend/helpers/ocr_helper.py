@@ -193,11 +193,18 @@ def calculate_confidence(ocr_results):
 
 def extract_fields(ocr_text):
     fields = {
-        'invoice_number': None,
-        'vendor_name':    None,
-        'invoice_date':   None,
-        'total_amount':   None,
-        'tax_amount':     None,
+        'invoice_number':   None,
+        'vendor_name':      None,
+        'invoice_date':     None,
+        'total_amount':     None,
+        'tax_amount':       None,
+        # 3-way audit comparison fields (Field Comparison table: PO Ref,
+        # Item/Description, Quantity) — regex-only, best-effort, no
+        # Gemini call. po_reference is the PO number THIS invoice bills
+        # against (not this invoice's own number).
+        'po_reference':     None,
+        'item_description': None,
+        'quantity':         None,
     }
 
     lines = ocr_text.split('\n')
@@ -234,6 +241,51 @@ def extract_fields(ocr_text):
                     not re.search(r'\b(customer|invoice\s*to|bill\s*to|deliver\s*to|ship\s*to)\b',
                                   ' '.join(lines[max(0,i-2):i]), re.IGNORECASE)):
                     fields['vendor_name'] = clean_vendor_name(vendor)
+
+        # ── PO REFERENCE ──────────────────────────────────
+        # The PO number this invoice is billing against (not this
+        # invoice's own number) — the anchor field for the 3-way audit
+        # comparison. Requires an explicit ":"/"-" after the label so a
+        # bare "PO" mention elsewhere on the page can't false-positive.
+        if fields['po_reference'] is None:
+            match = re.search(
+                r'\b(?:p\.?o\.?|purchase\s*order)\s*(?:no\.?|number|ref\.?)?\s*[:\-]\s*([A-Za-z0-9\-\/]+)',
+                line_clean, re.IGNORECASE
+            )
+            if match:
+                val = match.group(1).strip()
+                if len(val) > 2:
+                    fields['po_reference'] = val
+
+        # ── ITEM / DESCRIPTION ────────────────────────────
+        # Best-effort single representative line item (this app already
+        # treats amount/quantity as a single aggregate, not itemized).
+        if fields['item_description'] is None:
+            label_match = re.search(
+                r'^(?:description|particulars|item\s*description|item)\s*[:\-]?\s*(.*)$',
+                line_clean, re.IGNORECASE
+            )
+            if label_match:
+                inline_val = label_match.group(1).strip()
+                if len(inline_val) > 2:
+                    fields['item_description'] = inline_val[:200]
+                elif next_line and len(next_line) > 2:
+                    fields['item_description'] = next_line[:200]
+
+        # ── QUANTITY ───────────────────────────────────────
+        # THE key 3-way audit field: PO ordered vs GR received vs
+        # Invoice billed. Best-effort single value (same simplification
+        # already used for total_amount — a single aggregate, not
+        # itemized).
+        if fields['quantity'] is None:
+            match = re.search(r'\b(?:qty|quantity)\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)\b', line_clean, re.IGNORECASE)
+            if match:
+                try:
+                    qty_val = float(match.group(1))
+                    if qty_val > 0:
+                        fields['quantity'] = qty_val
+                except ValueError:
+                    pass
 
         # ── INVOICE NUMBER ────────────────────────────────
         if fields['invoice_number'] is None:
@@ -468,11 +520,15 @@ def extract_fields(ocr_text):
 
 def extract_po_fields(ocr_text):
     fields = {
-        'po_number':    None,
-        'vendor_name':  None,
-        'po_date':      None,
-        'total_amount': None,
-        'currency':     'MYR',
+        'po_number':        None,
+        'vendor_name':      None,
+        'po_date':          None,
+        'total_amount':     None,
+        'currency':         'MYR',
+        # 3-way audit comparison fields — po_number above IS the PO's
+        # own anchor reference, so no separate po_reference field here.
+        'item_description': None,
+        'quantity':         None,
     }
 
     lines = ocr_text.split('\n')
@@ -480,6 +536,31 @@ def extract_po_fields(ocr_text):
 
     for i, line in enumerate(lines):
         line_clean = line.strip()
+        next_line  = lines[i + 1].strip() if i + 1 < len(lines) else ''
+
+        # ── ITEM / DESCRIPTION ────────────────────────────
+        if fields['item_description'] is None:
+            label_match = re.search(
+                r'^(?:description|particulars|item\s*description|item)\s*[:\-]?\s*(.*)$',
+                line_clean, re.IGNORECASE
+            )
+            if label_match:
+                inline_val = label_match.group(1).strip()
+                if len(inline_val) > 2:
+                    fields['item_description'] = inline_val[:200]
+                elif next_line and len(next_line) > 2:
+                    fields['item_description'] = next_line[:200]
+
+        # ── QUANTITY ───────────────────────────────────────
+        if fields['quantity'] is None:
+            match = re.search(r'\b(?:qty|quantity)\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)\b', line_clean, re.IGNORECASE)
+            if match:
+                try:
+                    qty_val = float(match.group(1))
+                    if qty_val > 0:
+                        fields['quantity'] = qty_val
+                except ValueError:
+                    pass
 
         if fields['po_number'] is None:
             match = re.search(
@@ -575,11 +656,17 @@ def extract_po_fields(ocr_text):
 
 def extract_gr_fields(ocr_text):
     fields = {
-        'gr_number':    None,
-        'vendor_name':  None,
-        'receipt_date': None,
-        'total_amount': None,
-        'currency':     'MYR',
+        'gr_number':        None,
+        'vendor_name':      None,
+        'receipt_date':     None,
+        'total_amount':     None,
+        'currency':         'MYR',
+        # 3-way audit comparison fields — po_reference is the PO number
+        # THIS GR was received against (GR's own number is gr_number
+        # above).
+        'po_reference':     None,
+        'item_description': None,
+        'quantity':         None,
     }
 
     lines = ocr_text.split('\n')
@@ -587,6 +674,42 @@ def extract_gr_fields(ocr_text):
 
     for i, line in enumerate(lines):
         line_clean = line.strip()
+        next_line  = lines[i + 1].strip() if i + 1 < len(lines) else ''
+
+        # ── PO REFERENCE ──────────────────────────────────
+        if fields['po_reference'] is None:
+            match = re.search(
+                r'\b(?:p\.?o\.?|purchase\s*order)\s*(?:no\.?|number|ref\.?)?\s*[:\-]\s*([A-Za-z0-9\-\/]+)',
+                line_clean, re.IGNORECASE
+            )
+            if match:
+                val = match.group(1).strip()
+                if len(val) > 2:
+                    fields['po_reference'] = val
+
+        # ── ITEM / DESCRIPTION ────────────────────────────
+        if fields['item_description'] is None:
+            label_match = re.search(
+                r'^(?:description|particulars|item\s*description|item)\s*[:\-]?\s*(.*)$',
+                line_clean, re.IGNORECASE
+            )
+            if label_match:
+                inline_val = label_match.group(1).strip()
+                if len(inline_val) > 2:
+                    fields['item_description'] = inline_val[:200]
+                elif next_line and len(next_line) > 2:
+                    fields['item_description'] = next_line[:200]
+
+        # ── QUANTITY ───────────────────────────────────────
+        if fields['quantity'] is None:
+            match = re.search(r'\b(?:qty|quantity)\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)\b', line_clean, re.IGNORECASE)
+            if match:
+                try:
+                    qty_val = float(match.group(1))
+                    if qty_val > 0:
+                        fields['quantity'] = qty_val
+                except ValueError:
+                    pass
 
         if fields['gr_number'] is None:
             match = re.search(

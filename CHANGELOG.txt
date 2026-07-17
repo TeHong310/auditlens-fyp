@@ -3497,3 +3497,178 @@ Setup/config needed:
      and confirm that same document's file and authenticity image still
      load — that's the actual test of what this fixes. Records uploaded
      before this deploy will still show unavailable, as expected.
+
+------------------------------------------------------------------------------
+2026-07-17 - Redesign the Field Comparison table (Invoice vs PO vs GR):
+             PO Ref / Item / Quantity as real 3-way comparisons, Date
+             row removed, Quantity mismatches flagged prominently
+
+What was changed:
+
+BACKEND — new regex-extracted fields, no Gemini call:
+  - helpers/ocr_helper.py: `extract_fields()` (invoice), `extract_po_
+    fields()`, `extract_gr_fields()` each gained new fields:
+    - `po_reference` (invoice + GR only — the PO number each document
+      references, e.g. an OCR'd "PO No: PO-2026-0042" line; the PO's
+      own po_number is already its anchor identity, so it doesn't need
+      a separate po_reference).
+    - `item_description` (all three) — best-effort: looks for a
+      "Description"/"Particulars"/"Item" label, either an inline value
+      or the next line.
+    - `quantity` (all three) — best-effort: "Qty"/"Quantity" label
+      followed by a number. Same single-value simplification this app
+      already uses for total_amount (not itemized line-by-line).
+    All regex-only, verified offline against realistic synthetic OCR
+    text before wiring into the DB — see Testing below.
+  - New migration (migrations/2026-07-17_add_3way_comparison_fields.sql),
+    applied to extracted_fields/purchase_orders/goods_receipts, also
+    auto-applied at startup (app.py's new
+    `_ensure_3way_comparison_columns()`, matching this session's
+    established pattern — no migration runner in this repo) — confirmed
+    working by booting the app against the connected DB and checking
+    information_schema.
+  - routes/documents.py: all three upload endpoints now persist the new
+    fields in their INSERT statements (previously extracted but
+    silently discarded).
+  - routes/auditor.py `_build_comparison()`:
+    - SELECTs now include the new columns for all three document types.
+    - New helpers `_normalize_ref()` (PO number: uppercase, strip
+      whitespace), `_normalize_text()` (item description: lowercase,
+      collapse whitespace), `_three_way_match()` (true if every present
+      value is identical, None if fewer than 2 present to compare),
+      `_quantities_match()` (same, numeric with 0.01 tolerance).
+    - `po_reference_match`: now a REAL comparison across invoice.
+      po_reference / po.po_no / gr.po_reference — previously hardcoded
+      to `None` because these fields didn't exist before this change.
+    - New `item_match`, `quantity_match` in `match_result`.
+    - `quantity_match` is included in the `overall_status`/FAIL
+      computation (alongside vendor_match/amount_match/date_order_
+      valid) and in `_classify_exception()` (new "Quantity Mismatch"
+      exception, e.g. "PO 100.0 vs GR 90.0 vs Invoice 100.0") — a
+      deliberate scope decision, see Why below. `po_reference_match`/
+      `item_match` are NOT wired into overall_status/exceptions —
+      kept display-only in the table, since best-effort OCR text/PO-
+      number extraction is more prone to false mismatches than the
+      already-mature vendor/amount/date checks, and wiring them into
+      the system that drives the approve/exception workflow risked
+      false FAILs from imperfect regex extraction.
+    - `date_order_valid` computation is UNCHANGED and still feeds
+      `overall_status` — only the Field Comparison table's Date ROW is
+      removed (see frontend below), not the underlying chronological
+      sanity check, which remains a useful signal independent of
+      whether it's displayed as a row.
+
+FRONTEND (auditor-record-detail component) — new row order:
+  1. Vendor / Supplier (label text updated; matching logic UNCHANGED —
+     still the existing pairwise Invoice→PO / PO→GR client-side pills,
+     left alone since it already worked correctly).
+  2. PO Ref — REDESIGNED from a raw-value-only placeholder (server used
+     to hardcode po_reference_match to null) to a real 3-way match: one
+     Match/Mismatch pill for the whole row (from match_result.po_
+     reference_match), shown once next to the field label — not
+     per-cell pairwise pills, since this is a genuine 3-way comparison,
+     not two pairwise ones. Same new pattern for:
+  3. Item / Description (new row).
+  4. Quantity (new row) — the row itself, plus a NEW `row-quantity-
+     alert` CSS class (thicker red border, stronger background, bold
+     red numbers) applied ONLY when quantity_match is false, layered on
+     top of the standard row-mismatch highlight, so this specific
+     exception can't be missed scanning the table.
+  5. Amount — UNCHANGED logic (Invoice-vs-PO pairwise pill, "No amount
+     on GR" for GR — GR carries no monetary total by design), just
+     repositioned after Quantity per the request.
+  6. Doc No — UNCHANGED, still identification-only with no match pill.
+     Deliberately NOT given a Match/Mismatch indicator: doc numbers are
+     supposed to differ across Invoice/PO/GR (each document has its own
+     number), so a blanket "compare the three values" treatment here
+     would always show a nonsensical "Mismatch" for something that
+     isn't actually wrong — kept consistent with how this row already
+     behaved (no pill) before this change.
+  - Removed: the Date row entirely, per the request (dates naturally
+    differ between PO/GR/Invoice, so a "should match" framing was
+    misleading — the old row didn't even compute a real comparison, it
+    showed a hardcoded "< Before" pill regardless of actual date order).
+  - New TS helpers: `rowMatchClass/rowMatchPillClass/rowMatchIcon/
+    rowMatchText` (the new row-level 3-way indicator, reading directly
+    from match_result — simpler than replicating 3-way comparison logic
+    in TypeScript when the server already computed it) and
+    `formatQuantity()`.
+
+Why:
+  - Only fields that genuinely exist in and should match across all
+    three document types belong in a "should these agree" comparison —
+    dates are expected to differ (PO date < GR date < Invoice date is
+    the correct pattern, not equality), so showing them as a mismatch-
+    style row was actively misleading.
+  - Quantity (PO ordered vs GR received vs Invoice billed) is the
+    single most important 3-way audit signal — a shortfall or overbill
+    is exactly the kind of thing this whole comparison exists to catch,
+    which is why it's the one new field wired into the overall FAIL/
+    Exceptions system rather than staying table-only: a banner still
+    reading "PASS" while a real quantity shortage sits in the table
+    would fail to "flag it clearly" in any way an auditor scanning
+    banners across many records would actually notice.
+
+Testing:
+  - `python -m py_compile` on every changed backend file — compiles
+    clean.
+  - Offline (no Gemini/DB call): ran the three regex extractors
+    directly against realistic synthetic OCR text for an invoice/PO/GR
+    sharing the same PO-2026-0042 reference and Industrial Widget
+    Assembly item, with the GR intentionally receiving 90 instead of
+    100 — confirmed po_reference/item_description/quantity all extract
+    correctly per document type, AND confirmed the pre-existing fields
+    (total_amount, tax_amount, invoice_number, po_number) still extract
+    correctly (no regression from inserting the new extraction blocks
+    into the same per-line loops).
+  - Offline (mocked psycopg2 cursor, no real DB call): ran the real
+    `_build_comparison()` function directly against three scenarios —
+    (1) full 3-way match with a quantity mismatch: confirmed vendor/
+    amount/po_reference/item all match True, quantity_match is False,
+    and overall_status is FAIL; (2) PO missing (invoice+GR only):
+    confirmed po_reference_match still correctly compares the two
+    present values; (3) invoice-only (nothing else present): confirmed
+    every 3-way field correctly returns None (not a false match or
+    false mismatch) when fewer than 2 values exist to compare. Also
+    directly called `_classify_exception()` on the mismatch scenario
+    and confirmed it produces a "Quantity Mismatch" exception with the
+    exact "PO 100.0 vs GR 90.0 vs Invoice 100.0" detail text.
+  - `ng build --configuration=production` passes clean (775.59 kB
+    initial) — no type errors from the new TS helpers or template
+    changes.
+  - Full browser-level verification with Playwright against the live
+    dev server (scratchpad, not committed): a hardcoded, fully mocked
+    /auditor/record/1/comparison response with the exact "ordered 100 /
+    received 90 / billed 100" scenario — no real backend call anywhere
+    (network intercepted with route.fulfill()). Confirmed: exactly 6
+    rows in the exact order Vendor/Supplier → PO Ref → Item/Description
+    → Quantity → Amount → Doc No (no Date row); PO Ref and Item both
+    show a green Match pill with correct values; the Quantity row has
+    BOTH row-mismatch AND row-quantity-alert CSS classes, a red
+    pill-differ "⚠ Mismatch" pill, and all three values (100/100/90)
+    visible; the Amount row's existing "No amount on GR" handling is
+    unchanged; the overall banner correctly reads "❌ Mismatch
+    Detected" (confirming quantity_match's effect on overall_status
+    end-to-end, not just in isolation). Screenshot taken and visually
+    reviewed — the quantity row is unmistakably prominent against the
+    rest of the table.
+
+Note (not fixed, out of scope): while building the offline regex test,
+noticed `extract_gr_fields()`'s gr_number pattern doesn't match a GR
+labeled "GRN No:" (a common Malaysian abbreviation) — it matches "GR
+No:"/"Goods Receipt No:" but "GRN" partially matches "GR" then fails on
+the "N" before "No:". Pre-existing, unrelated to this change, flagging
+rather than silently fixing since it wasn't part of the request.
+
+Setup/config needed:
+  1. Redeploy the Render backend AND frontend together — they depend on
+     each other for this feature (new API fields + new table markup).
+  2. The migration runs automatically at startup, same as recent prior
+     entries — no manual SQL needed, confirmed this session.
+  3. Existing invoice/PO/GR records uploaded before this deploy have no
+     po_reference/item_description/quantity stored (those columns will
+     be NULL) — their Field Comparison table will show "-" for those
+     rows and match indicators will show "N/A" (fewer than 2 values
+     present). Only new uploads after this deploy populate the new
+     fields. There's no bulk re-extraction from existing raw_ocr_text in
+     this change; let me know if you'd like that as a follow-up.

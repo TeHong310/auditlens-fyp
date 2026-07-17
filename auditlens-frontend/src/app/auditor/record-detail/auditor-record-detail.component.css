@@ -232,6 +232,22 @@
 
 .field-table tbody tr.row-mismatch:hover { background: #fee2e2; }
 
+/* Quantity mismatch: the key audit exception this table exists to
+   surface — a stronger treatment than the standard row-mismatch so it
+   can't be missed scanning the table. */
+.field-table tbody tr.row-quantity-alert {
+  background: #fee2e2;
+  border-left: 5px solid #dc2626;
+  box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.15);
+}
+
+.field-table tbody tr.row-quantity-alert:hover { background: #fecaca; }
+
+.field-table tbody tr.row-quantity-alert .cell-quantity {
+  color: #991b1b;
+  font-weight: 700;
+}
+
 .field-table td {
   padding: 14px 16px;
   color: #374151;
@@ -242,6 +258,16 @@
   font-weight: 600;
   color: #1e293b;
   white-space: nowrap;
+}
+
+/* Row-level 3-way match pill (PO Ref / Item / Quantity) — drops to its
+   own line under the field label instead of fighting field-name's
+   nowrap for horizontal space. */
+.field-name .match-pill {
+  display: block;
+  width: fit-content;
+  margin-top: 6px;
+  margin-left: 24px;
 }
 
 .field-icon {
@@ -265,6 +291,7 @@
 }
 
 .cell-amount { font-variant-numeric: tabular-nums; }
+.cell-quantity { font-variant-numeric: tabular-nums; }
 
 .cell-docno {
   font-family: 'Consolas', 'SF Mono', Menlo, monospace;

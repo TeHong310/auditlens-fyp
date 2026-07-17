@@ -129,12 +129,14 @@ def upload_document():
         cursor.execute(
             '''INSERT INTO extracted_fields
                (document_id, invoice_number, vendor_name, invoice_date,
-                total_amount, tax_amount, raw_ocr_text, ocr_confidence)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                total_amount, tax_amount, raw_ocr_text, ocr_confidence,
+                po_reference, item_description, quantity)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING extraction_id''',
             (document_id, fields['invoice_number'], fields['vendor_name'],
              invoice_date, fields['total_amount'], fields['tax_amount'],
-             ocr_text, confidence)
+             ocr_text, confidence,
+             fields['po_reference'], fields['item_description'], fields['quantity'])
         )
         extraction_id = cursor.fetchone()[0]
 
@@ -232,13 +234,15 @@ def upload_purchase_order(document_id):
             '''INSERT INTO purchase_orders
                (document_id, uploaded_by, file_name, file_path,
                 po_number, vendor_name, po_date, total_amount,
-                currency, raw_ocr_text, ocr_confidence, file_bytes, file_mime)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                currency, raw_ocr_text, ocr_confidence, file_bytes, file_mime,
+                item_description, quantity)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING po_id''',
             (document_id, user['user_id'], safe_name, file_path,
              fields['po_number'], fields['vendor_name'], po_date,
              fields['total_amount'], fields['currency'], ocr_text, confidence,
-             psycopg2.Binary(db_file_bytes) if db_file_bytes is not None else None, file_mime)
+             psycopg2.Binary(db_file_bytes) if db_file_bytes is not None else None, file_mime,
+             fields['item_description'], fields['quantity'])
         )
         po_id = cursor.fetchone()[0]
         conn.commit()
@@ -322,13 +326,15 @@ def upload_goods_receipt(document_id):
             '''INSERT INTO goods_receipts
                (document_id, uploaded_by, file_name, file_path,
                 gr_number, vendor_name, receipt_date, total_amount,
-                currency, raw_ocr_text, ocr_confidence, file_bytes, file_mime)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                currency, raw_ocr_text, ocr_confidence, file_bytes, file_mime,
+                po_reference, item_description, quantity)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING gr_id''',
             (document_id, user['user_id'], safe_name, file_path,
              fields['gr_number'], fields['vendor_name'], receipt_date,
              fields['total_amount'], fields['currency'], ocr_text, confidence,
-             psycopg2.Binary(db_file_bytes) if db_file_bytes is not None else None, file_mime)
+             psycopg2.Binary(db_file_bytes) if db_file_bytes is not None else None, file_mime,
+             fields['po_reference'], fields['item_description'], fields['quantity'])
         )
         gr_id = cursor.fetchone()[0]
         conn.commit()

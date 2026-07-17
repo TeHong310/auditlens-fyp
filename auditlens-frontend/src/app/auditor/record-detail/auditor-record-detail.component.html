@@ -97,7 +97,7 @@
               <tbody>
                 <!-- Vendor -->
                 <tr [ngClass]="rowClass([vendorSymbol(comparison.invoice.vendor_name, comparison.po?.vendor_name), vendorSymbol(comparison.po?.vendor_name, comparison.gr?.vendor_name)])">
-                  <td class="field-name"><span class="field-icon">🏢</span> Vendor</td>
+                  <td class="field-name"><span class="field-icon">🏢</span> Vendor / Supplier</td>
                   <td class="cell-value">{{ comparison.invoice.vendor_name || '-' }}</td>
                   <td class="cell-value" *ngIf="comparison.po">
                     <span class="match-pill" [ngClass]="matchPillClass(vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name))">
@@ -125,7 +125,99 @@
                   </td>
                 </tr>
 
-                <!-- Amount -->
+                <!-- PO Ref: the common anchor all three reference — Invoice's
+                     "PO No:" line, the PO's own number, GR's "PO No:" line.
+                     One 3-way match indicator for the whole row (server-
+                     computed in match_result), not per-cell pairwise pills. -->
+                <tr [ngClass]="rowMatchClass(comparison.match_result.po_reference_match)">
+                  <td class="field-name">
+                    <span class="field-icon">🔗</span> PO Ref
+                    <span class="match-pill" [ngClass]="rowMatchPillClass(comparison.match_result.po_reference_match)">
+                      {{ rowMatchIcon(comparison.match_result.po_reference_match) }}
+                      {{ rowMatchText(comparison.match_result.po_reference_match) }}
+                    </span>
+                  </td>
+                  <td class="cell-value">{{ comparison.invoice.po_reference || '-' }}</td>
+                  <td class="cell-value" *ngIf="comparison.po">
+                    <div class="cell-main-value">{{ comparison.po.po_no || '-' }}</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload PO</span>
+                  </td>
+                  <td class="cell-value" *ngIf="comparison.gr">
+                    <div class="cell-main-value">{{ comparison.gr.po_reference || '-' }}</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload GR</span>
+                  </td>
+                </tr>
+
+                <!-- Item / Description -->
+                <tr [ngClass]="rowMatchClass(comparison.match_result.item_match)">
+                  <td class="field-name">
+                    <span class="field-icon">📦</span> Item / Description
+                    <span class="match-pill" [ngClass]="rowMatchPillClass(comparison.match_result.item_match)">
+                      {{ rowMatchIcon(comparison.match_result.item_match) }}
+                      {{ rowMatchText(comparison.match_result.item_match) }}
+                    </span>
+                  </td>
+                  <td class="cell-value">{{ comparison.invoice.item_description || '-' }}</td>
+                  <td class="cell-value" *ngIf="comparison.po">
+                    <div class="cell-main-value">{{ comparison.po.item_description || '-' }}</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload PO</span>
+                  </td>
+                  <td class="cell-value" *ngIf="comparison.gr">
+                    <div class="cell-main-value">{{ comparison.gr.item_description || '-' }}</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload GR</span>
+                  </td>
+                </tr>
+
+                <!-- Quantity — THE key audit field: PO ordered vs GR received
+                     vs Invoice billed. Extra prominence on mismatch beyond
+                     the standard row-mismatch highlight (row-quantity-alert). -->
+                <tr [ngClass]="[rowMatchClass(comparison.match_result.quantity_match), comparison.match_result.quantity_match === false ? 'row-quantity-alert' : '']">
+                  <td class="field-name">
+                    <span class="field-icon">🔢</span> Quantity
+                    <span class="match-pill" [ngClass]="rowMatchPillClass(comparison.match_result.quantity_match)">
+                      {{ rowMatchIcon(comparison.match_result.quantity_match) }}
+                      {{ rowMatchText(comparison.match_result.quantity_match) }}
+                    </span>
+                  </td>
+                  <td class="cell-value cell-quantity">{{ formatQuantity(comparison.invoice.quantity) }}</td>
+                  <td class="cell-value" *ngIf="comparison.po">
+                    <div class="cell-main-value cell-quantity">{{ formatQuantity(comparison.po.quantity) }}</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload PO</span>
+                  </td>
+                  <td class="cell-value" *ngIf="comparison.gr">
+                    <div class="cell-main-value cell-quantity">{{ formatQuantity(comparison.gr.quantity) }}</div>
+                  </td>
+                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
+                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-label">Not Uploaded</span>
+                    <span class="upload-hint">+ Upload GR</span>
+                  </td>
+                </tr>
+
+                <!-- Amount: GR carries no monetary total by design (goods
+                     receipts record quantity received, not money), so this
+                     stays Invoice-vs-PO only — unchanged from before, just
+                     repositioned after Quantity. -->
                 <tr [ngClass]="rowClass([amountSymbol(comparison.invoice.total_amount, comparison.po?.total_amount)])">
                   <td class="field-name"><span class="field-icon">💰</span> Amount</td>
                   <td class="cell-value cell-amount">{{ formatAmount(comparison.invoice.total_amount) }}</td>
@@ -144,50 +236,6 @@
                   <td class="cell-value" *ngIf="comparison.gr">
                     <span class="match-pill pill-na">— N/A</span>
                     <div class="cell-main-value cell-muted">No amount on GR</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon">⬆</span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload GR</span>
-                  </td>
-                </tr>
-
-                <!-- PO Ref -->
-                <tr>
-                  <td class="field-name"><span class="field-icon">🔗</span> PO Ref</td>
-                  <td class="cell-value cell-muted">—</td>
-                  <td class="cell-value" *ngIf="comparison.po">
-                    <div class="cell-main-value">{{ comparison.po.po_no || '-' }}</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon">⬆</span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload PO</span>
-                  </td>
-                  <td class="cell-value cell-muted" *ngIf="comparison.gr">—</td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon">⬆</span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload GR</span>
-                  </td>
-                </tr>
-
-                <!-- Date -->
-                <tr>
-                  <td class="field-name"><span class="field-icon">📅</span> Date</td>
-                  <td class="cell-value">{{ formatDate(comparison.invoice.invoice_date) }}</td>
-                  <td class="cell-value" *ngIf="comparison.po">
-                    <span class="match-pill pill-before">&lt; Before</span>
-                    <div class="cell-main-value">{{ formatDate(comparison.po.po_date) }}</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon">⬆</span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload PO</span>
-                  </td>
-                  <td class="cell-value" *ngIf="comparison.gr">
-                    <span class="match-pill pill-before">&lt; Before</span>
-                    <div class="cell-main-value">{{ formatDate(comparison.gr.receipt_date) }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.gr">
                     <span class="not-uploaded-icon">⬆</span>

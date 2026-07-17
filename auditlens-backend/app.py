@@ -139,6 +139,39 @@ def _ensure_file_bytes_columns():
         print(f'WARNING: could not add file_bytes columns: {type(e).__name__}: {e}')
 
 
+def _ensure_3way_comparison_columns():
+    """3-way audit Field Comparison table redesign: PO Ref, Item/
+    Description, Quantity are regex-extracted (no Gemini call) and
+    stored on extracted_fields (invoice)/purchase_orders/goods_receipts.
+    Same auto-create-on-startup pattern as the other _ensure_ functions
+    above, for the same reason (no migration runner in this repo)."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            ALTER TABLE extracted_fields
+              ADD COLUMN IF NOT EXISTS po_reference VARCHAR(100),
+              ADD COLUMN IF NOT EXISTS item_description TEXT,
+              ADD COLUMN IF NOT EXISTS quantity NUMERIC
+        ''')
+        cursor.execute('''
+            ALTER TABLE purchase_orders
+              ADD COLUMN IF NOT EXISTS item_description TEXT,
+              ADD COLUMN IF NOT EXISTS quantity NUMERIC
+        ''')
+        cursor.execute('''
+            ALTER TABLE goods_receipts
+              ADD COLUMN IF NOT EXISTS po_reference VARCHAR(100),
+              ADD COLUMN IF NOT EXISTS item_description TEXT,
+              ADD COLUMN IF NOT EXISTS quantity NUMERIC
+        ''')
+        conn.commit()
+        conn.close()
+        print('3-way comparison columns ready')
+    except Exception as e:
+        print(f'WARNING: could not add 3-way comparison columns: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -161,6 +194,7 @@ _ensure_anomalies_table()
 _ensure_authenticity_checks_table()
 _ensure_authenticity_v2_columns()
 _ensure_file_bytes_columns()
+_ensure_3way_comparison_columns()
 
 @app.route('/')
 def hello_world():
