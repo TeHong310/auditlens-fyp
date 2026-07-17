@@ -14,6 +14,28 @@ BUYER_KEYWORDS = [
     'northern point', 'invoice to', 'bill to', 'sold to', 'deliver to',
     'ship to', 'attn', 'attention'
 ]
+
+# Table-header words a line-item description/quantity fallback must never
+# grab as if it were the actual value — e.g. "Description" label
+# immediately followed by the next column header "Qty" on the next line
+# (not real data) rather than an actual product description.
+HEADER_WORD_RE = re.compile(
+    r'^(?:no\.?|item\s*no\.?|description|particulars|item\s*description|item|'
+    r'qty\.?|quantity|unit\s*price\s*(?:\(rm\)|\(myr\))?|price\s*(?:\(rm\)|\(myr\))?|'
+    r'amount\s*(?:\(rm\)|\(myr\))?|total\s*(?:\(rm\)|\(myr\))?)\s*$',
+    re.IGNORECASE
+)
+
+# Line-item table ROW: "1  Aluminium Bracket A100  120  8.00  960.00"
+# -> row no. (discarded), description, qty (whole number), unit price,
+# amount. Tried first for both item_description and quantity since it
+# pulls both from the SAME row, so they're always internally consistent
+# with each other (never description from one row and qty from another).
+LINE_ITEM_ROW_RE = re.compile(
+    r'^\s*\d+\s+([A-Za-z][\w\s\-\.\/&]*?)\s+(\d+)\s+[\d,]+\.\d+\s+[\d,]+\.\d+\s*$'
+)
+
+
 def clean_vendor_name(vendor):
     if not vendor:
         return vendor
@@ -257,9 +279,34 @@ def extract_fields(ocr_text):
                 if len(val) > 2:
                     fields['po_reference'] = val
 
-        # ── ITEM / DESCRIPTION ────────────────────────────
-        # Best-effort single representative line item (this app already
-        # treats amount/quantity as a single aggregate, not itemized).
+        # ── LINE ITEM: description + qty from the SAME table row ──
+        # Tabular layout: "1  Aluminium Bracket A100  120  8.00  960.00"
+        # -> row no. (discarded), description, qty, unit price, amount.
+        # Tried before the label-based fallbacks below — pulling both
+        # fields from the same row keeps them internally consistent
+        # (never description from one row and qty from a different one),
+        # and this is the primary layout our invoices/POs/GRs actually
+        # use, not a "Description:"/"Qty:" label form.
+        if fields['item_description'] is None or fields['quantity'] is None:
+            row_match = LINE_ITEM_ROW_RE.match(line_clean)
+            if row_match:
+                if fields['item_description'] is None:
+                    desc_val = row_match.group(1).strip()
+                    if len(desc_val) > 2:
+                        fields['item_description'] = desc_val[:200]
+                if fields['quantity'] is None:
+                    try:
+                        qty_val = float(row_match.group(2))
+                        if qty_val > 0:
+                            fields['quantity'] = qty_val
+                    except ValueError:
+                        pass
+
+        # ── ITEM / DESCRIPTION (label-based fallback, e.g. a
+        # "Description: Widget XYZ" line on a non-tabular document).
+        # HEADER_WORD_RE guards against grabbing the NEXT column header
+        # (e.g. "Qty") when "Description" is itself just a column header
+        # with no inline value, not a real label:value line. ──
         if fields['item_description'] is None:
             label_match = re.search(
                 r'^(?:description|particulars|item\s*description|item)\s*[:\-]?\s*(.*)$',
@@ -267,16 +314,14 @@ def extract_fields(ocr_text):
             )
             if label_match:
                 inline_val = label_match.group(1).strip()
-                if len(inline_val) > 2:
+                if len(inline_val) > 2 and not HEADER_WORD_RE.match(inline_val):
                     fields['item_description'] = inline_val[:200]
-                elif next_line and len(next_line) > 2:
+                elif next_line and len(next_line) > 2 and not HEADER_WORD_RE.match(next_line):
                     fields['item_description'] = next_line[:200]
 
-        # ── QUANTITY ───────────────────────────────────────
+        # ── QUANTITY (label-based fallback, e.g. "Qty: 100") ──────
         # THE key 3-way audit field: PO ordered vs GR received vs
-        # Invoice billed. Best-effort single value (same simplification
-        # already used for total_amount — a single aggregate, not
-        # itemized).
+        # Invoice billed.
         if fields['quantity'] is None:
             match = re.search(r'\b(?:qty|quantity)\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)\b', line_clean, re.IGNORECASE)
             if match:
@@ -538,7 +583,29 @@ def extract_po_fields(ocr_text):
         line_clean = line.strip()
         next_line  = lines[i + 1].strip() if i + 1 < len(lines) else ''
 
-        # ── ITEM / DESCRIPTION ────────────────────────────
+        # ── LINE ITEM: description + qty from the SAME table row ──
+        # Tabular layout: "1  Aluminium Bracket A100  120  8.00  960.00"
+        # -> row no. (discarded), description, qty, unit price, amount.
+        # Tried before the label-based fallbacks below — pulling both
+        # fields from the same row keeps them internally consistent.
+        if fields['item_description'] is None or fields['quantity'] is None:
+            row_match = LINE_ITEM_ROW_RE.match(line_clean)
+            if row_match:
+                if fields['item_description'] is None:
+                    desc_val = row_match.group(1).strip()
+                    if len(desc_val) > 2:
+                        fields['item_description'] = desc_val[:200]
+                if fields['quantity'] is None:
+                    try:
+                        qty_val = float(row_match.group(2))
+                        if qty_val > 0:
+                            fields['quantity'] = qty_val
+                    except ValueError:
+                        pass
+
+        # ── ITEM / DESCRIPTION (label-based fallback). HEADER_WORD_RE
+        # guards against grabbing the NEXT column header (e.g. "Qty")
+        # when "Description" is itself just a column header. ──
         if fields['item_description'] is None:
             label_match = re.search(
                 r'^(?:description|particulars|item\s*description|item)\s*[:\-]?\s*(.*)$',
@@ -546,12 +613,12 @@ def extract_po_fields(ocr_text):
             )
             if label_match:
                 inline_val = label_match.group(1).strip()
-                if len(inline_val) > 2:
+                if len(inline_val) > 2 and not HEADER_WORD_RE.match(inline_val):
                     fields['item_description'] = inline_val[:200]
-                elif next_line and len(next_line) > 2:
+                elif next_line and len(next_line) > 2 and not HEADER_WORD_RE.match(next_line):
                     fields['item_description'] = next_line[:200]
 
-        # ── QUANTITY ───────────────────────────────────────
+        # ── QUANTITY (label-based fallback, e.g. "Qty: 100") ──────
         if fields['quantity'] is None:
             match = re.search(r'\b(?:qty|quantity)\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)\b', line_clean, re.IGNORECASE)
             if match:
@@ -687,7 +754,29 @@ def extract_gr_fields(ocr_text):
                 if len(val) > 2:
                     fields['po_reference'] = val
 
-        # ── ITEM / DESCRIPTION ────────────────────────────
+        # ── LINE ITEM: description + qty from the SAME table row ──
+        # Tabular layout: "1  Aluminium Bracket A100  120  8.00  960.00"
+        # -> row no. (discarded), description, qty, unit price, amount.
+        # Tried before the label-based fallbacks below — pulling both
+        # fields from the same row keeps them internally consistent.
+        if fields['item_description'] is None or fields['quantity'] is None:
+            row_match = LINE_ITEM_ROW_RE.match(line_clean)
+            if row_match:
+                if fields['item_description'] is None:
+                    desc_val = row_match.group(1).strip()
+                    if len(desc_val) > 2:
+                        fields['item_description'] = desc_val[:200]
+                if fields['quantity'] is None:
+                    try:
+                        qty_val = float(row_match.group(2))
+                        if qty_val > 0:
+                            fields['quantity'] = qty_val
+                    except ValueError:
+                        pass
+
+        # ── ITEM / DESCRIPTION (label-based fallback). HEADER_WORD_RE
+        # guards against grabbing the NEXT column header (e.g. "Qty")
+        # when "Description" is itself just a column header. ──
         if fields['item_description'] is None:
             label_match = re.search(
                 r'^(?:description|particulars|item\s*description|item)\s*[:\-]?\s*(.*)$',
@@ -695,12 +784,12 @@ def extract_gr_fields(ocr_text):
             )
             if label_match:
                 inline_val = label_match.group(1).strip()
-                if len(inline_val) > 2:
+                if len(inline_val) > 2 and not HEADER_WORD_RE.match(inline_val):
                     fields['item_description'] = inline_val[:200]
-                elif next_line and len(next_line) > 2:
+                elif next_line and len(next_line) > 2 and not HEADER_WORD_RE.match(next_line):
                     fields['item_description'] = next_line[:200]
 
-        # ── QUANTITY ───────────────────────────────────────
+        # ── QUANTITY (label-based fallback, e.g. "Qty: 100") ──────
         if fields['quantity'] is None:
             match = re.search(r'\b(?:qty|quantity)\.?\s*[:\-]?\s*(\d+(?:\.\d+)?)\b', line_clean, re.IGNORECASE)
             if match:

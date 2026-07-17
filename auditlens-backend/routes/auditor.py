@@ -31,12 +31,19 @@ def _amounts_equal(a, b):
 
 
 def _normalize_ref(val):
-    """Normalize a reference/ID value (PO number) for comparison:
-    uppercase, strip all whitespace. None for empty/missing so it's
-    excluded from the match set rather than compared as ''."""
+    """Normalize a PO reference/ID value for comparison: uppercase,
+    strip all whitespace, then strip a leading "PO-"/"PO " prefix.
+    Different documents' OCR extraction may or may not retain the "PO"
+    prefix depending on layout — e.g. an invoice's "PO No: PO-2026-0087"
+    line captures "PO-2026-0087", but a differently-worded label
+    elsewhere might capture just "2026-0087" — they're the same
+    reference and must compare equal, not show a false mismatch.
+    None for empty/missing so it's excluded from the match set rather
+    than compared as ''."""
     if not val:
         return None
     v = re.sub(r'\s+', '', str(val).upper())
+    v = re.sub(r'^PO-?', '', v)
     return v or None
 
 

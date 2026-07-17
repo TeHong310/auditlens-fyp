@@ -3672,3 +3672,92 @@ Setup/config needed:
      present). Only new uploads after this deploy populate the new
      fields. There's no bulk re-extraction from existing raw_ocr_text in
      this change; let me know if you'd like that as a follow-up.
+
+------------------------------------------------------------------------------
+2026-07-17 - Fix 3 bugs in the new comparison fields: po_reference false
+             mismatch (prefix inconsistency), item_description grabbing
+             a table column header instead of the real item, quantity
+             extracting nothing for tabular invoices/POs/GRs
+
+Root cause of BUG 2 & 3: the previous item_description/quantity regexes
+only handled a "Description: X" / "Qty: N" LABEL:VALUE layout. This
+project's actual invoices/POs/GRs use a TABLE instead — a header row
+("No | Description | Qty | Unit Price (RM) | Amount (RM)", which Google
+Vision OCR often emits as one label per line) followed by data rows like
+"1  Aluminium Bracket A100  120  8.00  960.00". Neither table shape was
+handled before.
+
+What was changed:
+
+BUG 1 — po_reference false mismatch (routes/auditor.py `_normalize_ref`):
+  - Previously only uppercased and stripped whitespace. Now also strips
+    a leading "PO-"/"PO" prefix, so "PO-2026-0087" (however the source
+    document phrases its "PO No:" line) and "2026-0087" (a source that
+    happens to extract without the prefix) normalize to the identical
+    "2026-0087" and compare equal, per the explicit fix given in the
+    request.
+
+BUG 2 & 3 — item_description/quantity (helpers/ocr_helper.py, all
+three of extract_fields/extract_po_fields/extract_gr_fields):
+  - New `LINE_ITEM_ROW_RE`: matches a tabular data row directly —
+    leading row number (discarded), description, a whole-number qty,
+    then two decimal amounts (unit price, total) through end of line.
+    Tried FIRST, before any label-based fallback, and pulls
+    item_description AND quantity from the SAME matched row so they're
+    always internally consistent (never description from one row,
+    qty from a different one).
+  - New `HEADER_WORD_RE`: a denylist of table-header words (No,
+    Description, Qty, Unit Price (RM), Amount (RM), Total (RM), etc.).
+    This is the actual BUG 2 fix — when OCR emits each column header on
+    its own line ("Description" then, on the very next line, "Qty"),
+    the OLD label-based fallback saw the bare "Description" line, found
+    no inline value, and grabbed the NEXT line ("Qty") as if it were
+    the description. The label-based fallback is now guarded by this
+    denylist on both the inline value and the next-line value, so it
+    can never mistake the next column header for real data. The
+    label-based patterns themselves are UNCHANGED and kept as a
+    fallback for simpler non-tabular invoices (a genuine "Description:
+    Widget XYZ" / "Qty: 100" layout) — verified this still works.
+
+Why: these are exactly the three bugs reported against this project's
+  actual invoice/PO/GR layout, reproduced and fixed against realistic
+  synthetic OCR text matching that exact layout before considering
+  either bug closed.
+
+Testing (all offline, no Gemini/network/DB call):
+  - `python -m py_compile` on both changed files — compiles clean.
+  - Verified `_normalize_ref()` treats 'PO-2026-0087', '2026-0087',
+    'PO 2026-0087', and 'po-2026-0087' as identical after normalization.
+  - Built realistic synthetic OCR text for the exact table layout
+    described (header lines one-per-line, then a
+    "1  Aluminium Bracket A100  <qty>  8.00  <amount>" data row) for
+    four scenarios: three MATCH sets (qty 120, 200, and 300, each
+    internally consistent across invoice/PO/GR, with the invoice/PO
+    using "PO-2026-0087" and the GR deliberately using the un-prefixed
+    "2026-0087" to specifically re-exercise BUG 1) and one MISMATCH set
+    (PO/Invoice qty=100, GR qty=90). For every scenario, confirmed:
+    item_description = 'Aluminium Bracket A100' (not 'Qty' or any other
+    header word) for all three document types; quantity = the correct
+    integer per document; po_reference normalizes equal across all
+    three via `_normalize_ref`/`_three_way_match` for the match sets;
+    `_quantities_match()` correctly returns False for the 100/100/90
+    mismatch set. Also re-ran the existing total_amount/tax_amount
+    regression suite (unaffected, still passes) and a simple
+    "Description:"/"Qty:" label-style (non-tabular) invoice to confirm
+    the fallback path used by simpler documents still works correctly
+    after adding the table-row pattern and the header-word guard.
+  - Caught and fixed a bug in my OWN test script along the way (an
+    unformatted integer amount that failed to match the "must have a
+    decimal point" requirement in LINE_ITEM_ROW_RE) — worth noting
+    since it's a reminder that the regex's amount/price format
+    requirement is strict by design (distinguishing a whole-number qty
+    from decimal prices, per the request), not a bug in the extractor.
+
+Setup/config needed:
+  1. Redeploy the Render backend.
+  2. Re-upload (or Re-check, where applicable) a sample invoice/PO/GR
+     set from your test data to confirm item_description/quantity now
+     extract correctly against your real documents, not just the
+     synthetic text used in this session's offline testing — synthetic
+     text can't perfectly replicate whatever line-breaking Google
+     Vision OCR actually produces for your specific PDFs' table layout.
