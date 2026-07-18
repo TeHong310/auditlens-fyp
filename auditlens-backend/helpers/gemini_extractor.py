@@ -65,15 +65,32 @@ CURRENCY_NOTE = """
   (e.g. RM, MYR, USD, US$) and return it in the "currency" field.
   Some documents show BOTH an original-currency total AND a converted
   local-currency total via an exchange rate, e.g. "TOTAL (US$) 8,020.00"
-  together with "EXCHANGE RATE=1.2670 ... TOTAL= 10,161.34 (RM)", or a PO
-  showing "Total Payable Incl. Tax (RM) 32,946.16" alongside "USD 8,020".
+  together with "EXCHANGE RATE=1.2670 ... SUB TOTAL= 10,161.34 ... TOTAL=
+  10,161.34 (RM)", or a PO showing "Total Payable Incl. Tax (RM) 32,946.16"
+  alongside "USD 8,020".
   1. The real transaction amount is always the ORIGINAL-currency total —
-     the one NOT computed from an exchange rate.
+     the one tagged with a foreign-currency symbol/code (US$, USD, etc.),
+     NOT the one computed from an exchange rate.
   2. Do NOT return the exchange-rate-converted value as total_amount, even
-     if it is labeled "Total" and even if it is the larger number.
-  3. Set "currency" to the ORIGINAL currency (e.g. "USD"), not the
-     converted one.
-  4. If only one currency appears on the document, use that currency and
+     if it is labeled "Total"/"Sub Total", even if it is the larger number,
+     and even if it is positioned BELOW the real total (an exchange-rate
+     conversion block, once it starts, may repeat the word "Total" one or
+     more times for its own converted subtotal/total — none of those
+     belong in total_amount).
+  3. The "(US$)"/"USD" currency tag may be visually separated from its
+     number (e.g. the tag on one line/position, the number just below or
+     beside it) — still treat that number as the USD total, not whatever
+     number is physically closest to an unrelated "(RM)" tag elsewhere.
+  4. CRITICAL: "currency" MUST be the currency of the total_amount value
+     you actually return — never a different currency symbol that merely
+     appears somewhere else on the document. If total_amount is 8020
+     because you found it next to "US$", currency MUST be "USD", even if
+     "(RM)" also appears elsewhere on the page (e.g. in a separate
+     converted-total block, or another field like a tax-inclusive local
+     total). Getting the amount right but the currency wrong (e.g.
+     returning 8020 with currency "RM") is a mistake — verify the two
+     values are describing the SAME amount before returning them.
+  5. If only one currency appears on the document, use that currency and
      ignore this rule."""
 
 AUTHENTICITY_SIGNALS_BLOCK = """=== PART 2: AUTHENTICITY SIGNALS ===
@@ -242,12 +259,19 @@ IMPORTANT RULES:
   3. "Receipt No.", "Ref No."
   Common formats: PDNNNNNNN (e.g. PD6011652), GRN-YYYY-NNNN, or numeric-only.
   Do NOT confuse with:
-  - PO Number (usually labeled "From Doc No." or "PO Ref") — put this in po_reference, not gr_number
+  - PO Number (usually labeled "From Doc No." or "PO Ref", e.g. "From Doc
+    No.: PO3006000") — put this in po_reference, not gr_number. A label
+    that STARTS WITH "From" (e.g. "From Doc No.") is ALWAYS the referenced
+    PO, never the GR's own document number, even though it also contains
+    the words "Doc No."
   - Supplier Ref No. (that's the supplier's invoice reference)
   - Item Code / Part Number""" + DOCUMENT_NUMBER_NOTE + """
 - PO REFERENCE: the PO number this GR was received against (often labeled "PO Ref", "From Doc No.") — this is
   NOT the GR's own number.
 - ITEM DESCRIPTION and QUANTITY: from the FIRST line-item row of the goods table. If multiple rows exist, use the first row.
+- TOTAL AMOUNT / CURRENCY: most GRNs carry no monetary total (they record quantity received, not money) — leave
+  total_amount and currency null in that case. If the GR DOES show a monetary value, apply the same original-
+  currency-vs-converted-value rule as below.""" + CURRENCY_NOTE + """
 - Return null for any field you cannot confidently extract
 - Amounts must be numbers only (no currency symbols, no commas, no "RM")
 - Dates in ISO format: YYYY-MM-DD
@@ -259,6 +283,8 @@ IMPORTANT RULES:
   "po_reference": "string or null (the PO number this GR was received against)",
   "item_description": "string or null (first line-item row)",
   "quantity": number or null (first line-item row),
+  "total_amount": number or null (usually null — most GRNs carry no monetary total),
+  "currency": "string or null (only if total_amount is present)",
 """ + AUTHENTICITY_JSON_TAIL
 
 

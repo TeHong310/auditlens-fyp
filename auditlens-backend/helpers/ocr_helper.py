@@ -337,6 +337,15 @@ def extract_fields(ocr_text):
 
     total_candidates = []
     usd_total_candidates = []
+    # Once an "EXCHANGE RATE" marker is seen anywhere in the document, every
+    # subsequent generic "Total"/"Sub Total" line is almost certainly the
+    # exchange-rate-converted value, not the real total — Google Vision OCR
+    # commonly splits "TOTAL (US$) 8,020.00" onto separate lines from the
+    # exchange-rate/converted-total block that follows it, so a same-line-
+    # only check isn't enough (see the currency-tagged TOTAL AMOUNT block
+    # below). This document-level flag suppresses RM/generic total
+    # candidates found AFTER that point, regardless of line-splitting.
+    seen_exchange_rate = False
 
     for i, line in enumerate(lines):
         line_clean = line.strip()
@@ -512,7 +521,10 @@ def extract_fields(ocr_text):
         # unconditional priority below, and a line describing the
         # conversion itself is never treated as a candidate total.
         is_exchange_rate_line = re.search(r'exchange\s*rate', line_clean, re.IGNORECASE)
+        if is_exchange_rate_line:
+            seen_exchange_rate = True
         if not is_exchange_rate_line:
+            # Same-line form: "TOTAL (US$) 8,020.00".
             currency_total_match = re.search(
                 r'\btotal\s*\(\s*(us\$|usd|rm|myr)\s*\)\s*[:\-]?\s*([\d,]+\.?\d*)',
                 line_clean, re.IGNORECASE
@@ -526,6 +538,18 @@ def extract_fields(ocr_text):
                     else:
                         total_candidates.append(val)
 
+            # Two-line form: Google Vision OCR commonly puts the label and
+            # its value on SEPARATE lines (confirmed elsewhere in this app
+            # for table headers) — a bare "TOTAL (US$)" label line, value
+            # on the next line. Checked regardless of seen_exchange_rate:
+            # the original-currency total legitimately appears anywhere,
+            # including before the exchange-rate block.
+            usd_label_only = re.search(r'^total\s*\(\s*(us\$|usd)\s*\)\s*$', line_clean, re.IGNORECASE)
+            if usd_label_only:
+                val = extract_amount(next_line)
+                if val and val > 1:
+                    usd_total_candidates.append(val)
+
         # ── TOTAL AMOUNT ──────────────────────────────────
         # Collect every "total"-labeled amount on the invoice (skipping
         # Subtotal/Sub Total lines) instead of stopping at the first match —
@@ -533,8 +557,13 @@ def extract_fields(ocr_text):
         # "Sub Total (RM)" (with a space) would otherwise match the same
         # \btotal patterns as the real "Total (RM)" line. The true total is
         # always the largest of these (Total = Subtotal + tax), so the max
-        # is taken once the whole line loop finishes.
-        if not re.search(r'\bsub[\s\-]?total\b', line_clean, re.IGNORECASE) and not is_exchange_rate_line:
+        # is taken once the whole line loop finishes. Suppressed entirely
+        # once an exchange-rate marker has been seen anywhere earlier in
+        # the document — a generic "Total"/"Sub Total" line found after
+        # that point is the converted value, not the real total (the real,
+        # original-currency total is captured separately above).
+        if (not re.search(r'\bsub[\s\-]?total\b', line_clean, re.IGNORECASE)
+                and not is_exchange_rate_line and not seen_exchange_rate):
             amount_patterns = [
                 r'\btotal\s*\(\s*(?:rm|myr)\s*\)\s*[:\-]?\s*([\d,]+\.?\d*)',
                 r'total\s*net\s*amount\s*(?:\(rm\))?\s*[:\-]?\s*([\d,]+\.?\d*)',
@@ -891,6 +920,7 @@ def extract_gr_fields(ocr_text):
 
     lines = ocr_text.split('\n')
     total_candidates = []
+    usd_total_candidates = []
 
     # Primary line-item extraction — see extract_fields() for why this
     # runs over the whole line list up front rather than per-line below.
@@ -905,9 +935,12 @@ def extract_gr_fields(ocr_text):
         next_line  = lines[i + 1].strip() if i + 1 < len(lines) else ''
 
         # ── PO REFERENCE ──────────────────────────────────
+        # Real EMITS-style GRNs reference the PO via "From Doc No.:
+        # PO3006000" rather than "PO No:"/"PO Ref:" — added as an
+        # alternative label alongside the existing ones.
         if fields['po_reference'] is None:
             match = re.search(
-                r'\b(?:p\.?o\.?|purchase\s*order)\s*(?:no\.?|number|ref\.?)?\s*[:\-]\s*([A-Za-z0-9\-\/]+)',
+                r'\b(?:p\.?o\.?|purchase\s*order|from\s*doc)\s*(?:no\.?|number|ref\.?)?\s*[:\-]\s*([A-Za-z0-9\-\/]+)',
                 line_clean, re.IGNORECASE
             )
             if match:
@@ -968,10 +1001,18 @@ def extract_gr_fields(ocr_text):
             # alternative that lets the overall match succeed (not the
             # longest), "do" would otherwise partial-match inside "Doc" and
             # capture only the trailing "c" of "Doc No." as the number.
-            match = re.search(
-                r'(?:goods\s*receipt|delivery\s*order|doc\.?|asn|gr|do)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
-                line_clean, re.IGNORECASE
-            )
+            #
+            # A line starting "From Doc No." is the REFERENCED PO (captured
+            # into po_reference above), not the GR's own document number —
+            # skipped here so it's never mistaken for gr_number just
+            # because it also contains the words "Doc No.".
+            if re.search(r'\bfrom\s+doc', line_clean, re.IGNORECASE):
+                match = None
+            else:
+                match = re.search(
+                    r'(?:goods\s*receipt|delivery\s*order|doc\.?|asn|gr|do)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
+                    line_clean, re.IGNORECASE
+                )
             if match:
                 val = match.group(1).strip()
                 if len(val) > 2:
@@ -1002,6 +1043,14 @@ def extract_gr_fields(ocr_text):
             if match:
                 fields['receipt_date'] = normalize_date_string(match.group(1).strip())
 
+        # Most GRNs carry no monetary total, but a few reference one — same
+        # original-currency preference as extract_fields()/extract_po_fields().
+        usd_match = re.search(r'\b(?:usd|us\$)\s*[:\-]?\s*([\d,]+\.?\d*)', line_clean, re.IGNORECASE)
+        if usd_match:
+            val = extract_amount(usd_match.group(1))
+            if val and val > 1:
+                usd_total_candidates.append(val)
+
         # TOTAL AMOUNT — same fix as extract_fields()/extract_po_fields():
         # collect every "total"-labeled amount (skipping Subtotal/SST/Tax
         # lines) and take the max once the loop finishes, instead of
@@ -1017,7 +1066,10 @@ def extract_gr_fields(ocr_text):
                 if val and val > 1:
                     total_candidates.append(val)
 
-    if total_candidates:
+    if usd_total_candidates:
+        fields['total_amount'] = max(usd_total_candidates)
+        fields['currency'] = 'USD'
+    elif total_candidates:
         fields['total_amount'] = max(total_candidates)
 
     # Fallback for GR number — this previously ran INSIDE the block above

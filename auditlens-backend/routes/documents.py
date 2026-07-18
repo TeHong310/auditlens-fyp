@@ -339,7 +339,8 @@ def upload_goods_receipt(document_id):
         gemini_result = gemini_extract_gr_full(file_bytes_data, safe_name)
         if gemini_result:
             for key in ('gr_number', 'vendor_name', 'receipt_date',
-                        'po_reference', 'item_description', 'quantity'):
+                        'po_reference', 'item_description', 'quantity',
+                        'total_amount', 'currency'):
                 if gemini_result.get(key) is not None:
                     fields[key] = gemini_result[key]
 

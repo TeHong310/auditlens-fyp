@@ -4119,3 +4119,158 @@ Setup/config needed:
      output, not just this session's offline regex-fallback tests — the
      Gemini prompt changes themselves are not exercised by any offline
      test (no live API calls are made in this codebase's test discipline).
+
+------------------------------------------------------------------------------
+2026-07-18 - Fix 3 bugs found testing against REAL Coilcraft/EMITS
+             documents: invoice total picked the converted RM value
+             instead of the original USD, currency showed RM for USD
+             documents, GR number picked up the referenced PO instead
+             of its own Doc No.
+
+Context: the previous entry's multi-currency handling was written and
+  tested against a same-line assumption ("TOTAL (US$) 8,020.00" all on one
+  line). Testing against the actual Coilcraft invoice showed Google Vision
+  OCR splits this onto SEPARATE lines ("TOTAL (US$)" then "8,020.00" on the
+  next line) — the same one-cell-per-line behavior already established for
+  this app's line-item tables, just not accounted for in the currency fix.
+  The previous same-line-only regex never matched, so the fallback path
+  fell through to the exchange-rate-converted "TOTAL" line instead.
+
+FIX 1 (priority) — invoice total_amount picking the converted RM value
+(helpers/ocr_helper.py `extract_fields()`):
+  - New two-line detection: a line that is EXACTLY "TOTAL (US$)" (or
+    "TOTAL (USD)"), value taken from the next line — mirrors the existing
+    bare "TOTAL" -> next-line pattern already used for the plain-total
+    case, now added for the currency-tagged case too.
+  - New document-level `seen_exchange_rate` flag: once a line containing
+    "exchange rate" is seen ANYWHERE earlier in the document, every
+    subsequent generic "Total"/"Sub Total" line (same-line pattern list
+    AND the bare "TOTAL" + next-line fallback) is suppressed entirely,
+    not just the one line that literally contains "exchange rate" text
+    (the previous fix only excluded that single line — the converted
+    "SUB TOTAL"/"TOTAL" lines that typically follow it on their OWN
+    lines were never covered). The original-currency USD total is
+    detected independently and unconditionally wins when present, so
+    this suppression only ever removes candidates that would otherwise
+    incorrectly compete with it.
+  - Applied the identical CURRENCY_NOTE strengthening (below) to the
+    Gemini prompt — Gemini is PRIMARY now, so the regex fix alone isn't
+    sufficient; both paths needed the fix.
+
+FIX 2 — currency shown as RM for USD documents (helpers/gemini_extractor.py,
+routes/documents.py, helpers/ocr_helper.py):
+  - CURRENCY_NOTE (shared by all 3 Gemini prompts) gained an explicit
+    "currency MUST match the currency of the total_amount you actually
+    return" rule, with a worked example matching the exact reported
+    failure mode (returning 8020 as total_amount but "RM" as currency,
+    because "(RM)" also appears elsewhere on the page in an unrelated
+    field) — the previous prompt explained WHICH amount to prefer but
+    never explicitly tied total_amount and currency together as one
+    linked decision, which is the most likely reason Gemini could get the
+    amount right while still returning the wrong currency tag.
+  - Also strengthened to cover the label/value visual-separation case
+    (the "(US$)" tag may be visually apart from its number) and to name
+    "SUB TOTAL"/repeated "Total" wording inside an exchange-rate block
+    explicitly, matching the real document's exact structure.
+  - GR previously had NO currency/total_amount handling at all in the
+    Gemini path (GR_FULL_PROMPT's JSON schema didn't include either key,
+    and routes/documents.py's GR override loop didn't include them) —
+    most GRNs carry no monetary total, but the request explicitly asked
+    for currency to flow for GR too. Added `total_amount`/`currency` to
+    GR_FULL_PROMPT's schema (documented as usually null) and to the
+    override loop in `upload_goods_receipt()`. Added the same USD-total
+    regex fallback used by extract_po_fields() to extract_gr_fields(), so
+    a GR that DOES show a monetary value gets the same original-currency
+    preference.
+  - The invoice and PO paths already correctly stored/overrode currency
+    from a working extraction (per this entry's regression tests) — the
+    fix here is entirely about GR gaining the same support, and about the
+    Gemini prompt no longer being able to decouple total_amount from
+    currency.
+
+FIX 3 — GR number picking up the referenced PO instead of its own Doc No.
+(helpers/ocr_helper.py `extract_gr_fields()`, helpers/gemini_extractor.py
+GR_FULL_PROMPT):
+  - Root cause: the gr_number regex's `doc\.?` alternative does an
+    unanchored substring search, so it matched "Doc No." inside "From Doc
+    No.: PO3006000" just as readily as inside the GR's own "Doc No.
+    PD6011823" line — nothing distinguished "Doc No." from "From Doc
+    No.", so whichever line the loop reached first won, silently
+    returning the wrong document number when "From Doc No." happened to
+    appear before the real "Doc No." line.
+  - Fix: lines matching `\bfrom\s+doc` are now skipped entirely for
+    gr_number extraction (regardless of document order — verified with a
+    dedicated order-independence test, see Testing below).
+  - The referenced PO is now captured correctly instead of being
+    dropped: extract_gr_fields()'s existing po_reference regex (which
+    already handled "PO No:"/"PO Ref:") gained "From Doc No." as another
+    recognized label, so "From Doc No.: PO3006000" now correctly
+    populates po_reference = 'PO3006000' rather than being lost.
+  - GR_FULL_PROMPT already told Gemini to route "From Doc No."/"PO Ref"
+    into po_reference (added in the previous entry) — strengthened
+    further with the exact "From Doc No.: PO3006000" example and an
+    explicit rule that a label STARTING WITH "From" is always the
+    referenced PO, never the GR's own number, even though it contains
+    the words "Doc No."
+
+Why: real Coilcraft/EMITS documents are the actual target for this
+  feature (per the original request), so testing against them — not just
+  synthetic text built from a paraphrased description — is what surfaced
+  all three of these gaps. Two of the three (Fix 1 and Fix 3) came from
+  the same underlying pattern: a previous fix's regex correctly handled
+  the CONCEPT (original-currency preference, "Doc No." label tolerance)
+  but was validated against a hand-built same-line test string that
+  didn't match how Google Vision actually splits real document text
+  across lines/labels.
+
+Testing (all offline, no live Gemini/network call):
+  - `python -c "import ast; ast.parse(...)"` on every changed backend
+    file — compiles clean.
+  - New offline test (scratchpad, not committed) built directly from the
+    real document patterns in this request:
+    - Invoice with "TOTAL (US$)" and "8,020.00" on SEPARATE lines (the
+      realistic split), followed by "EXCHANGE RATE = 1.2670" then "SUB
+      TOTAL"/"10161.34" then "TOTAL"/"10161.34" each as their own
+      bare-label-then-next-line pair — confirmed total_amount == 8020.00
+      and currency == 'USD' (not 10161.34/RM).
+    - Repeated with the same-line variant ("TOTAL (US$) 8,020.00" all on
+      one line) to confirm the original fix still works — no regression.
+    - Repeated again with just a bare "TOTAL" + next-line "10161.34"
+      after "EXCHANGE RATE=1.2670" (no "SUB TOTAL" in between) — the
+      most direct reproduction of the suppression logic — confirmed
+      8020.00/USD still wins.
+    - PO regression: "Doc No. PO3006000" + "USD 8,020" + "Total Payable
+      Incl. Tax (RM) 32,946.16" — confirmed total_amount == 8020.00,
+      currency == 'USD' (unchanged from the previous entry, PO logic
+      wasn't touched by this fix).
+    - GR with "Doc No.  PD6011823" followed by "From Doc No.:
+      PO3006000" — confirmed gr_number == 'PD6011823' (not 'PO3006000')
+      and po_reference == 'PO3006000'. Repeated with the two lines in
+      REVERSED order (From Doc No. line first) to confirm the fix isn't
+      order-dependent — same correct result both ways.
+    - Regression: a plain single-currency (no "exchange rate" text
+      anywhere) RM-only invoice still extracts total_amount/currency
+      correctly — confirms the new seen_exchange_rate suppression only
+      activates when an actual exchange-rate marker is present.
+  - Re-ran all three pre-existing offline regex test suites from prior
+    entries (line-item table extraction, po_reference normalization/
+    quantity mismatch, and the previous entry's real-document regex
+    test) — all still pass, no regression from the changes to the same
+    per-line loops.
+
+Note (not fixed, out of scope): the `extract_gr_fields()` "GRN No:" label
+gap flagged two entries ago is still not fixed (unrelated to this
+request's 3 fixes).
+
+Setup/config needed:
+  1. Redeploy the Render backend — this is a backend-only change (no
+     frontend files touched).
+  2. Re-upload or Re-check the same real Coilcraft/EMITS documents used
+     to find these bugs, to confirm against actual Gemini vision output
+     — the Gemini prompt strengthening (Fix 1/2's CURRENCY_NOTE update,
+     Fix 3's GR_FULL_PROMPT update) is not exercised by any offline test,
+     only the regex fallback is. If Gemini still returns the wrong
+     currency/amount/gr_number after redeploying, the regex fallback
+     should now catch it correctly as long as Gemini's vision call fails
+     or is unavailable — but a live-document check against Gemini itself
+     is the real confirmation this request asked for.
