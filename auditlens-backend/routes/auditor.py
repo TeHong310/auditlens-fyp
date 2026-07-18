@@ -207,12 +207,16 @@ def _build_comparison(cursor, invoice_document_id):
     quantity_match = _quantities_match(quantities)
 
     # ── Date order: PO date <= GR date <= Invoice date, skipping the
-    # check if any required date is missing. Still computed for
-    # overall_status below even though the Field Comparison table no
-    # longer displays a Date row — dates naturally differ between PO/GR/
-    # Invoice by design, so showing them as a "should match" row was
-    # misleading, but the chronological sanity check itself is still a
-    # useful overall-status signal, so it's kept. ──
+    # check if any required date is missing. Computed and still returned
+    # in match_result (and still used as supplementary detail text in
+    # _classify_exception below), but — as of this fix — deliberately
+    # NOT one of the checks that can flip overall_status to FAIL on its
+    # own. It was previously included there, but the Field Comparison
+    # table stopped showing a Date row two entries ago; an invisible
+    # check silently failing the whole banner with no visible row for
+    # the auditor to investigate is exactly the bug this fix addresses
+    # (a "perfect match" record — every visible field showing ✓ Match —
+    # still showed "Mismatch Detected" because of this). ──
     date_order_valid = None
     if po and gr and po['po_date'] and gr['receipt_date'] and invoice['invoice_date']:
         date_order_valid = po['po_date'] <= gr['receipt_date'] <= invoice['invoice_date']
@@ -221,16 +225,25 @@ def _build_comparison(cursor, invoice_document_id):
     elif gr and invoice['invoice_date'] and gr['receipt_date'] and not po:
         date_order_valid = gr['receipt_date'] <= invoice['invoice_date']
 
-    # quantity_match is included here (unlike po_reference_match/
-    # item_match) because it's the key audit signal this whole feature
-    # exists to surface — a real ordered-vs-received-vs-billed mismatch
-    # should flip the banner to FAIL and surface in the Exceptions list,
-    # not just sit quietly as a red row in the table. po_reference_match/
-    # item_match stay display-only in match_result: they're best-effort
-    # regex fields more prone to false mismatches from OCR/description
-    # wording differences, so they're not wired into a system that
-    # drives the approve/exception workflow.
-    checks = [vendor_match, amount_match, quantity_match, date_order_valid]
+    # overall_status is driven ONLY by checks that are actually visible
+    # in the Field Comparison table (Vendor, Amount, Quantity) — every
+    # one of these already correctly treats a missing/absent value as
+    # "not applicable" (None), never as a false mismatch: _amounts_equal
+    # and _quantities_match both return None unless 2+ PRESENT values
+    # exist to compare (verified — GR's absent amount can't reach
+    # amount_match at all, since that check only ever looks at Invoice
+    # vs PO; a missing GR quantity is filtered out by _quantities_match
+    # before comparing, not treated as 0 or unequal). quantity_match is
+    # included (unlike po_reference_match/item_match) because it's the
+    # key audit signal this whole feature exists to surface — a real
+    # ordered-vs-received-vs-billed mismatch should flip the banner to
+    # FAIL and surface in the Exceptions list, not just sit quietly as a
+    # red row in the table. po_reference_match/item_match stay
+    # display-only in match_result: best-effort regex fields more prone
+    # to false mismatches from OCR/description wording differences, so
+    # they're not wired into a system that drives the approve/exception
+    # workflow. date_order_valid is excluded per the comment above.
+    checks = [vendor_match, amount_match, quantity_match]
     applicable_checks = [c for c in checks if c is not None]
 
     if any(c is False for c in checks):
@@ -241,6 +254,18 @@ def _build_comparison(cursor, invoice_document_id):
         overall_status = 'PASS'
     else:
         overall_status = 'PARTIAL'
+
+    # Per-check breakdown, always logged — this is exactly what to check
+    # in Render's logs if overall_status ever looks wrong for a record:
+    # every check that's None was skipped as "not applicable" (missing/
+    # absent value), not a mismatch; only an explicit False is a real
+    # disagreement.
+    print(f"DEBUG comparison doc={invoice_document_id}: "
+          f"vendor_match={vendor_match} amount_match={amount_match} "
+          f"po_reference_match={po_reference_match} item_match={item_match} "
+          f"quantity_match={quantity_match} date_order_valid={date_order_valid} "
+          f"(date_order_valid excluded from overall_status — see comment above) "
+          f"-> overall_status={overall_status}")
 
     return {
         'invoice': invoice,

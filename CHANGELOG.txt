@@ -3843,3 +3843,84 @@ Setup/config needed:
      the real OCR structure you provided this time, so confidence is
      higher than the previous entry, but your real PDFs are still the
      authoritative test.
+
+------------------------------------------------------------------------------
+2026-07-17 - Fix a "perfect match" record wrongly showing "Mismatch
+             Detected": date_order_valid, an invisible check no longer
+             shown in the table, could flip the whole banner alone
+
+Investigated per the request: your hypothesis (GR's missing amount
+  causing a false mismatch) does NOT hold, verified by code review —
+  amount_match only ever compares Invoice vs PO, it never even looks at
+  GR's amount; and both `_amounts_equal()` and `_quantities_match()`
+  already correctly return None ("not applicable") rather than False
+  whenever fewer than 2 real values exist to compare — confirmed with a
+  new offline test where GR's quantity is entirely missing (None) and
+  quantity_match still correctly comes out True from the two values
+  that ARE present (invoice + PO). None of the checks visible in the
+  Field Comparison table were the bug.
+
+Root cause (found by reconstructing the record's field values in a
+  mocked comparison and printing the per-check breakdown, i.e. doing
+  exactly what the request asked for): `date_order_valid` — PO date <=
+  GR date <= Invoice date — was still one of the checks feeding
+  `overall_status`, even though the Field Comparison table stopped
+  showing a Date row two entries ago (dates naturally differ between
+  PO/GR/Invoice, so a "should match" row was misleading — but the
+  underlying order check was deliberately left wired into the banner
+  logic at the time, reasoned then as "still a useful signal"). That
+  reasoning was wrong in practice: an invisible check silently failing
+  the whole banner, with no row anywhere for the auditor to see why, is
+  indistinguishable from a bug. For INV-2026-0087, every check actually
+  shown in the table (vendor/PO Ref/item/quantity/amount) was a real,
+  correct Match — only the invisible date-order check was False,
+  flipping the banner to "Mismatch Detected" for a record with nothing
+  wrong that an auditor could find by reading the table.
+
+What was changed (routes/auditor.py `_build_comparison()`):
+  - `checks` (the list that drives `overall_status`) no longer includes
+    `date_order_valid` — now `[vendor_match, amount_match,
+    quantity_match]` only, i.e. exactly the checks with a visible row in
+    the Field Comparison table. `date_order_valid` is still computed,
+    still returned in `match_result`, and still adds supplementary
+    detail text in `_classify_exception()` when another check has
+    already triggered a FAIL — it just can no longer single-handedly
+    fail a record with nothing else wrong.
+  - Added the requested per-check debug log, printed on every call:
+    "DEBUG comparison doc=<id>: vendor_match=... amount_match=...
+    po_reference_match=... item_match=... quantity_match=...
+    date_order_valid=... -> overall_status=...". This is now the first
+    thing to check in Render's logs any time overall_status looks wrong
+    for a record — every `None` was correctly skipped as not-applicable
+    (a missing/absent value on one side), not a mismatch; only an
+    explicit `False` is a genuine disagreement.
+
+Testing (all offline, mocked cursor, no DB/Gemini/network call — this
+session's local DB turned out to be empty/disconnected from the
+production record in the screenshot, so the bug was reproduced by
+reconstructing the record's field values directly rather than querying
+it):
+  - Reproduced the exact reported bug: a mocked record with
+    vendor_match/amount_match/po_reference_match/item_match/
+    quantity_match all True, but a GR receipt_date (17 Jul) after the
+    invoice_date (14 Jul) — before this fix, that combination gave
+    `overall_status='FAIL'` (matching the screenshot); after the fix,
+    the same input now correctly gives `overall_status='PASS'`.
+  - Re-verified the real quantity-mismatch scenario (PO/Invoice=100,
+    GR=90) still correctly gives `overall_status='FAIL'`.
+  - New test: GR quantity entirely missing (None) — confirmed
+    quantity_match is True (from the invoice/PO values that ARE
+    present, not skipped-as-mismatch) and overall_status is PASS,
+    directly closing out the original hypothesis.
+  - Re-ran the existing `_build_comparison()` test suite from two
+    entries ago (PO-missing scenario, invoice-only scenario) — both
+    still pass unchanged.
+  - `python -m py_compile` — compiles clean.
+
+Setup/config needed:
+  1. Redeploy the Render backend.
+  2. Re-open INV-2026-0087 (or any other record currently showing an
+     unexplained "Mismatch Detected" with every table row green) after
+     redeploying — it should now correctly show PASS. Check the new
+     "DEBUG comparison doc=..." log line if any record's banner still
+     looks wrong, to see exactly which check is False.
