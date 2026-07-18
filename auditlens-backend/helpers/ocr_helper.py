@@ -15,6 +15,21 @@ BUYER_KEYWORDS = [
     'ship to', 'attn', 'attention'
 ]
 
+# On a PO, the letterhead at the top is the BUYER (the company issuing the
+# order) — the actual vendor/supplier is named under one of these headings
+# instead. Unlike invoice's is_buyer_line() (skip a known-buyer line, take
+# the first company match otherwise), PO vendor extraction must not trust
+# ANY company match until one of these headings has been seen — see
+# extract_po_fields(). Matches "Supplier"/"Supplier Address"/"Vendor"/
+# "Bill To Vendor" anywhere in the line, or a bare "To"/"To:" label at the
+# very start of the line (but NOT "Bill To"/"Ship To"/"Deliver To", which
+# are different recipient fields, not the supplier).
+PO_SUPPLIER_HEADING_RE = re.compile(r'\bsupplier\b|\bvendor\b|^to\s*[:\-]?(?:\s|$)', re.IGNORECASE)
+
+# Same idea for a GR: the letterhead is the RECEIVING company, not the
+# vendor — the actual supplier is named under one of these headings.
+GR_SUPPLIER_HEADING_RE = re.compile(r'\breceived\s*from\b|\bsupplier\b|\bdelivered\s*by\b', re.IGNORECASE)
+
 # Table-header words a line-item description/quantity fallback must never
 # grab as if it were the actual value — e.g. "Description" label
 # immediately followed by the next column header "Qty" on the next line
@@ -89,14 +104,17 @@ def _extract_first_line_item(lines):
             # Hit a number where a description was expected — malformed
             # table for our purposes, bail out rather than guessing.
             return None, None
-        if re.search(r'\d+\.\d+', line):
-            # Contains a price/amount-shaped decimal (e.g. "8.00") right
-            # inside what should be a clean single-cell description —
-            # this document isn't actually split one-cell-per-line after
-            # all (row number + description + numbers all landed on one
-            # line instead). Bail so the per-line LINE_ITEM_ROW_RE /
-            # label-based fallbacks can try instead, rather than
-            # swallowing the whole row as a "description".
+        if re.search(r'\d+\.\d+\s+[\d,]+\.\d+\s*$', line):
+            # ENDS with two decimal-shaped numbers (unit price + amount,
+            # e.g. "...  8.00 960.00") — this document isn't actually
+            # split one-cell-per-line after all (row number + description
+            # + numbers all landed on one line instead). Bail so the
+            # per-line LINE_ITEM_ROW_RE / label-based fallbacks can try
+            # instead, rather than swallowing the whole row as a
+            # "description". Deliberately narrower than "contains any
+            # decimal number" — a real component description can
+            # legitimately include one (e.g. "Power Inductor 4.7uH 20%
+            # SMD"), which must NOT be mistaken for an unsplit row.
             return None, None
         description = line
         break
@@ -738,6 +756,12 @@ def extract_po_fields(ocr_text):
     lines = ocr_text.split('\n')
     total_candidates = []
     usd_total_candidates = []
+    # On a PO the letterhead at the top is the BUYER (the company issuing
+    # the order), never the vendor — the actual supplier is named under a
+    # "Supplier"/"Vendor"/"To" heading further down. Vendor extraction
+    # below is gated on this flag so it never grabs the letterhead: it
+    # only starts trying once a supplier heading has actually been seen.
+    seen_supplier_heading = False
 
     # Primary line-item extraction — see extract_fields() for why this
     # runs over the whole line list up front rather than per-line below.
@@ -837,9 +861,23 @@ def extract_po_fields(ocr_text):
                     if len(val) > 2:
                         fields['po_number'] = val
 
-        if fields['vendor_name'] is None:
+        # ── VENDOR NAME (the SUPPLIER, never the letterhead/buyer) ──
+        # Unlike invoice's vendor extraction (which takes the FIRST
+        # company match, skipping known-buyer lines), a PO's vendor is
+        # named under a "Supplier"/"Vendor"/"To" heading further down the
+        # page — the letterhead at the top is the BUYER issuing the
+        # order. No company match is trusted until that heading has been
+        # seen, so the letterhead can never be picked up as the vendor.
+        if PO_SUPPLIER_HEADING_RE.search(line_clean):
+            seen_supplier_heading = True
+
+        if fields['vendor_name'] is None and seen_supplier_heading:
+            # Unanchored (unlike invoice/GR's `^...`) so a same-line label
+            # like "Supplier: MEGATECH COMPONENTS (M) SDN. BHD." still
+            # matches starting at the company name, not failing because
+            # "Supplier:" precedes it.
             match = re.search(
-                r'^([\w\s&\.\-\(\)]+(?:sdn\.?\s*bhd\.?|berhad|corporation|corp|ltd\.?|enterprise|trading)[\w\s&\.\-\(\)]*)',
+                r'([\w\s&\.\-\(\)]+(?:sdn\.?\s*bhd\.?|berhad|corporation|corp|ltd\.?|enterprise|trading)[\w\s&\.\-\(\)]*)',
                 line_clean, re.IGNORECASE
             )
             if match:
@@ -921,6 +959,11 @@ def extract_gr_fields(ocr_text):
     lines = ocr_text.split('\n')
     total_candidates = []
     usd_total_candidates = []
+    # On a GR the letterhead at the top is the RECEIVING company, never
+    # the vendor — the actual supplier is named under a "Received From"/
+    # "Supplier"/"Delivered By" heading further down. Same gating pattern
+    # as extract_po_fields()'s vendor extraction.
+    seen_supplier_heading = False
 
     # Primary line-item extraction — see extract_fields() for why this
     # runs over the whole line list up front rather than per-line below.
@@ -1025,9 +1068,19 @@ def extract_gr_fields(ocr_text):
                         if len(val) > 2:
                             fields['gr_number'] = val
 
-        if fields['vendor_name'] is None:
+        # ── VENDOR NAME (who DELIVERED the goods, never the letterhead/
+        # receiving company) — same gating pattern as extract_po_fields():
+        # no company match is trusted until a "Received From"/"Supplier"/
+        # "Delivered By" heading has actually been seen. ──
+        if GR_SUPPLIER_HEADING_RE.search(line_clean):
+            seen_supplier_heading = True
+
+        if fields['vendor_name'] is None and seen_supplier_heading:
+            # Unanchored, same reason as extract_po_fields() — a same-line
+            # label like "Received From: MEGATECH..." must still match
+            # starting at the company name.
             match = re.search(
-                r'^([\w\s&\.\-\(\)]+(?:sdn\.?\s*bhd\.?|berhad|corporation|corp|ltd\.?|enterprise|trading)[\w\s&\.\-\(\)]*)',
+                r'([\w\s&\.\-\(\)]+(?:sdn\.?\s*bhd\.?|berhad|corporation|corp|ltd\.?|enterprise|trading)[\w\s&\.\-\(\)]*)',
                 line_clean, re.IGNORECASE
             )
             if match:

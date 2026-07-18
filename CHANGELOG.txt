@@ -4274,3 +4274,192 @@ Setup/config needed:
      should now catch it correctly as long as Gemini's vision call fails
      or is unavailable — but a live-document check against Gemini itself
      is the real confirmation this request asked for.
+
+------------------------------------------------------------------------------
+2026-07-18 - Fix 3 bugs found testing a matched Malaysian invoice/PO/GR
+             set (Megatech supplier -> Oriontech buyer): PO vendor_name
+             returned the buyer instead of the supplier, PO item/
+             quantity came back empty, and authenticity permanently
+             degraded to text-only after a Gemini rate limit
+
+Context: unlike an invoice (where the letterhead company IS the vendor),
+  a PO's letterhead is the BUYER issuing the order, and a GR's letterhead
+  is the RECEIVING company — the actual vendor is named under a separate
+  "Supplier"/"Vendor"/"Received From" section further down the page. This
+  is a structurally different extraction problem per document type, not a
+  regex tuning issue.
+
+BUG 1 — PO/GR vendor_name returned the letterhead (buyer/receiver)
+instead of the supplier (helpers/ocr_helper.py, helpers/gemini_extractor.py):
+  - Root cause: `extract_po_fields()`/`extract_gr_fields()`'s vendor
+    regex was UNCONDITIONAL — it matched the FIRST line with a company
+    suffix (Sdn Bhd, Berhad, etc.) anywhere in the document, which is
+    almost always the letterhead at the top, with no awareness that a PO/
+    GR's letterhead is the WRONG company entirely (unlike an invoice,
+    where taking the first/letterhead company IS correct — confirmed via
+    regression test, left unchanged).
+  - Fix: new `PO_SUPPLIER_HEADING_RE` ("Supplier"/"Vendor"/a bare "To:"
+    label — NOT "Ship To"/"Deliver To"/"Bill To", which are different
+    recipient fields) and `GR_SUPPLIER_HEADING_RE` ("Received From"/
+    "Supplier"/"Delivered By"). Vendor extraction now tracks a
+    document-level "seen a supplier heading yet" flag and refuses to
+    match ANY company name until that heading has actually been seen —
+    the letterhead can structurally never be picked up, since it always
+    appears before the heading. If no supplier heading is found at all,
+    vendor_name stays null rather than defaulting to the (wrong)
+    letterhead — matches this codebase's existing "return null over a
+    guess" convention. The vendor-match regex itself changed from
+    anchored (`^...`) to unanchored so a same-line label like "Supplier:
+    MEGATECH COMPONENTS (M) SDN. BHD." still matches starting at the
+    company name (the anchor previously required the company suffix to
+    appear with nothing but word characters between it and the start of
+    the line, which "Supplier: " — containing a colon — breaks).
+  - PO_FULL_PROMPT/GR_FULL_PROMPT (Gemini, primary extractor) already
+    had SOME vendor guidance from an earlier entry, but evidently not
+    forceful enough — strengthened both with an explicit "COMMON
+    MISTAKE, read carefully" framing and the EXACT worked example from
+    this bug report (Oriontech letterhead vs Megatech supplier), mirroring
+    the CURRENCY_NOTE worked-example pattern that fixed a similar
+    "correct concept, Gemini still got it wrong" issue in the previous
+    entry. Also instructed to return null rather than default to the
+    letterhead if no supplier section is found.
+  - Invoice's vendor extraction (letterhead = vendor) was NOT touched —
+    confirmed already correct per the request, verified unchanged by a
+    regression test below.
+
+BUG 2 — PO item_description/quantity came back empty (helpers/ocr_helper.py
+`_extract_first_line_item()`, shared by all three of extract_fields/
+extract_po_fields/extract_gr_fields):
+  - `extract_po_fields()` already called `_extract_first_line_item()`
+    identically to the invoice/GR extractors — the bug wasn't a missing
+    wire-up, it was a false trigger inside the shared function itself.
+  - Root cause: the "is this actually an unsplit combined row, not a
+    clean single-cell description?" safety net bailed out (returned
+    `(None, None)`) whenever the candidate description line contained
+    ANY decimal-shaped number ANYWHERE in it (`re.search(r'\d+\.\d+',
+    line)`). A real component description very often legitimately
+    contains one — e.g. "MTC-IND-4R7M Power Inductor 4.7uH 20% SMD" —
+    which was being mistaken for evidence that the whole row (number +
+    description + price + amount) had landed on one line instead of
+    being split one-cell-per-line, silently discarding a perfectly
+    valid description.
+  - Reproduced directly (offline, no OCR/network involved) against the
+    exact description text before fixing: confirmed
+    `_extract_first_line_item()` returned `(None, None)` for it.
+  - Fix: narrowed the check to require the line to actually END with
+    TWO decimal-shaped numbers separated by whitespace
+    (`r'\d+\.\d+\s+[\d,]+\.\d+\s*$'` — unit price then amount, the real
+    shape of an unsplit combined row like "...  8.00 960.00"), instead
+    of matching any decimal substring anywhere. Verified both the fix
+    (decimal-bearing description now parses correctly) and the original
+    safety net's own purpose still works (a genuine unsplit row like "1
+    Aluminium Bracket A100 120 8.00 960.00" still correctly bails so the
+    LINE_ITEM_ROW_RE/label-based fallbacks can take over).
+  - This is a shared-function fix, not PO-specific — it benefits
+    invoice/GR too for any real description containing a decimal value,
+    even though it was only reported against the PO.
+
+BUG 3 — authenticity permanently fell back to text-only after a Gemini
+free-tier rate limit (helpers/gemini_extractor.py `call_gemini_sdk()`,
+helpers/authenticity_check.py):
+  - New `GEMINI_RATE_LIMIT_RETRY_DELAYS = (20, 10)`: `call_gemini_sdk()`
+    (the single choke point every Gemini call in the codebase goes
+    through) now detects a 429/RESOURCE_EXHAUSTED specifically and
+    retries automatically with backoff (20s, then 10s) before giving up
+    — transparent to every existing caller (invoice/PO/GR merged
+    extraction, authenticity, anomaly explanation), no interface change
+    needed for the retry itself, since it happens fully inside the
+    existing str-or-None return contract. A non-rate-limit error (e.g.
+    500, timeout, bad model) is NOT retried — only 429 gets the backoff
+    treatment.
+  - New `GeminiRateLimitError` exception + `on_rate_limit='raise'`
+    opt-in parameter on `call_gemini_sdk()` (default stays
+    `'return_none'`, so the other 4 existing call sites are completely
+    unaffected): when the caller opts in and retries are still
+    exhausted, this is raised instead of silently returning None, so
+    `run_authenticity_check()`'s fallback can tell "temporarily
+    rate-limited, will likely succeed on Re-check in a minute or two"
+    apart from a permanent failure — only `authenticity_check.py`'s
+    `_call_gemini_vision()` opts in.
+  - `_fallback_from_ocr_text()` gained a `rate_limited` parameter: when
+    true, the `ai_notes` text now explicitly says this is temporary and
+    names "Re-check" as the fix, instead of the previous wording ("Gemini
+    unavailable") which read as a permanent condition with no clear next
+    step.
+  - DB caching behavior is unchanged — a successful analysis is still
+    stored permanently, Re-check is still the only manual re-call
+    (neither the retry nor the rate-limit signaling touches that path).
+  - Tradeoff, flagged rather than hidden: a document that actually hits
+    the rate limit now takes up to ~30s longer to upload (the backoff
+    wait) before falling back, since this happens synchronously inside
+    the upload request. This is the explicit tradeoff requested — "a
+    burst of uploads doesn't permanently degrade results" — and only
+    affects the (hopefully rare) case where a call is actually
+    rate-limited; a normal, unthrottled call is unaffected.
+
+Why: "Verify this stays correct" (from the request, re: GR's vendor
+  extraction) turned out to reveal the SAME bug GR shares with PO —
+  empirically, before this fix, extract_gr_fields() ALSO returned the
+  letterhead (Oriontech) instead of the supplier (Megatech) for a
+  realistic GR text structure, even though the request's own test case
+  apparently didn't trigger it. Fixed rather than left as "unverified but
+  probably fine," consistent with this session's practice of fixing a
+  concretely-reproduced bug even when only asked to "verify."
+
+Testing (all offline, no live Gemini/network call):
+  - `python -c "import ast; ast.parse(...)"` on every changed backend
+    file — compiles clean.
+  - Reproduced BUG 2 directly before fixing: called
+    `_extract_first_line_item()` with the exact reported description
+    text and confirmed it returned `(None, None)` — then confirmed the
+    fix resolves it and the original unsplit-row case still bails
+    correctly (added as an explicit regression check).
+  - New consolidated test (scratchpad, not committed) covering BUG 1+2
+    together against a realistic Oriontech/Megatech PO and GR text
+    structure: confirmed po.vendor_name/gr.vendor_name both correctly
+    return 'MEGATECH COMPONENTS (M) SDN. BHD' (not 'ORIONTECH ELECTRONICS
+    SDN. BHD'), po.item_description/po.quantity and gr.item_description/
+    gr.quantity all populate correctly with the decimal-bearing
+    description. Also tested: an inline "Supplier: <name>" label (not
+    just a bare heading line), a bare "To:" heading, and confirmed "Ship
+    To:"/"Deliver To:" are correctly NOT treated as a supplier heading
+    (vendor_name stays null rather than picking up the wrong address).
+    Regression: invoice's vendor_name still correctly returns the
+    letterhead (unchanged behavior), and a final 3-way check confirms
+    invoice/po/gr all agree on the same vendor name for this matched set.
+  - Re-ran all four pre-existing offline regex test suites from prior
+    entries — all still pass, no regression from the vendor-gating or
+    line-item safety-net changes.
+  - New offline test for BUG 3 (scratchpad, not committed) using a
+    mocked google-genai client (no real network call) with `time.sleep`
+    patched out for speed: (1) 429 twice then success — confirmed
+    `call_gemini_sdk()` retries with the exact [20, 10] backoff and
+    returns the eventual success; (2) 429 on every attempt with the
+    default `on_rate_limit='return_none'` — confirmed it gives up after
+    exactly 1 initial + 2 retries and returns None, not an infinite loop;
+    (3) same persistent-429 case with `on_rate_limit='raise'` — confirmed
+    `GeminiRateLimitError` is raised; (4) a non-rate-limit 500 error —
+    confirmed NO retry happens and `time.sleep` is never called, proving
+    the backoff is scoped to 429 only. Also directly called
+    `run_authenticity_check()` with `_call_gemini_vision` mocked to raise
+    `GeminiRateLimitError` and confirmed the DB row's `ai_notes` mentions
+    "Re-check" and "temporary" and does NOT say "unavailable" — then
+    repeated with a normal (non-rate-limit) failure and confirmed the
+    notes text is unchanged from before ("unavailable", no "Re-check"
+    mention), proving the two failure modes are now distinguishable
+    without changing behavior for the common non-rate-limit case.
+
+Setup/config needed:
+  1. Redeploy the Render backend — backend-only change, no frontend
+     files touched.
+  2. Re-upload or Re-check the same real Megatech/Oriontech PO/GR used to
+     find these bugs to confirm against live Gemini vision output — the
+     Gemini prompt strengthening for Bug 1 is not exercised by any
+     offline test, only the regex fallback is.
+  3. Bug 3 is best confirmed by uploading 3+ documents in quick
+     succession (the scenario that originally triggered it) and checking
+     that authenticity results no longer permanently degrade to
+     text-only for the later ones — a genuinely rate-limited upload will
+     now visibly take longer (up to ~30s) before either succeeding via
+     retry or falling back with the new "temporary, use Re-check" notes
+     text, rather than failing immediately.

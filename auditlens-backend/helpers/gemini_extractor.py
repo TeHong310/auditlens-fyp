@@ -1,5 +1,6 @@
 import json
 import re
+import time
 import requests
 import fitz  # PyMuPDF
 from google import genai
@@ -14,7 +15,24 @@ GEMINI_TIMEOUT_MS = 15_000
 GEMINI_VISION_TIMEOUT_MS = 20_000
 PDF_RENDER_ZOOM = 2.0  # ~144 DPI — enough detail for chop/logo/signature, keeps payload small
 
+# Uploading several documents in quick succession can hit the free-tier
+# per-minute rate limit on a later call even though each upload only makes
+# ONE Gemini call — the limit is per-minute across all calls, not per
+# upload. These are the backoff delays (seconds) between retries of a
+# 429 specifically; a burst that trips the limit has usually cleared by
+# the time the second retry's wait elapses.
+GEMINI_RATE_LIMIT_RETRY_DELAYS = (20, 10)
+
 _client = None
+
+
+class GeminiRateLimitError(Exception):
+    """Raised by call_gemini_sdk only when the caller opts in via
+    on_rate_limit='raise' AND all retries for a 429 were exhausted — lets
+    a caller (currently only run_authenticity_check's fallback) tell a
+    temporary rate limit apart from a permanent failure, without changing
+    the str-or-None return contract every other caller relies on."""
+    pass
 
 
 def _get_client():
@@ -205,8 +223,19 @@ directly at the PURCHASE ORDER (PO) IMAGE (not OCR text), so read the actual lay
 """ + DOCUMENT_QUALITY_NOTE + """
 
 IMPORTANT RULES:
-- The VENDOR is the SUPPLIER the PO is issued TO (look for labels like "Bill To Vendor", "Vendor:", "Supplier:", "To:")
-- The company shown in the header of a PO is usually the BUYER issuing the order, NOT the vendor
+- CRITICAL — VENDOR NAME is a COMMON MISTAKE, read carefully: the company
+  name printed in the LETTERHEAD at the top of a PO (the largest/most
+  prominent company name on the page) is the BUYER — the company ISSUING
+  the order — and is NEVER the vendor, no matter how prominent it looks.
+  The VENDOR is the SUPPLIER the PO is addressed TO, named under a
+  "Supplier"/"Supplier Address"/"Vendor"/"Bill To Vendor"/"To" heading
+  further down the page (NOT "Ship To"/"Deliver To", which is a different
+  address). Example: if the letterhead says "ORIONTECH ELECTRONICS SDN.
+  BHD." and, further down, a "SUPPLIER" heading is followed by "MEGATECH
+  COMPONENTS (M) SDN. BHD.", the vendor_name is "MEGATECH COMPONENTS (M)
+  SDN. BHD." — the letterhead company, ORIONTECH, must NEVER be returned
+  as vendor_name on a PO. If no supplier heading/section can be found,
+  return null rather than defaulting to the letterhead.
 - CRITICAL: PO Number rules:
   1. PO Number is found in a LABELED field, never inferred from other text.
   2. Look for these exact labels: "Doc No.", "PO No.", "P.O. No.", "Purchase Order No.", "Order No.", "PO Number", "Reference No."
@@ -251,8 +280,14 @@ directly at the GOODS RECEIPT (GR) IMAGE (not OCR text), so read the actual layo
 """ + DOCUMENT_QUALITY_NOTE + """
 
 IMPORTANT RULES:
-- The VENDOR is who DELIVERED the goods (look for "Received From", "Delivered by", "Supplier")
-- The company shown in the header is usually the RECEIVING company (the buyer's warehouse), NOT the vendor
+- CRITICAL — VENDOR NAME is a COMMON MISTAKE, read carefully: the company
+  name printed in the LETTERHEAD at the top of a GR (the largest/most
+  prominent company name on the page) is the RECEIVING company (the
+  buyer's own warehouse) — and is NEVER the vendor, no matter how
+  prominent it looks. The VENDOR is who DELIVERED the goods, named under
+  a "Received From"/"Delivered By"/"Supplier" heading further down the
+  page. If no such heading/section can be found, return null rather than
+  defaulting to the letterhead.
 - GR Number labels (priority order):
   1. "Doc No." (most common on Malaysian GRN, e.g. "Doc No.  PD6011823")
   2. "GRN No.", "GR No.", "Goods Receipt No."
@@ -326,7 +361,14 @@ def log_available_gemini_models():
         print(f"DEBUG ListModels call failed: {type(e).__name__}: {e}")
 
 
-def call_gemini_sdk(text_prompt, image=None, context='', timeout_ms=GEMINI_TIMEOUT_MS):
+def _is_rate_limit_error(e):
+    code = getattr(e, 'code', None)
+    status = str(getattr(e, 'status', '') or '').upper()
+    return code == 429 or 'RESOURCE_EXHAUSTED' in status
+
+
+def call_gemini_sdk(text_prompt, image=None, context='', timeout_ms=GEMINI_TIMEOUT_MS,
+                     on_rate_limit='return_none'):
     """
     Shared low-level call through the official google-genai SDK — the
     single choke point every Gemini generateContent call in the codebase
@@ -335,9 +377,21 @@ def call_gemini_sdk(text_prompt, image=None, context='', timeout_ms=GEMINI_TIMEO
 
     image: optional (mime_type, raw_bytes) tuple, e.g. from
       prepare_gemini_image_payload(), for a vision call.
+    on_rate_limit: 'return_none' (default) — after retries are exhausted
+      on a 429, behave like any other failure (return None). 'raise' —
+      instead raise GeminiRateLimitError, so a caller that wants to tell
+      "temporarily rate-limited" apart from "permanently unavailable"
+      (currently only run_authenticity_check's fallback) can do so.
     Returns response.text (str) on success, or None on any failure
     (missing key, network, timeout, bad model) — callers are responsible
     for JSON-parsing/stripping markdown fences from the returned text.
+
+    A 429 (free-tier per-minute rate limit — plausible when several
+    documents are uploaded in quick succession, since the limit is
+    per-minute across ALL calls, not per upload) is retried automatically
+    with backoff (GEMINI_RATE_LIMIT_RETRY_DELAYS) before giving up, so a
+    short burst of uploads doesn't permanently degrade one of them to the
+    OCR-text-only fallback when Gemini would have succeeded moments later.
     """
     if not Config.GEMINI_API_KEY:
         print(f"DEBUG Gemini ({context}): GEMINI_API_KEY not set, skipping")
@@ -349,27 +403,38 @@ def call_gemini_sdk(text_prompt, image=None, context='', timeout_ms=GEMINI_TIMEO
         parts.append(types.Part.from_bytes(data=data, mime_type=mime_type))
     parts.append(types.Part.from_text(text=text_prompt))
 
-    print(f"DEBUG Gemini request ({context}): model={Config.GEMINI_MODEL!r} "
-          f"key=...{gemini_key_suffix()} via google-genai SDK")
-    try:
-        response = _get_client().models.generate_content(
-            model=Config.GEMINI_MODEL,
-            contents=parts,
-            config=types.GenerateContentConfig(
-                temperature=0,
-                response_mime_type='application/json',
-                http_options=types.HttpOptions(timeout=timeout_ms),
-            ),
-        )
-        return response.text
-    except errors.APIError as e:
-        print(f"DEBUG Gemini call error ({context}): {e.code} {e.status}: {e.message}")
-        if e.code == 404:
-            log_available_gemini_models()
-        return None
-    except Exception as e:
-        print(f"DEBUG Gemini call error ({context}): {type(e).__name__}: {e}")
-        return None
+    attempt = 0
+    while True:
+        print(f"DEBUG Gemini request ({context}): model={Config.GEMINI_MODEL!r} "
+              f"key=...{gemini_key_suffix()} via google-genai SDK"
+              + (f" (retry {attempt}/{len(GEMINI_RATE_LIMIT_RETRY_DELAYS)})" if attempt else ""))
+        try:
+            response = _get_client().models.generate_content(
+                model=Config.GEMINI_MODEL,
+                contents=parts,
+                config=types.GenerateContentConfig(
+                    temperature=0,
+                    response_mime_type='application/json',
+                    http_options=types.HttpOptions(timeout=timeout_ms),
+                ),
+            )
+            return response.text
+        except errors.APIError as e:
+            print(f"DEBUG Gemini call error ({context}): {e.code} {e.status}: {e.message}")
+            if _is_rate_limit_error(e) and attempt < len(GEMINI_RATE_LIMIT_RETRY_DELAYS):
+                delay = GEMINI_RATE_LIMIT_RETRY_DELAYS[attempt]
+                attempt += 1
+                print(f"DEBUG Gemini ({context}): rate-limited (429), retrying in {delay}s")
+                time.sleep(delay)
+                continue
+            if e.code == 404:
+                log_available_gemini_models()
+            if _is_rate_limit_error(e) and on_rate_limit == 'raise':
+                raise GeminiRateLimitError(str(e)) from e
+            return None
+        except Exception as e:
+            print(f"DEBUG Gemini call error ({context}): {type(e).__name__}: {e}")
+            return None
 
 
 def prepare_gemini_image_payload(file_bytes, file_name):

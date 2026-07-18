@@ -3,7 +3,10 @@ import os
 import json
 from config import Config
 from db import get_db_connection
-from helpers.gemini_extractor import call_gemini_sdk, prepare_gemini_image_payload, GEMINI_VISION_TIMEOUT_MS
+from helpers.gemini_extractor import (
+    call_gemini_sdk, prepare_gemini_image_payload, GEMINI_VISION_TIMEOUT_MS,
+    GeminiRateLimitError,
+)
 
 # Where a PDF's rendered first page (the same image sent to Gemini vision)
 # gets saved so the frontend can display it and draw the overlay markers —
@@ -92,16 +95,24 @@ def _call_gemini_vision(file_bytes, file_name):
     reliably produce that. Takes raw bytes (from DB, not a file path) so
     it has no dependency on the local filesystem. Returns parsed JSON
     dict or None.
+
+    Raises GeminiRateLimitError (instead of returning None) if the call
+    is still rate-limited after call_gemini_sdk's built-in retries — lets
+    run_authenticity_check tell "temporarily rate-limited" apart from a
+    permanent failure, so the OCR-text fallback's notes can say so.
     """
     try:
         image = prepare_gemini_image_payload(file_bytes, file_name)
         text = call_gemini_sdk(
             AUTHENTICITY_PROMPT, image=image, context='authenticity',
             timeout_ms=GEMINI_VISION_TIMEOUT_MS,
+            on_rate_limit='raise',
         )
         if text is None:
             return None
         return json.loads(_strip_markdown_fences(text))
+    except GeminiRateLimitError:
+        raise
     except Exception as e:
         print(f"DEBUG Authenticity Gemini error: {type(e).__name__}: {e}")
         return None
@@ -113,23 +124,37 @@ COMPANY_SUFFIX_RE = re.compile(
 )
 
 
-def _fallback_from_ocr_text(ocr_text):
+def _fallback_from_ocr_text(ocr_text, rate_limited=False):
     """Non-Gemini fallback used when Gemini vision is unavailable/fails.
     Only has_company_name can be inferred from plain OCR text; chop/logo/
     signature are visual marks we have no positional data for here, so they
     default to False rather than guessing. signal_boxes stays empty since
     OCR text alone carries no coordinates.
+
+    rate_limited: the failure was specifically a 429 that persisted even
+      after call_gemini_sdk's automatic retries — a TEMPORARY condition
+      (the free-tier per-minute limit clears on its own within a minute
+      or two), not a permanent one, so the notes text says so and points
+      at "Re-check" instead of implying Gemini is unavailable.
     """
     text = ocr_text or ''
     has_name = bool(COMPANY_SUFFIX_RE.search(text))
+    if rate_limited:
+        notes = ('Automated fallback: Gemini hit the free-tier rate limit and stayed '
+                  'rate-limited after automatic retries — this is temporary, not a '
+                  'permanent failure. Checked OCR text only for now; visual signals '
+                  '(chop/logo/signature) could not be verified. Use "Re-check" in a '
+                  'minute or two once the rate limit has cleared.')
+    else:
+        notes = ('Automated fallback (Gemini unavailable): checked OCR text only. '
+                  'Visual signals (chop/logo/signature) could not be verified.')
     return {
         'has_company_chop': False,
         'has_company_logo': False,
         'has_company_name': has_name,
         'has_signature': False,
         'upload_source': None,
-        'notes': ('Automated fallback (Gemini unavailable): checked OCR text only. '
-                  'Visual signals (chop/logo/signature) could not be verified.'),
+        'notes': notes,
         'signal_boxes': {},
     }
 
@@ -222,15 +247,22 @@ def run_authenticity_check(document_id, file_bytes, file_name, document_type, oc
             engine = 'gemini'
             print("DEBUG Authenticity: engine=gemini (merged call)")
         else:
-            result = None if skip_gemini else _call_gemini_vision(file_bytes, file_name)
+            rate_limited = False
+            result = None
+            if not skip_gemini:
+                try:
+                    result = _call_gemini_vision(file_bytes, file_name)
+                except GeminiRateLimitError:
+                    rate_limited = True
             if result:
                 engine = 'gemini'
                 print("DEBUG Authenticity: engine=gemini")
             else:
                 engine = 'fallback'
                 print("DEBUG Authenticity: gemini failed (no result — see error above, "
-                      "or GEMINI_API_KEY unset), using fallback")
-                result = _fallback_from_ocr_text(ocr_text)
+                      "or GEMINI_API_KEY unset), using fallback"
+                      + (" (rate-limited)" if rate_limited else ""))
+                result = _fallback_from_ocr_text(ocr_text, rate_limited=rate_limited)
 
         chop = bool(result.get('has_company_chop', False))
         logo = bool(result.get('has_company_logo', False))
