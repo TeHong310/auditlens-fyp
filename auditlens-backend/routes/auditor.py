@@ -30,6 +30,30 @@ def _amounts_equal(a, b):
         return None
 
 
+def _normalize_currency(cur):
+    """Canonical form of a currency code/symbol, for BOTH comparison and
+    display: 'RM'/'MYR'/'MYR (RM)' are all the same Malaysian Ringgit,
+    just different notations depending on which extractor produced them
+    (regex fallback defaults to 'MYR', Gemini sometimes returns 'RM') —
+    without this, a genuinely equal amount in the same currency would
+    show as "N/A" instead of "Match" just because one side said 'MYR'
+    and the other said 'RM'. Only a GENUINELY different currency (USD,
+    etc.) should ever compare as different. Returned value is also what's
+    shown in the UI, so invoice/PO/GR display the same representation
+    ('RM') for the same currency instead of whichever variant a given
+    document's OCR/Gemini call happened to return."""
+    if not cur:
+        return None
+    c = str(cur).upper()
+    # Word-boundary match (not a stripped-then-equality check) so compound
+    # notations like "MYR (RM)" — which would otherwise strip down to the
+    # unrecognizable "MYRRM" — are still correctly recognized as Ringgit.
+    if re.search(r'\b(?:RM|MYR)\b', c):
+        return 'RM'
+    stripped = re.sub(r'[^A-Za-z]', '', c)
+    return stripped or None
+
+
 def _normalize_ref(val):
     """Normalize a PO reference/ID value for comparison: uppercase,
     strip all whitespace, then strip a leading "PO-"/"PO " prefix.
@@ -126,7 +150,7 @@ def _build_comparison(cursor, invoice_document_id):
         'vendor_name':      inv_row['vendor_name'],
         'invoice_date':     inv_row['invoice_date'].isoformat() if inv_row['invoice_date'] else None,
         'total_amount':     float(inv_row['total_amount']) if inv_row['total_amount'] is not None else None,
-        'currency':         inv_row['currency'],
+        'currency':         _normalize_currency(inv_row['currency']),
         'uploaded_at':      inv_row['uploaded_at'].isoformat() if inv_row['uploaded_at'] else None,
         'po_reference':     inv_row['po_reference'],
         'item_description': inv_row['item_description'],
@@ -142,7 +166,7 @@ def _build_comparison(cursor, invoice_document_id):
             'vendor_name':      po_row['vendor_name'],
             'po_date':          po_row['po_date'].isoformat() if po_row['po_date'] else None,
             'total_amount':     float(po_row['total_amount']) if po_row['total_amount'] is not None else None,
-            'currency':         po_row['currency'],
+            'currency':         _normalize_currency(po_row['currency']),
             'item_description': po_row['item_description'],
             'quantity':         float(po_row['quantity']) if po_row['quantity'] is not None else None,
         }
@@ -171,15 +195,13 @@ def _build_comparison(cursor, invoice_document_id):
     vendor_match = len(set(normalized)) <= 1 if normalized else None
 
     # ── Amount match: Invoice vs PO only (GR carries no monetary
-    # total by design). If both sides have a known currency and they
-    # DIFFER (e.g. invoice in USD, PO in RM), a raw numeric comparison
-    # would be meaningless — treated as "not applicable" (None) rather
-    # than silently comparing USD against RM as if they were the same
-    # unit, so mismatched currencies are never mixed into a false
-    # match/mismatch. ──
-    inv_currency = (invoice['currency'] or '').upper() or None
-    po_currency = (po['currency'] or '').upper() or None if po else None
-    if po and inv_currency and po_currency and inv_currency != po_currency:
+    # total by design). currency is already normalized above (RM/MYR
+    # both become 'RM'), so this only treats amounts as "not applicable"
+    # (None) when the two sides are in GENUINELY different currencies
+    # (e.g. invoice in USD, PO in RM) — comparing USD against RM as if
+    # they were the same unit would be meaningless, but RM vs MYR is the
+    # SAME currency and must compare normally. ──
+    if po and invoice['currency'] and po['currency'] and invoice['currency'] != po['currency']:
         amount_match = None
     else:
         amount_match = _amounts_equal(invoice['total_amount'], po['total_amount']) if po else None
@@ -237,32 +259,38 @@ def _build_comparison(cursor, invoice_document_id):
     elif gr and invoice['invoice_date'] and gr['receipt_date'] and not po:
         date_order_valid = gr['receipt_date'] <= invoice['invoice_date']
 
-    # overall_status is driven ONLY by checks that are actually visible
-    # in the Field Comparison table (Vendor, Amount, Quantity) — every
-    # one of these already correctly treats a missing/absent value as
-    # "not applicable" (None), never as a false mismatch: _amounts_equal
-    # and _quantities_match both return None unless 2+ PRESENT values
-    # exist to compare (verified — GR's absent amount can't reach
-    # amount_match at all, since that check only ever looks at Invoice
-    # vs PO; a missing GR quantity is filtered out by _quantities_match
-    # before comparing, not treated as 0 or unequal). quantity_match is
-    # included (unlike po_reference_match/item_match) because it's the
-    # key audit signal this whole feature exists to surface — a real
-    # ordered-vs-received-vs-billed mismatch should flip the banner to
-    # FAIL and surface in the Exceptions list, not just sit quietly as a
-    # red row in the table. po_reference_match/item_match stay
-    # display-only in match_result: best-effort regex fields more prone
-    # to false mismatches from OCR/description wording differences, so
-    # they're not wired into a system that drives the approve/exception
-    # workflow. date_order_valid is excluded per the comment above.
-    checks = [vendor_match, amount_match, quantity_match]
-    applicable_checks = [c for c in checks if c is not None]
+    # overall_status is driven by EVERY check that has a visible row/pill
+    # in the Field Comparison table (Vendor, Amount, PO Ref, Item,
+    # Quantity) — invariant: the banner can say "All Fields Match" (PASS,
+    # green) if and only if NONE of these rows is showing a Mismatch
+    # pill. Previously po_reference_match/item_match were excluded here
+    # entirely, which meant a record could show a real "✗ Mismatch" pill
+    # on the PO Ref or Item row while the banner still read "All Fields
+    # Match — Ready for approval" — a direct contradiction an auditor
+    # could act on (approving a record with a visible mismatch).
+    #
+    # vendor_match/amount_match/quantity_match are HARD mismatches (FAIL,
+    # red) — these are the mature, high-confidence checks. po_reference_
+    # match/item_match are SOFT mismatches (REVIEW, amber) — best-effort
+    # regex/OCR fields more prone to false positives from wording/format
+    # differences, so a soft mismatch alone doesn't escalate all the way
+    # to FAIL, but it MUST still stop the banner from claiming a clean
+    # match. Every check here already correctly treats a missing/absent
+    # value as "not applicable" (None), never as a false mismatch —
+    # _amounts_equal/_quantities_match/_three_way_match all return None
+    # unless 2+ PRESENT values exist to compare. date_order_valid stays
+    # excluded (no visible row for it, see comment above).
+    hard_checks = [vendor_match, amount_match, quantity_match]
+    soft_checks = [po_reference_match, item_match]
+    applicable_checks = [c for c in hard_checks + soft_checks if c is not None]
 
-    if any(c is False for c in checks):
+    if any(c is False for c in hard_checks):
         overall_status = 'FAIL'
+    elif any(c is False for c in soft_checks):
+        overall_status = 'REVIEW'
     elif not po or not gr:
         overall_status = 'PARTIAL'
-    elif applicable_checks and all(applicable_checks):
+    elif applicable_checks:
         overall_status = 'PASS'
     else:
         overall_status = 'PARTIAL'
@@ -360,6 +388,24 @@ def _classify_exception(cursor, doc_row, comparison):
         label = (' & '.join(label_parts) + ' Mismatch') if label_parts else 'Mismatch'
         detail = '; '.join(parts) or 'Fields do not match'
         candidates.append((4, 'mismatch', label, detail, 'high'))
+
+    # REVIEW: a soft mismatch (PO Ref/Item) with no hard mismatch — same
+    # reasoning as overall_status above, surfaced here too so a record
+    # showing an amber "Review Required" banner also shows up as an
+    # exception, rather than only being visible if an auditor happens to
+    # open that specific record's detail page.
+    if mr['overall_status'] == 'REVIEW':
+        parts = []
+        label_parts = []
+        if mr['po_reference_match'] is False:
+            parts.append('PO reference differs across documents')
+            label_parts.append('PO Ref')
+        if mr['item_match'] is False:
+            parts.append('Item/description differs across documents')
+            label_parts.append('Item')
+        label = (' & '.join(label_parts) + ' Differs') if label_parts else 'Review Required'
+        detail = '; '.join(parts) or 'Some fields differ — review recommended'
+        candidates.append((2, 'review', label, detail, 'medium'))
 
     if doc_row['status'] == 'returned':
         cursor.execute(

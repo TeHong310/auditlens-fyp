@@ -4463,3 +4463,166 @@ Setup/config needed:
      now visibly take longer (up to ~30s) before either succeeding via
      retry or falling back with the new "temporary, use Re-check" notes
      text, rather than failing immediately.
+
+------------------------------------------------------------------------------
+2026-07-18 - Fix 2 bugs in the record-detail comparison: banner said "All
+             Fields Match" while a row showed Mismatch, and MYR vs RM
+             (the same currency) showed "N/A" instead of "Match"
+
+BUG A (critical, logic contradiction) — banner could say "All Fields
+Match — Ready for approval" (green, PASS) while a row was visibly showing
+"⚠ Mismatch" (routes/auditor.py `_build_comparison()`):
+  - Root cause: `overall_status` was computed from only 3 of the 5 checks
+    that actually have a visible row/pill in the Field Comparison table
+    (`checks = [vendor_match, amount_match, quantity_match]`) —
+    `po_reference_match`/`item_match` were deliberately excluded by an
+    earlier entry (reasoned then as "more prone to false positives, keep
+    display-only"). That reasoning produced exactly the bug this request
+    reports: a real PO Ref mismatch (invoice "PO-ORT-26-0741" vs PO's own
+    number "PO-ORT-26-0471" — genuinely different, not a normalization
+    artifact) has a visible "✗ Mismatch" pill in the table, but couldn't
+    flip `overall_status` away from PASS since `po_reference_match`
+    wasn't in the `checks` list at all — the exact "auditor could approve
+    a record with a visible mismatch" danger described in the request.
+  - Fix: new invariant, stated and enforced directly — the banner is
+    PASS (green, "All Fields Match") if and only if NONE of the 5
+    displayed checks (vendor/amount/PO Ref/Item/Quantity) is False.
+    `vendor_match`/`amount_match`/`quantity_match` stay "hard" checks
+    (any False -> FAIL, red, unchanged from before). `po_reference_match`/
+    `item_match` become "soft" checks: a False among these no longer
+    stays invisible to the banner, but also doesn't escalate all the way
+    to FAIL (still best-effort OCR fields, more prone to false positives
+    than the mature hard checks) — instead a NEW third state, `REVIEW`
+    (amber, "Review Required — some fields differ — see highlighted
+    rows"), sits between PASS and FAIL. `PARTIAL` (missing PO/GR
+    document) is unchanged and still takes lower priority than either
+    FAIL or REVIEW.
+  - `_classify_exception()` gained a matching `REVIEW` branch (rank 2,
+    between `low_confidence` rank 1 and `sent_back`/`missing_document`
+    rank 3) so a record showing the new amber banner also shows up as an
+    exception in whatever list/queue consumes `_classify_exception` —
+    without this, a soft-mismatch record would only be visible if an
+    auditor happened to open that specific record's detail page,
+    reintroducing a version of the same "danger" in a different place.
+    Flagging this as a scope decision: the request described the
+    detail-page contradiction specifically, but leaving the exceptions
+    list silent on a record the detail page now (correctly) flags as
+    "Review Required" seemed like the same class of gap left half-fixed.
+  - Verified vendor_match/amount_match's backend computation is
+    logically equivalent to "does any pairwise cell pill shown in the
+    table disagree": `vendor_match` is a 3-way set-equality check (`len(
+    set(normalized)) <= 1`), which is mathematically the same as "every
+    pair of present values is equal" — and the frontend's per-cell
+    `vendorSymbol()` uses the IDENTICAL normalization logic as the
+    backend's `_normalize_vendor()` (confirmed by direct comparison,
+    unchanged). `amount_match` is explicitly Invoice-vs-PO only, matching
+    the ONE amount pill actually shown (GR's amount cell is hardcoded
+    "No amount on GR", never a pill). This is why extending
+    `overall_status` to include the two previously-excluded checks is
+    sufficient to satisfy the stated invariant, without needing to
+    duplicate the invariant-checking logic in the frontend.
+  - Frontend (auditor-record-detail component): `getBannerText()`/
+    `getBannerSubtitle()` gained a `REVIEW` branch ("Review Required" /
+    "Some fields differ — see highlighted rows"). `getBannerClass()`
+    reuses the existing `banner-partial` CSS class (amber) for `REVIEW`
+    rather than adding new CSS — PARTIAL and REVIEW are both "needs
+    attention, not a hard failure" states and were already using the
+    exact amber the request asked for; only the banner TEXT needed to
+    distinguish "documents incomplete" from "some fields differ".
+
+BUG B — MYR vs RM (the same currency, different notation) showed "N/A"
+instead of "Match" (routes/auditor.py `_build_comparison()`):
+  - Root cause: the currency-difference guard added in an earlier entry
+    (to stop USD being silently compared against RM as if they were the
+    same unit) did a bare string-equality check on the raw currency
+    values — "MYR" and "RM" are the SAME Malaysian Ringgit (just
+    different notations: the regex fallback defaults to 'MYR', Gemini
+    sometimes returns 'RM'), but compared as literally different
+    strings, so a genuinely equal amount in the same currency fell into
+    the "different currency, not applicable" branch instead of being
+    compared.
+  - Fix: new `_normalize_currency()` — recognizes 'RM'/'MYR'/'MYR (RM)'
+    (and similar compound notations) as the same canonical 'RM' via a
+    word-boundary match (`\b(?:RM|MYR)\b`), NOT a naive strip-then-
+    equality check — an earlier draft of this fix stripped all
+    non-letters before comparing, which turned "MYR (RM)" into the
+    unrecognizable "MYRRM" and still failed to match; caught by a test
+    case for exactly this compound notation before treating the fix as
+    done. A genuinely different currency (e.g. "USD") still normalizes
+    to itself and is NOT folded into 'RM', so the original USD-vs-RM
+    "not applicable" guard this same entry is built on top of still
+    works correctly (verified by regression test).
+  - Applied at the SAME point the invoice/PO dicts are built in
+    `_build_comparison()`, so the normalized ('RM') value is both what's
+    used for the equality comparison AND what's returned to the frontend
+    for display — invoice/PO now always show the same representation
+    ('RM') for the same underlying currency instead of whichever variant
+    that particular document's extractor happened to return, per the
+    request's "normalize the displayed currency consistently" ask. No
+    frontend changes were needed for this part: since the values arrive
+    already-normalized, the frontend's existing currency-aware
+    `amountSymbol()` equality check (`fromCurrency.toUpperCase() !==
+    toCurrency.toUpperCase()`) now naturally sees 'RM' === 'RM' without
+    any code change there.
+
+Why: "the invariant to enforce and test: banner green 'All Fields Match'
+  <=> zero rows displaying Mismatch" (quoted directly from the request)
+  is exactly what BUG A's fix implements and BUG B's fix doesn't
+  interfere with — a currency-normalization false-negative (N/A instead
+  of Match) isn't itself a Mismatch, so it wasn't contributing to BUG A,
+  but both were reported together against the same record and both
+  needed fixing for that record's comparison to be trustworthy.
+
+Testing (all offline, mocked cursor, no real DB/Gemini/network call):
+  - `python -c "import ast; ast.parse(...)"` on the changed backend file
+    — compiles clean. `npx ng build --configuration=development` on the
+    frontend — passes clean, confirming the new REVIEW banner branch and
+    reused CSS class don't break compilation.
+  - New test (scratchpad, not committed) built directly from the
+    reported scenario (Oriontech Electronics, invoice PO ref
+    "PO-ORT-26-0741" vs PO's own number "PO-ORT-26-0471", invoice amount
+    "MYR 6,253.20" vs PO amount "RM 6,253.20"):
+    - Confirmed `po_reference_match` is `False` (a real mismatch) while
+      `vendor_match`/`amount_match`/`quantity_match` are all `True`, and
+      `overall_status` is the new `'REVIEW'` state — NOT `'PASS'`. This
+      is requested test (1): a PO-ref mismatch must not show green "All
+      Fields Match".
+    - Swept 6 scenarios (all-match baseline plus one deliberate mismatch
+      each for vendor/amount/quantity — hard — and po_reference/item —
+      soft) and asserted the invariant directly:
+      `overall_status == 'PASS'` is never true at the same time as "any
+      of the 5 displayed checks is False", across every scenario.
+    - Regression: a genuine hard mismatch (vendor) still escalates all
+      the way to `'FAIL'`, not just `'REVIEW'` — confirms severity
+      ordering (hard vs soft) survived the fix.
+    - Regression: a fully-matching record (PO's number corrected to
+      match the invoice's po_reference) still correctly shows `'PASS'`
+      — confirms the fix didn't make PASS unreachable.
+    - This is requested test (2): confirmed `amount_match` is `True`
+      (not `None`/N/A) for invoice `currency='MYR'` vs PO `currency='RM'`
+      with equal amounts, and that both sides display the normalized
+      `'RM'` in the response.
+    - Regression: a GENUINELY different currency (USD vs RM) with the
+      same numeric amount still correctly returns `amount_match=None`
+      (not silently treated as a match) — confirms the original
+      currency-mismatch guard this fix builds on still works.
+    - Regression: `'MYR (RM)'` compound notation also normalizes to
+      `'RM'` and compares correctly — the exact case that caught the
+      naive strip-then-equality bug in an earlier draft of this fix,
+      kept as a permanent regression check.
+  - Re-ran all six pre-existing offline test suites from prior entries
+    (regex fallback, line-item table extraction, quantity mismatch
+    detection, the Coilcraft/EMITS 3-fixes test, the Megatech/Oriontech
+    vendor/item-line test, and the Gemini rate-limit retry test) — all
+    still pass, no regression from the overall_status/currency changes.
+
+Setup/config needed:
+  1. Redeploy the Render backend AND frontend together — the frontend's
+     new REVIEW banner text/class depends on the backend actually
+     returning the `'REVIEW'` overall_status value.
+  2. Re-open the record from the screenshot (or any record with a PO
+     Ref/Item mismatch but otherwise-matching vendor/amount/quantity)
+     after redeploying — it should now show the amber "Review Required"
+     banner instead of green "All Fields Match", and the Amount row
+     should show "✓ Match" instead of "— N/A" wherever both sides are
+     genuinely the same currency (MYR/RM) with equal amounts.

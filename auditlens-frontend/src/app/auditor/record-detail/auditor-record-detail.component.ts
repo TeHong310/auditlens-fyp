@@ -207,6 +207,9 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   getBannerClass(): string {
     if (this.overallStatus === 'PASS') return 'banner-pass';
     if (this.overallStatus === 'FAIL') return 'banner-fail';
+    // REVIEW reuses the same amber styling as PARTIAL (banner-partial) —
+    // both are "needs attention, not a hard failure" states; only the
+    // text differs (see getBannerText/getBannerSubtitle).
     return 'banner-partial';
   }
 
@@ -219,12 +222,14 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   getBannerText(): string {
     if (this.overallStatus === 'PASS') return 'All Fields Match';
     if (this.overallStatus === 'FAIL') return 'Mismatch Detected';
+    if (this.overallStatus === 'REVIEW') return 'Review Required';
     return 'Documents Incomplete';
   }
 
   getBannerSubtitle(): string {
     if (this.overallStatus === 'PASS') return 'Ready for approval';
     if (this.overallStatus === 'FAIL') return 'Review required — see highlighted rows';
+    if (this.overallStatus === 'REVIEW') return 'Some fields differ — see highlighted rows';
     if (this.comparison && !this.comparison.po && !this.comparison.gr) return 'Awaiting PO and GR upload';
     if (this.comparison && !this.comparison.po) return 'Awaiting PO upload';
     if (this.comparison && !this.comparison.gr) return 'Awaiting GR upload';
