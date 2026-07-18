@@ -89,7 +89,7 @@ def _build_comparison(cursor, invoice_document_id):
     cursor.execute(
         '''SELECT d.document_id, d.file_name, d.uploaded_at,
                   ef.invoice_number, ef.vendor_name, ef.invoice_date,
-                  ef.total_amount, ef.ocr_confidence,
+                  ef.total_amount, ef.ocr_confidence, ef.currency,
                   ef.po_reference, ef.item_description, ef.quantity
            FROM documents d
            LEFT JOIN extracted_fields ef ON d.document_id = ef.document_id
@@ -102,7 +102,7 @@ def _build_comparison(cursor, invoice_document_id):
 
     cursor.execute(
         '''SELECT po_id, file_name, po_number, vendor_name, po_date, total_amount,
-                  item_description, quantity
+                  currency, item_description, quantity
            FROM purchase_orders WHERE document_id = %s
            ORDER BY uploaded_at DESC LIMIT 1''',
         (invoice_document_id,)
@@ -126,6 +126,7 @@ def _build_comparison(cursor, invoice_document_id):
         'vendor_name':      inv_row['vendor_name'],
         'invoice_date':     inv_row['invoice_date'].isoformat() if inv_row['invoice_date'] else None,
         'total_amount':     float(inv_row['total_amount']) if inv_row['total_amount'] is not None else None,
+        'currency':         inv_row['currency'],
         'uploaded_at':      inv_row['uploaded_at'].isoformat() if inv_row['uploaded_at'] else None,
         'po_reference':     inv_row['po_reference'],
         'item_description': inv_row['item_description'],
@@ -141,6 +142,7 @@ def _build_comparison(cursor, invoice_document_id):
             'vendor_name':      po_row['vendor_name'],
             'po_date':          po_row['po_date'].isoformat() if po_row['po_date'] else None,
             'total_amount':     float(po_row['total_amount']) if po_row['total_amount'] is not None else None,
+            'currency':         po_row['currency'],
             'item_description': po_row['item_description'],
             'quantity':         float(po_row['quantity']) if po_row['quantity'] is not None else None,
         }
@@ -169,8 +171,18 @@ def _build_comparison(cursor, invoice_document_id):
     vendor_match = len(set(normalized)) <= 1 if normalized else None
 
     # ── Amount match: Invoice vs PO only (GR carries no monetary
-    # total by design) ──
-    amount_match = _amounts_equal(invoice['total_amount'], po['total_amount']) if po else None
+    # total by design). If both sides have a known currency and they
+    # DIFFER (e.g. invoice in USD, PO in RM), a raw numeric comparison
+    # would be meaningless — treated as "not applicable" (None) rather
+    # than silently comparing USD against RM as if they were the same
+    # unit, so mismatched currencies are never mixed into a false
+    # match/mismatch. ──
+    inv_currency = (invoice['currency'] or '').upper() or None
+    po_currency = (po['currency'] or '').upper() or None if po else None
+    if po and inv_currency and po_currency and inv_currency != po_currency:
+        amount_match = None
+    else:
+        amount_match = _amounts_equal(invoice['total_amount'], po['total_amount']) if po else None
 
     # ── PO reference match: the PO number each document independently
     # references — Invoice's po_reference (OCR'd "PO No:" line), the
@@ -331,8 +343,10 @@ def _classify_exception(cursor, doc_row, comparison):
             label_parts.append('Vendor')
         if mr['amount_match'] is False:
             inv_amt = comparison['invoice']['total_amount']
+            inv_cur = comparison['invoice']['currency'] or 'RM'
             po_amt  = comparison['po']['total_amount'] if comparison['po'] else None
-            parts.append(f"Amount differs: Invoice RM{inv_amt} vs PO RM{po_amt}")
+            po_cur  = (comparison['po']['currency'] or 'RM') if comparison['po'] else 'RM'
+            parts.append(f"Amount differs: Invoice {inv_cur}{inv_amt} vs PO {po_cur}{po_amt}")
             label_parts.append('Amount')
         if mr['quantity_match'] is False:
             inv_qty = comparison['invoice']['quantity']

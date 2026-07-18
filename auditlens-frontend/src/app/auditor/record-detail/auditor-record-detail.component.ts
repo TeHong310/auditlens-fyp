@@ -256,8 +256,12 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return this.normalizeVendor(fromVal) === this.normalizeVendor(toVal) ? 'eq' : 'neq';
   }
 
-  amountSymbol(fromVal: number | null, toVal: number | null): 'eq' | 'neq' | 'na' {
+  amountSymbol(fromVal: number | null, toVal: number | null, fromCurrency?: string | null, toCurrency?: string | null): 'eq' | 'neq' | 'na' {
     if (fromVal === null || fromVal === undefined || toVal === null || toVal === undefined) return 'na';
+    // Different known currencies (e.g. invoice in USD, PO in RM) make a
+    // raw numeric comparison meaningless — treat as not-applicable
+    // rather than silently comparing USD against RM as the same unit.
+    if (fromCurrency && toCurrency && fromCurrency.toUpperCase() !== toCurrency.toUpperCase()) return 'na';
     return this.amountsEqual(fromVal, toVal) ? 'eq' : 'neq';
   }
 
@@ -319,9 +323,9 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
 
   // ── Formatting ───────────────────────────────────────────
 
-  formatAmount(amount: any): string {
+  formatAmount(amount: any, currency?: string | null): string {
     if (amount === null || amount === undefined || amount === '') return '-';
-    return 'RM ' + parseFloat(amount).toLocaleString('en-MY', {
+    return (currency || 'RM') + ' ' + parseFloat(amount).toLocaleString('en-MY', {
       minimumFractionDigits: 2, maximumFractionDigits: 2
     });
   }

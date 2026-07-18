@@ -310,6 +310,7 @@ def extract_fields(ocr_text):
         'po_reference':     None,
         'item_description': None,
         'quantity':         None,
+        'currency':         None,
     }
 
     lines = ocr_text.split('\n')
@@ -335,6 +336,7 @@ def extract_fields(ocr_text):
             break
 
     total_candidates = []
+    usd_total_candidates = []
 
     for i, line in enumerate(lines):
         line_clean = line.strip()
@@ -446,6 +448,12 @@ def extract_fields(ocr_text):
                     r'booking\s*id\s*[:\-]?\s*([A-Z0-9\-]+)',
                     r'bill\s*(?:no\.?|number)\s*[:\-]?\s*(\S+)',
                     r'invoice\s*(?:no\.?|#)\s*[:\-]?\s*(\S+)',
+                    # Bare "INVOICE:" label with no "No"/"Number"/"#" suffix
+                    # (real-world layout, e.g. "INVOICE:  IX107587") — the
+                    # \s* between "invoice" and ":" requires the colon to
+                    # come right after the word, so "Invoice No:"/"Invoice
+                    # Date:" never match this (they have a word in between).
+                    r'\binvoice\s*:\s*([A-Za-z0-9][A-Za-z0-9\-\/]*)',
                 ]
                 for p in inv_patterns:
                     match = re.search(p, line_clean, re.IGNORECASE)
@@ -494,6 +502,30 @@ def extract_fields(ocr_text):
                         fields['invoice_date'] = normalize_date_string(raw_date)
                         break
 
+        # ── TOTAL AMOUNT (currency-tagged) ─────────────────
+        # Real invoices sometimes show BOTH an original-currency total
+        # (e.g. "TOTAL (US$) 8,020.00") and a converted local-currency
+        # total via an exchange-rate line (e.g. "EXCHANGE RATE=1.2670
+        # ... TOTAL= 10,161.34 (RM)"). The real transaction amount is
+        # always the ORIGINAL-currency one, never the converted value —
+        # so a USD-tagged total is collected separately and takes
+        # unconditional priority below, and a line describing the
+        # conversion itself is never treated as a candidate total.
+        is_exchange_rate_line = re.search(r'exchange\s*rate', line_clean, re.IGNORECASE)
+        if not is_exchange_rate_line:
+            currency_total_match = re.search(
+                r'\btotal\s*\(\s*(us\$|usd|rm|myr)\s*\)\s*[:\-]?\s*([\d,]+\.?\d*)',
+                line_clean, re.IGNORECASE
+            )
+            if currency_total_match:
+                tag = currency_total_match.group(1).upper().replace('$', '')
+                val = extract_amount(currency_total_match.group(2))
+                if val and val > 1:
+                    if tag in ('US', 'USD'):
+                        usd_total_candidates.append(val)
+                    else:
+                        total_candidates.append(val)
+
         # ── TOTAL AMOUNT ──────────────────────────────────
         # Collect every "total"-labeled amount on the invoice (skipping
         # Subtotal/Sub Total lines) instead of stopping at the first match —
@@ -502,7 +534,7 @@ def extract_fields(ocr_text):
         # \btotal patterns as the real "Total (RM)" line. The true total is
         # always the largest of these (Total = Subtotal + tax), so the max
         # is taken once the whole line loop finishes.
-        if not re.search(r'\bsub[\s\-]?total\b', line_clean, re.IGNORECASE):
+        if not re.search(r'\bsub[\s\-]?total\b', line_clean, re.IGNORECASE) and not is_exchange_rate_line:
             amount_patterns = [
                 r'\btotal\s*\(\s*(?:rm|myr)\s*\)\s*[:\-]?\s*([\d,]+\.?\d*)',
                 r'total\s*net\s*amount\s*(?:\(rm\))?\s*[:\-]?\s*([\d,]+\.?\d*)',
@@ -554,8 +586,12 @@ def extract_fields(ocr_text):
                         fields['tax_amount'] = val
                         break
 
-    if total_candidates:
+    if usd_total_candidates:
+        fields['total_amount'] = max(usd_total_candidates)
+        fields['currency'] = 'USD'
+    elif total_candidates:
         fields['total_amount'] = max(total_candidates)
+        fields['currency'] = 'MYR'
 
     # ══════════════════════════════════════════════════════
     # FALLBACKS — Generic, works for any invoice
@@ -672,6 +708,7 @@ def extract_po_fields(ocr_text):
 
     lines = ocr_text.split('\n')
     total_candidates = []
+    usd_total_candidates = []
 
     # Primary line-item extraction — see extract_fields() for why this
     # runs over the whole line list up front rather than per-line below.
@@ -731,15 +768,45 @@ def extract_po_fields(ocr_text):
                 except ValueError:
                     pass
 
+        # ── USD TOTAL (original-currency, takes priority over any RM
+        # total below) — real POs may show "Total Payable Incl. Tax
+        # (RM) 32,946.16" alongside a reference "USD 8,020" original-
+        # currency amount; the real transaction amount is the USD one.
+        usd_match = re.search(r'\b(?:usd|us\$)\s*[:\-]?\s*([\d,]+\.?\d*)', line_clean, re.IGNORECASE)
+        if usd_match:
+            val = extract_amount(usd_match.group(1))
+            if val and val > 1:
+                usd_total_candidates.append(val)
+
         if fields['po_number'] is None:
+            # Requires SOME real separation between the "PO" label and the
+            # captured value (a "No"/"Number"/"#" word, a colon/dash, or at
+            # least a space) — without this, a PO number that itself starts
+            # with "PO" (e.g. "PO3005713", a common Malaysian SME format)
+            # would self-match: "PO" gets treated as the label and only
+            # "3005713" gets captured, silently dropping the "PO" prefix.
             match = re.search(
-                r'p\.?o\.?\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
+                r'\bp\.?o\.?(?:\s*(?:no\.?|number|#)\s*[:\-]?\s*|\s*[:\-]\s*|\s+)([A-Za-z0-9\-\/]+)',
                 line_clean, re.IGNORECASE
             )
             if match:
                 val = match.group(1).strip()
                 if len(val) > 2:
                     fields['po_number'] = val
+
+            # Real POs sometimes label the document number bare "Doc No."
+            # rather than "PO No." — checked only when the PO-specific
+            # pattern above didn't match, so a genuine "PO No:" line is
+            # never overridden by this looser fallback.
+            if fields['po_number'] is None:
+                doc_match = re.search(
+                    r'doc\.?\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
+                    line_clean, re.IGNORECASE
+                )
+                if doc_match:
+                    val = doc_match.group(1).strip()
+                    if len(val) > 2:
+                        fields['po_number'] = val
 
         if fields['vendor_name'] is None:
             match = re.search(
@@ -775,7 +842,10 @@ def extract_po_fields(ocr_text):
                 if val and val > 1:
                     total_candidates.append(val)
 
-    if total_candidates:
+    if usd_total_candidates:
+        fields['total_amount'] = max(usd_total_candidates)
+        fields['currency'] = 'USD'
+    elif total_candidates:
         fields['total_amount'] = max(total_candidates)
 
     if fields['po_number'] is None:
@@ -795,30 +865,11 @@ def extract_po_fields(ocr_text):
             if val:
                 fields['total_amount'] = val
 
-    # PO/GR use Gemini as PRIMARY source because these documents flip the
-    # semantic role of the header company (buyer, not vendor), which regex
-    # cannot reason about. Regex values are kept only as fallback if Gemini
-    # fails or returns empty. Invoice extraction remains regex-primary since
-    # header = seller there and regex handles it reliably.
-    try:
-        from helpers.gemini_extractor import gemini_extract_po
-        g = gemini_extract_po(ocr_text)
-        if g:  # Gemini returned something
-            print(f"DEBUG Gemini primary PO result: {g}")
-            # Gemini wins for these semantically-sensitive fields
-            for key in ['po_number', 'vendor_name', 'po_date', 'total_amount']:
-                if g.get(key) is not None:
-                    old_val = fields.get(key)
-                    fields[key] = g[key]
-                    if old_val != g[key]:
-                        print(f"DEBUG Gemini overrode PO.{key}: '{old_val}' -> '{g[key]}'")
-        else:
-            print("DEBUG Gemini returned empty for PO, keeping regex values")
-    except Exception as e:
-        print(f"DEBUG Gemini PO extraction failed: {e}, keeping regex values")
-
-    # Regex values remain as fallback if Gemini returned None or failed
-
+    # No Gemini call here — extract_po_fields() is regex-only, used as the
+    # FALLBACK. The single merged Gemini vision call (fields + authenticity
+    # in one request) happens in routes/documents.py's upload_purchase_order()
+    # and overrides these regex values when it succeeds, so a PO upload
+    # never makes more than one Gemini call.
     print(f"DEBUG PO extracted fields: {fields}")
     return fields
 
@@ -911,8 +962,14 @@ def extract_gr_fields(ocr_text):
                     pass
 
         if fields['gr_number'] is None:
+            # "doc" must precede the shorter "gr"/"do" alternatives — real
+            # GRNs are often labeled bare "Doc No.  PD6011823" rather than
+            # "GR No"/"GRN No", and since regex alternation takes the FIRST
+            # alternative that lets the overall match succeed (not the
+            # longest), "do" would otherwise partial-match inside "Doc" and
+            # capture only the trailing "c" of "Doc No." as the number.
             match = re.search(
-                r'(?:gr|goods\s*receipt|delivery\s*order|do|asn)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
+                r'(?:goods\s*receipt|delivery\s*order|doc\.?|asn|gr|do)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
                 line_clean, re.IGNORECASE
             )
             if match:
@@ -994,28 +1051,10 @@ def extract_gr_fields(ocr_text):
             if val:
                 fields['total_amount'] = val
 
-    # PO/GR use Gemini as PRIMARY source because these documents flip the
-    # semantic role of the header company (buyer, not vendor), which regex
-    # cannot reason about. Regex values are kept only as fallback if Gemini
-    # fails or returns empty. Invoice extraction remains regex-primary since
-    # header = seller there and regex handles it reliably.
-    try:
-        from helpers.gemini_extractor import gemini_extract_gr
-        g = gemini_extract_gr(ocr_text)
-        if g:
-            print(f"DEBUG Gemini primary GR result: {g}")
-            for key in ['gr_number', 'vendor_name', 'receipt_date']:
-                if g.get(key) is not None:
-                    old_val = fields.get(key)
-                    fields[key] = g[key]
-                    if old_val != g[key]:
-                        print(f"DEBUG Gemini overrode GR.{key}: '{old_val}' -> '{g[key]}'")
-        else:
-            print("DEBUG Gemini returned empty for GR, keeping regex values")
-    except Exception as e:
-        print(f"DEBUG Gemini GR extraction failed: {e}, keeping regex values")
-
-    # Regex values remain as fallback if Gemini returned None or failed
-
+    # No Gemini call here — extract_gr_fields() is regex-only, used as the
+    # FALLBACK. The single merged Gemini vision call (fields + authenticity
+    # in one request) happens in routes/documents.py's upload_goods_receipt()
+    # and overrides these regex values when it succeeds, so a GR upload
+    # never makes more than one Gemini call.
     print(f"DEBUG GR extracted fields: {fields}")
     return fields

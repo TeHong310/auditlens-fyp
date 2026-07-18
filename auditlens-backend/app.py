@@ -172,6 +172,26 @@ def _ensure_3way_comparison_columns():
         print(f'WARNING: could not add 3-way comparison columns: {type(e).__name__}: {e}')
 
 
+def _ensure_invoice_currency_column():
+    """Gemini is now the PRIMARY field extractor and detects the currency
+    of a document's total (RM/MYR/USD/...) — purchase_orders/goods_receipts
+    already had a currency column; extracted_fields (invoice) didn't.
+    Same auto-create-on-startup pattern as the other _ensure_ functions
+    above, for the same reason (no migration runner in this repo)."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            ALTER TABLE extracted_fields
+              ADD COLUMN IF NOT EXISTS currency VARCHAR(10)
+        ''')
+        conn.commit()
+        conn.close()
+        print('Invoice currency column ready')
+    except Exception as e:
+        print(f'WARNING: could not add invoice currency column: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -195,6 +215,7 @@ _ensure_authenticity_checks_table()
 _ensure_authenticity_v2_columns()
 _ensure_file_bytes_columns()
 _ensure_3way_comparison_columns()
+_ensure_invoice_currency_column()
 
 @app.route('/')
 def hello_world():

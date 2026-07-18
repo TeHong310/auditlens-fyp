@@ -218,15 +218,15 @@
                      receipts record quantity received, not money), so this
                      stays Invoice-vs-PO only — unchanged from before, just
                      repositioned after Quantity. -->
-                <tr [ngClass]="rowClass([amountSymbol(comparison.invoice.total_amount, comparison.po?.total_amount)])">
+                <tr [ngClass]="rowClass([amountSymbol(comparison.invoice.total_amount, comparison.po?.total_amount, comparison.invoice.currency, comparison.po?.currency)])">
                   <td class="field-name"><span class="field-icon">💰</span> Amount</td>
-                  <td class="cell-value cell-amount">{{ formatAmount(comparison.invoice.total_amount) }}</td>
+                  <td class="cell-value cell-amount">{{ formatAmount(comparison.invoice.total_amount, comparison.invoice.currency) }}</td>
                   <td class="cell-value" *ngIf="comparison.po">
-                    <span class="match-pill" [ngClass]="matchPillClass(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount))">
-                      {{ matchPillIcon(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount)) }}
-                      {{ matchPillText(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount)) }}
+                    <span class="match-pill" [ngClass]="matchPillClass(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount, comparison.invoice.currency, comparison.po.currency))">
+                      {{ matchPillIcon(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount, comparison.invoice.currency, comparison.po.currency)) }}
+                      {{ matchPillText(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount, comparison.invoice.currency, comparison.po.currency)) }}
                     </span>
-                    <div class="cell-main-value cell-amount">{{ formatAmount(comparison.po.total_amount) }}</div>
+                    <div class="cell-main-value cell-amount">{{ formatAmount(comparison.po.total_amount, comparison.po.currency) }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">
                     <span class="not-uploaded-icon">⬆</span>
@@ -320,7 +320,7 @@
           </div>
           <div class="doc-info-item">
             <span class="doc-info-label">Amount</span>
-            <span class="doc-info-value">{{ formatAmount(comparison.invoice.total_amount) }}</span>
+            <span class="doc-info-value">{{ formatAmount(comparison.invoice.total_amount, comparison.invoice.currency) }}</span>
           </div>
           <div class="doc-info-item">
             <span class="doc-info-label">Date</span>

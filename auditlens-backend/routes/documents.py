@@ -10,7 +10,7 @@ from helpers.audit_log import log_audit
 from helpers.ocr_helper import run_ocr, extract_fields, extract_po_fields, extract_gr_fields, calculate_confidence, parse_date
 from helpers.anomaly_detector import run_anomaly_detection
 from helpers.authenticity_check import run_authenticity_check
-from helpers.gemini_extractor import gemini_extract_invoice_full
+from helpers.gemini_extractor import gemini_extract_invoice_full, gemini_extract_po_full, gemini_extract_gr_full
 from config import Config
 
 documents_bp = Blueprint('documents', __name__)
@@ -115,7 +115,8 @@ def upload_document():
         # authenticity heuristic (below) if this call fails.
         gemini_result = gemini_extract_invoice_full(file_bytes_data, safe_name)
         if gemini_result:
-            for key in ('invoice_number', 'vendor_name', 'invoice_date', 'total_amount', 'tax_amount'):
+            for key in ('invoice_number', 'vendor_name', 'invoice_date', 'total_amount', 'tax_amount',
+                        'currency', 'po_reference', 'item_description', 'quantity'):
                 if gemini_result.get(key) is not None:
                     fields[key] = gemini_result[key]
 
@@ -130,13 +131,14 @@ def upload_document():
             '''INSERT INTO extracted_fields
                (document_id, invoice_number, vendor_name, invoice_date,
                 total_amount, tax_amount, raw_ocr_text, ocr_confidence,
-                po_reference, item_description, quantity)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                po_reference, item_description, quantity, currency)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING extraction_id''',
             (document_id, fields['invoice_number'], fields['vendor_name'],
              invoice_date, fields['total_amount'], fields['tax_amount'],
              ocr_text, confidence,
-             fields['po_reference'], fields['item_description'], fields['quantity'])
+             fields['po_reference'], fields['item_description'], fields['quantity'],
+             fields['currency'])
         )
         extraction_id = cursor.fetchone()[0]
 
@@ -173,6 +175,10 @@ def upload_document():
                 'invoice_date':   str(invoice_date) if invoice_date else fields['invoice_date'],
                 'total_amount':   fields['total_amount'],
                 'tax_amount':     fields['tax_amount'],
+                'currency':       fields['currency'],
+                'po_reference':   fields['po_reference'],
+                'item_description': fields['item_description'],
+                'quantity':       fields['quantity'],
             },
             'raw_ocr_text': ocr_text
         }), 201
@@ -223,6 +229,16 @@ def upload_purchase_order(document_id):
         confidence = float(confidence)
         fields     = extract_po_fields(ocr_text)
 
+        # Single merged Gemini vision call: fields + authenticity signals
+        # in one request, so a PO upload never spends more than one
+        # Gemini call — mirrors upload_document()'s invoice pattern.
+        gemini_result = gemini_extract_po_full(file_bytes_data, safe_name)
+        if gemini_result:
+            for key in ('po_number', 'vendor_name', 'po_date', 'total_amount',
+                        'currency', 'item_description', 'quantity'):
+                if gemini_result.get(key) is not None:
+                    fields[key] = gemini_result[key]
+
         if fields['total_amount'] is not None:
             fields['total_amount'] = float(fields['total_amount'])
 
@@ -249,7 +265,9 @@ def upload_purchase_order(document_id):
         conn.close()
 
         try:
-            run_authenticity_check(document_id, file_bytes_data, safe_name, 'po', ocr_text)
+            run_authenticity_check(document_id, file_bytes_data, safe_name, 'po', ocr_text,
+                                    precomputed_result=gemini_result,
+                                    skip_gemini=not gemini_result)
         except Exception as e:
             print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
 
@@ -315,6 +333,16 @@ def upload_goods_receipt(document_id):
         confidence = float(confidence)
         fields     = extract_gr_fields(ocr_text)
 
+        # Single merged Gemini vision call: fields + authenticity signals
+        # in one request, so a GR upload never spends more than one
+        # Gemini call — mirrors upload_document()'s invoice pattern.
+        gemini_result = gemini_extract_gr_full(file_bytes_data, safe_name)
+        if gemini_result:
+            for key in ('gr_number', 'vendor_name', 'receipt_date',
+                        'po_reference', 'item_description', 'quantity'):
+                if gemini_result.get(key) is not None:
+                    fields[key] = gemini_result[key]
+
         if fields['total_amount'] is not None:
             fields['total_amount'] = float(fields['total_amount'])
 
@@ -341,7 +369,9 @@ def upload_goods_receipt(document_id):
         conn.close()
 
         try:
-            run_authenticity_check(document_id, file_bytes_data, safe_name, 'gr', ocr_text)
+            run_authenticity_check(document_id, file_bytes_data, safe_name, 'gr', ocr_text,
+                                    precomputed_result=gemini_result,
+                                    skip_gemini=not gemini_result)
         except Exception as e:
             print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
 

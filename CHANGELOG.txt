@@ -3924,3 +3924,198 @@ Setup/config needed:
      redeploying — it should now correctly show PASS. Check the new
      "DEBUG comparison doc=..." log line if any record's banner still
      looks wrong, to see exactly which check is False.
+
+------------------------------------------------------------------------------
+2026-07-18 - Gemini is now the PRIMARY field extractor for invoice/PO/GR
+             (not just invoice), with real-document label tolerance and
+             multi-currency total handling; currency stored + shown
+             next to every amount so USD is never silently read as RM
+
+Context: this app's clean standard PDFs already worked, but real Coilcraft/
+EMITS-style documents use non-standard labels regex can't handle ("INVOICE:
+IX107587" instead of "Invoice No", "Doc No. PD6011823" instead of "GR No")
+and multi-currency totals (an original US$ total alongside a converted RM
+total via an exchange rate) that a naive "take the largest total" regex
+would get backwards — returning the bigger converted RM number instead of
+the real US$ transaction amount.
+
+What was changed:
+
+BACKEND — Gemini as PRIMARY extractor for PO/GR too (helpers/gemini_
+extractor.py, routes/documents.py):
+  - PO/GR previously made TWO Gemini calls per upload: a TEXT-based field-
+    extraction call inside extract_po_fields()/extract_gr_fields() (via the
+    old gemini_extract_po()/gemini_extract_gr(), which sent OCR text, not
+    the image) plus a SEPARATE vision call for authenticity. Only invoice
+    used the single merged vision call pattern. Replaced PO/GR's old
+    TEXT_PROMPT-based functions with `PO_FULL_PROMPT`/`GR_FULL_PROMPT` +
+    `gemini_extract_po_full()`/`gemini_extract_gr_full()`, mirroring
+    `gemini_extract_invoice_full()` exactly: ONE vision call returns fields
+    AND authenticity signals together. `upload_purchase_order()`/
+    `upload_goods_receipt()` in routes/documents.py now call these once and
+    pass `precomputed_result=gemini_result, skip_gemini=not gemini_result`
+    into `run_authenticity_check()` (same pattern already used for
+    invoice), so a PO/GR upload now spends exactly one Gemini call, same as
+    invoice — closing the "still ONE Gemini call per document upload"
+    requirement, which wasn't actually true for PO/GR before this change.
+  - Removed the now-dead `PO_PROMPT`, `GR_PROMPT`, `_call_gemini()`,
+    `gemini_extract_po()`, `gemini_extract_gr()`.
+  - Factored the identical ~40-line "PART 2: AUTHENTICITY SIGNALS" prompt
+    text and JSON schema tail (previously only in the invoice prompt) into
+    shared `AUTHENTICITY_SIGNALS_BLOCK`/`AUTHENTICITY_JSON_TAIL` constants,
+    reused by all three of invoice/PO/GR prompts instead of duplicating it
+    three times.
+  - New shared `DOCUMENT_NUMBER_NOTE` (all 3 prompts): explicitly instructs
+    Gemini to treat a bare label immediately followed by a value (e.g.
+    "INVOICE:  IX107587", "Doc No.  PD6011823") as valid, and to ignore
+    similar-looking nearby noise (Co.Reg.No, Tel, Fax, page numbers,
+    account codes) that is never the actual document number.
+  - New shared `CURRENCY_NOTE` (all 3 prompts): explicitly instructs Gemini
+    to detect the currency of the primary total, and — when a document
+    shows both an original-currency total and an exchange-rate-converted
+    local total (the exact "TOTAL (US$) 8,020.00" + "EXCHANGE RATE=1.2670
+    ... TOTAL= 10,161.34 (RM)" pattern from the request, and the PO's
+    "Total Payable Incl. Tax (RM) 32,946.16" alongside "USD 8,020") —
+    return the ORIGINAL-currency amount as total_amount and the ORIGINAL
+    currency in the new `currency` field, never the converted value.
+  - Invoice prompt's JSON schema gained `po_reference`, `item_description`,
+    `quantity` (it already had a `currency` key, but no instructions on how
+    to determine it — now it does). `upload_document()`'s Gemini-override
+    loop extended from 5 keys to include these plus `currency` — previously
+    Gemini never actually overrode these fields even though the DB columns
+    existed, an oversight from the prior session's 3-way comparison work.
+  - `extracted_fields` (invoice) gained a `currency` column (purchase_
+    orders/goods_receipts already had one) — new migrations/2026-07-18_
+    add_invoice_currency.sql + app.py's `_ensure_invoice_currency_column()`
+    (same auto-migration-at-startup pattern as every other _ensure_
+    function, since this repo has no migration runner).
+
+BACKEND — regex FALLBACK strengthened to match (helpers/ocr_helper.py):
+  Gemini is primary now, but the regex fallback still needs to do a
+  reasonable job when Gemini is unavailable, and this is also the only
+  part of this change testable fully offline.
+  - `extract_fields()` (invoice): added a bare "INVOICE:" label pattern
+    (`\binvoice\s*:\s*(...)`, requires the colon right after the word so
+    "Invoice No:"/"Invoice Date:" never match it) alongside the existing
+    "Invoice No."-style patterns.
+  - `extract_gr_fields()`: reordered the gr_number label alternation so
+    `doc\.?` is tried before the shorter `gr`/`do` — otherwise "do" would
+    partial-match inside "Doc No." and capture only the trailing "c",
+    silently failing to extract the number at all (regex alternation
+    takes the first alternative that lets the match succeed, not the
+    longest, so order matters here).
+  - `extract_po_fields()`: same "doc" fallback added for po_number.
+  - `extract_fields()`/`extract_po_fields()`: new currency-tagged total
+    handling — a `"total (US$)"`/`"total (USD)"`-style match (or a bare
+    "USD 8,020" for PO) is collected into a separate `usd_total_candidates`
+    list and takes unconditional priority over the existing MYR/RM
+    candidates once the line loop finishes; a line containing "exchange
+    rate" is also excluded from ALL total candidates as an extra guard.
+    Both functions now set `fields['currency']` ('USD' when a USD total
+    won, 'MYR' otherwise) instead of invoice's fields dict never having a
+    currency key at all before this change.
+  - Bug found and fixed while testing the above: `extract_po_fields()`'s
+    primary po_number regex (`p\.?o\.?\s*(?:no\.?|number|#)?\s*[:\-]?\s*
+    (...)`) would self-match on a PO number that itself starts with "PO"
+    (the common "PONNNNNNN" Malaysian SME format, e.g. "PO3005713") even
+    when the actual label on that line was "Doc No." — "PO" got treated as
+    the label and only "3005713" got captured, silently dropping the "PO"
+    prefix. Fixed by requiring SOME real separation (a "No"/"Number"/"#"
+    word, a colon/dash, or at least one space) between the label match and
+    the captured value.
+
+BACKEND — currency-aware comparison (routes/auditor.py `_build_comparison`):
+  - Invoice/PO SELECTs now include `currency`, returned on both the
+    `invoice` and `po` dicts.
+  - `amount_match`: if both invoice and PO have a known currency and they
+    DIFFER (e.g. invoice in USD, PO in RM), the check now returns `None`
+    ("not applicable") instead of doing a raw numeric comparison — a
+    same-numbers-different-units comparison would be meaningless and could
+    produce a false match or false mismatch either way.
+  - `_classify_exception()`'s amount-mismatch detail text ("Amount differs:
+    Invoice RM... vs PO RM...") no longer hardcodes "RM" — uses each
+    document's actual currency (falling back to "RM" only if unset).
+
+FRONTEND (auditor-record-detail component):
+  - `formatAmount()` no longer hardcodes `'RM ' + ...` — takes an optional
+    currency parameter and uses it (still defaulting to 'RM' when unset,
+    for old records with no currency stored). This was a real bug: an
+    invoice actually in USD would previously have displayed as "RM
+    8,020.00", exactly the "USD vs RM silently mixed" problem the request
+    was about.
+  - `amountSymbol()` (drives the Amount row's Match/Differ pill) now also
+    takes both documents' currencies — if they're both known and differ,
+    returns 'na' instead of doing a raw numeric compare, mirroring the
+    same fix on the backend's `amount_match`. This was a second instance
+    of the same bug: the pill was computed client-side from raw numbers
+    with no currency awareness at all.
+  - All three call sites (Field Comparison table's Amount row + Amount
+    match pill, and the side-panel Document Info Amount line) updated to
+    pass `comparison.invoice.currency`/`comparison.po.currency` through.
+
+Why: the goal was specifically to support real, messy invoices/POs/GRs —
+  clean standard PDFs already worked. Non-standard labels and multi-
+  currency totals are exactly what regex structurally can't reason about
+  (it has no understanding that "INVOICE:" and "Invoice No." mean the same
+  thing, or that a number following "EXCHANGE RATE=" is a converted value,
+  not the real total), which is why Gemini becomes primary and regex
+  becomes fallback-only for these fields — the reverse of the previous
+  invoice-only arrangement.
+
+Testing (all offline, no live Gemini/network call — per this session's
+strict rule):
+  - `python -c "import ast; ast.parse(...)"` on every changed backend file
+    (helpers/gemini_extractor.py, helpers/ocr_helper.py, routes/
+    documents.py, routes/auditor.py, app.py) — compiles clean.
+  - `npx tsc --noEmit` and `npx ng build --configuration=development` on
+    the frontend — both pass clean, confirming the new optional currency
+    parameters don't break any existing call site.
+  - New offline regex-fallback test (scratchpad, not committed) built
+    directly from the real document text patterns given in the request:
+    - Invoice with "INVOICE:  IX107587" (bare label) + "Co.Reg.No" noise
+      nearby + "TOTAL (US$) 8,020.00" alongside "EXCHANGE RATE=1.2670
+      TOTAL= 10,161.34 (RM)" on the same line — confirmed invoice_number
+      == 'IX107587', total_amount == 8020.00 (not 10161.34), currency ==
+      'USD'. Repeated with the exchange-rate text on its own separate line
+      to confirm the fix isn't sensitive to exact OCR line-splitting.
+    - GR with bare "Doc No.  PD6011823" — confirmed gr_number ==
+      'PD6011823'.
+    - PO with "Doc No.  PO3005713" + "USD 8,020" alongside "Total Payable
+      Incl. Tax (RM) 32,946.16" — confirmed po_number == 'PO3005713' (this
+      is what surfaced and drove the self-matching po_number regex bug fix
+      above), total_amount == 8020.00, currency == 'USD'.
+    - Regression: a plain single-currency ("Invoice No:"/RM-only) invoice
+      still extracts invoice_number/total_amount/currency='MYR' correctly
+      — confirms the new currency-tagged logic doesn't change behavior
+      when there's nothing multi-currency going on.
+  - Re-ran all three pre-existing offline regex test suites from the last
+    two entries (line-item table extraction, po_reference normalization,
+    quantity mismatch detection) — all still pass, no regression from the
+    new patterns inserted into the same per-line loops.
+
+Note (not fixed, out of scope): this is a genuine oversight worth flagging
+even though it wasn't asked for — the `extract_gr_fields()` "GRN No:"
+label gap noted in the 2026-07-17 entry above is still NOT fixed by this
+change (the new "doc" alternative only covers the "Doc No." label
+specifically; "GRN" still partial-matches "GR" then fails on the "N"
+before "No:", same as before).
+
+Setup/config needed:
+  1. Redeploy the Render backend AND frontend together — the frontend's
+     currency display depends on the backend's new `currency` field being
+     present in the comparison API response.
+  2. The extracted_fields.currency migration runs automatically at
+     startup, same as recent prior entries — no manual SQL needed.
+  3. Existing invoice records uploaded before this deploy have no
+     currency stored (NULL) — the Field Comparison table will fall back to
+     showing "RM" for those until they're re-uploaded or Re-checked. Only
+     new uploads (or explicit Re-check, which re-runs the merged Gemini
+     call and can now populate currency retroactively for that one field
+     set) get real currency detection.
+  4. Since Gemini is now PRIMARY for PO/GR fields (previously regex was
+     primary with a text-based Gemini override), re-upload or Re-check a
+     sample real PO/GR from your actual Coilcraft/EMITS documents to
+     confirm the new label/currency handling against real Gemini vision
+     output, not just this session's offline regex-fallback tests — the
+     Gemini prompt changes themselves are not exercised by any offline
+     test (no live API calls are made in this codebase's test discipline).
