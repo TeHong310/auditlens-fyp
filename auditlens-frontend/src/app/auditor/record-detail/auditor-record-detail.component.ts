@@ -320,6 +320,44 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return 'N/A';
   }
 
+  // ── Line Items (per-item, one row per matched item across Invoice/PO/
+  // GR by item_code or normalized description — server-computed in
+  // comparison.line_items) ──────────────────────────────────
+
+  private lineItemMissing(li: any, side: 'po' | 'gr'): boolean {
+    return side === 'po' ? !!li.missing_on_po : !!li.missing_on_gr;
+  }
+
+  lineItemRowClass(li: any): string[] {
+    const hardIssue = li.quantity_match === false || li.missing_on_po || li.missing_on_gr;
+    if (hardIssue) return ['row-mismatch', 'row-quantity-alert'];
+    // amount_match is a SOFT check (drives the amber REVIEW banner state,
+    // never red FAIL) — still needs a visible row indicator, or it would
+    // be an invisible check silently affecting the banner with nothing
+    // in the table for an auditor to actually see (the exact bug fixed
+    // for date_order_valid/po_reference_match in earlier work on this
+    // page). Standard row-mismatch styling only, no row-quantity-alert
+    // stripe — that's reserved for the hard quantity case.
+    if (li.amount_match === false) return ['row-mismatch'];
+    return [];
+  }
+
+  lineItemPillClass(li: any, side: 'po' | 'gr'): string {
+    if (this.lineItemMissing(li, side)) return 'pill-differ';
+    return this.rowMatchPillClass(li.quantity_match);
+  }
+
+  lineItemPillIcon(li: any, side: 'po' | 'gr'): string {
+    if (this.lineItemMissing(li, side)) return '⚠';
+    return this.rowMatchIcon(li.quantity_match);
+  }
+
+  lineItemPillText(li: any, side: 'po' | 'gr'): string {
+    if (side === 'po' && li.missing_on_po) return 'Missing on PO';
+    if (side === 'gr' && li.missing_on_gr) return 'Missing on GR';
+    return this.rowMatchText(li.quantity_match);
+  }
+
   formatQuantity(qty: any): string {
     if (qty === null || qty === undefined || qty === '') return '-';
     const n = parseFloat(qty);

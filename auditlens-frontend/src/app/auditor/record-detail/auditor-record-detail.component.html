@@ -156,18 +156,33 @@
                   </td>
                 </tr>
 
-                <!-- Item / Description -->
-                <tr [ngClass]="rowMatchClass(comparison.match_result.item_match)">
-                  <td class="field-name">
-                    <span class="field-icon">📦</span> Item / Description
-                    <span class="match-pill" [ngClass]="rowMatchPillClass(comparison.match_result.item_match)">
-                      {{ rowMatchIcon(comparison.match_result.item_match) }}
-                      {{ rowMatchText(comparison.match_result.item_match) }}
-                    </span>
+                <!-- Line Items — every row of the goods/services table
+                     matched by item_code/description across Invoice/PO/GR
+                     (not just the first item). Extra prominence on a
+                     quantity mismatch beyond the standard row-mismatch
+                     highlight (row-quantity-alert), same as the old single
+                     Quantity row used to have. -->
+                <tr class="line-items-section-row">
+                  <td colspan="4" class="field-name line-items-section-label">
+                    <span class="field-icon">📦</span> Line Items
+                    <span class="line-items-count" *ngIf="comparison.line_items?.length">({{ comparison.line_items.length }})</span>
                   </td>
-                  <td class="cell-value">{{ comparison.invoice.item_description || '-' }}</td>
+                </tr>
+                <tr *ngFor="let li of comparison.line_items" [ngClass]="lineItemRowClass(li)">
+                  <td class="field-name">
+                    <div class="li-desc">{{ li.description || '-' }}</div>
+                    <div class="li-code" *ngIf="li.item_code">{{ li.item_code }}</div>
+                    <div class="li-amount-note" *ngIf="li.amount_match === false">💲 Amount/unit price differs</div>
+                  </td>
+                  <td class="cell-value cell-quantity">
+                    <span class="not-uploaded-label li-missing-label" *ngIf="li.invoice_quantity === null">Missing on Invoice</span>
+                    <ng-container *ngIf="li.invoice_quantity !== null">{{ formatQuantity(li.invoice_quantity) }}</ng-container>
+                  </td>
                   <td class="cell-value" *ngIf="comparison.po">
-                    <div class="cell-main-value">{{ comparison.po.item_description || '-' }}</div>
+                    <span class="match-pill" [ngClass]="lineItemPillClass(li, 'po')">
+                      {{ lineItemPillIcon(li, 'po') }} {{ lineItemPillText(li, 'po') }}
+                    </span>
+                    <div class="cell-main-value cell-quantity" *ngIf="!li.missing_on_po">{{ formatQuantity(li.po_quantity) }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">
                     <span class="not-uploaded-icon">⬆</span>
@@ -175,7 +190,10 @@
                     <span class="upload-hint">+ Upload PO</span>
                   </td>
                   <td class="cell-value" *ngIf="comparison.gr">
-                    <div class="cell-main-value">{{ comparison.gr.item_description || '-' }}</div>
+                    <span class="match-pill" [ngClass]="lineItemPillClass(li, 'gr')">
+                      {{ lineItemPillIcon(li, 'gr') }} {{ lineItemPillText(li, 'gr') }}
+                    </span>
+                    <div class="cell-main-value cell-quantity" *ngIf="!li.missing_on_gr">{{ formatQuantity(li.gr_quantity) }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.gr">
                     <span class="not-uploaded-icon">⬆</span>
@@ -183,35 +201,8 @@
                     <span class="upload-hint">+ Upload GR</span>
                   </td>
                 </tr>
-
-                <!-- Quantity — THE key audit field: PO ordered vs GR received
-                     vs Invoice billed. Extra prominence on mismatch beyond
-                     the standard row-mismatch highlight (row-quantity-alert). -->
-                <tr [ngClass]="[rowMatchClass(comparison.match_result.quantity_match), comparison.match_result.quantity_match === false ? 'row-quantity-alert' : '']">
-                  <td class="field-name">
-                    <span class="field-icon">🔢</span> Quantity
-                    <span class="match-pill" [ngClass]="rowMatchPillClass(comparison.match_result.quantity_match)">
-                      {{ rowMatchIcon(comparison.match_result.quantity_match) }}
-                      {{ rowMatchText(comparison.match_result.quantity_match) }}
-                    </span>
-                  </td>
-                  <td class="cell-value cell-quantity">{{ formatQuantity(comparison.invoice.quantity) }}</td>
-                  <td class="cell-value" *ngIf="comparison.po">
-                    <div class="cell-main-value cell-quantity">{{ formatQuantity(comparison.po.quantity) }}</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon">⬆</span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload PO</span>
-                  </td>
-                  <td class="cell-value" *ngIf="comparison.gr">
-                    <div class="cell-main-value cell-quantity">{{ formatQuantity(comparison.gr.quantity) }}</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon">⬆</span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload GR</span>
-                  </td>
+                <tr *ngIf="!comparison.line_items || comparison.line_items.length === 0">
+                  <td colspan="4" class="cell-value cell-muted">No line items extracted</td>
                 </tr>
 
                 <!-- Amount: GR carries no monetary total by design (goods

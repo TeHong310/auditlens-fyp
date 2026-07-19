@@ -192,6 +192,44 @@ def _ensure_invoice_currency_column():
         print(f'WARNING: could not add invoice currency column: {type(e).__name__}: {e}')
 
 
+def _ensure_document_line_items_table():
+    """Line-item level 3-way audit matching: every row of a document's
+    goods/services table (not just the first line item, which was the
+    prior single-value item_description/quantity limitation — an invoice
+    with 3 items only ever compared item #1, items 2/3 were never
+    checked). One row per (document, line) here; document_id points at
+    the SAME invoice document_id used across purchase_orders/
+    goods_receipts (not po_id/gr_id), matching how those tables already
+    key off the invoice's document_id. Same auto-create-on-startup
+    pattern as the other _ensure_ functions above, for the same reason
+    (no migration runner in this repo)."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS document_line_items (
+                id SERIAL PRIMARY KEY,
+                document_id INTEGER NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+                document_type VARCHAR(10) NOT NULL,
+                line_no INTEGER,
+                item_code VARCHAR(100),
+                description TEXT,
+                quantity NUMERIC,
+                unit_price NUMERIC,
+                amount NUMERIC
+            )
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_document_line_items_doc
+            ON document_line_items (document_id, document_type)
+        ''')
+        conn.commit()
+        conn.close()
+        print('document_line_items table ready')
+    except Exception as e:
+        print(f'WARNING: could not create document_line_items table: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -216,6 +254,7 @@ _ensure_authenticity_v2_columns()
 _ensure_file_bytes_columns()
 _ensure_3way_comparison_columns()
 _ensure_invoice_currency_column()
+_ensure_document_line_items_table()
 
 @app.route('/')
 def hello_world():

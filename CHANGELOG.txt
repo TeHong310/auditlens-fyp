@@ -4626,3 +4626,244 @@ Setup/config needed:
      banner instead of green "All Fields Match", and the Amount row
      should show "✓ Match" instead of "— N/A" wherever both sides are
      genuinely the same currency (MYR/RM) with equal amounts.
+
+------------------------------------------------------------------------------
+2026-07-19 - Upgrade 3-way matching from single-field to LINE-ITEM LEVEL:
+             every row of the goods/services table is now extracted and
+             matched across Invoice/PO/GR, not just the first item
+
+Context: the Field Comparison table only ever compared item_description/
+  quantity from the FIRST line item per document — an invoice with 3 items
+  only ever checked item #1; items 2 and 3 were never compared at all.
+  Summing quantities across items was explicitly ruled out (different
+  products/units, and it would mask tampering: 5000+8000 vs 4000+9000 both
+  total 13000). Each line item now has to be matched individually.
+
+EXTRACTION — every row, not just the first (helpers/ocr_helper.py,
+helpers/gemini_extractor.py):
+  - New `_extract_all_line_items()`: generalizes the existing
+    `_extract_first_line_item()` (kept UNCHANGED, zero risk to its
+    tested behavior) into a loop over the SAME confirmed real Google
+    Vision OCR table structure (one cell per line: row number,
+    description, integer qty, decimal unit price, decimal amount,
+    repeating) — collecting every row until a totals/footer line
+    (Subtotal/Grand Total/Total/Amount Due) or end of document. The
+    first item's parsing mirrors the single-item version's "never
+    guess" bail-out exactly (a malformed first row -> empty list); a
+    malformed row AFTER at least one item has already been found just
+    ends scanning, keeping what was cleanly parsed rather than
+    discarding it. Capped at `MAX_LINE_ITEMS = 50` (Render free tier is
+    512MB — a garbled document must not produce an unbounded result).
+  - Wired into all three of extract_fields()/extract_po_fields()/
+    extract_gr_fields() as a NEW `fields['line_items']` list, running
+    alongside (not replacing) the existing `_extract_first_line_item()`
+    call — item_description/quantity stay exactly as before for
+    backward compatibility, per the request.
+  - New shared `LINE_ITEMS_NOTE` added to all three merged Gemini
+    prompts (invoice/PO/GR) — Gemini (already the primary extractor,
+    already making exactly one vision call per upload) now ALSO returns
+    a `line_items` array in the SAME response: `{item_code, description,
+    quantity, unit_price, amount}` per row, capped at 50, empty array if
+    no table is found. No additional Gemini call is made anywhere in
+    this change — the array rides along in the existing merged call.
+  - routes/documents.py's Gemini-override loop (all 3 upload handlers)
+    gained special handling for line_items: unlike the other fields
+    (overridden whenever Gemini's value `is not None`), an EMPTY list
+    from Gemini means "no table found", not "override with nothing" —
+    only replaces the regex fallback's items when Gemini actually found
+    some (`if gemini_result.get('line_items'):`), so a Gemini table-read
+    failure doesn't silently wipe out a working regex extraction.
+
+PERSISTENCE — new `document_line_items` table (app.py, migrations/,
+routes/documents.py):
+  - New table: `id, document_id, document_type, line_no, item_code,
+    description, quantity, unit_price, amount`. `document_id` points at
+    the SAME invoice document_id used across purchase_orders/
+    goods_receipts (not po_id/gr_id) — matches how those tables already
+    key off it. New `_ensure_document_line_items_table()` in app.py
+    (auto-creates the table + an index at startup, same pattern as
+    every other `_ensure_` function — no migration runner in this
+    repo) + matching migrations/2026-07-18_add_document_line_items.sql
+    for local-dev/documentation parity.
+  - New `_sanitize_line_items()`/`_save_line_items()` helpers in
+    routes/documents.py: sanitize coerces Gemini's (or the regex
+    fallback's) line_items into a clean, bounded, correctly-typed list
+    (caps at 50, drops any entry with no description, coerces quantity/
+    unit_price/amount to float or None) before it ever reaches the DB —
+    never trusts Gemini's JSON shape blindly. save DELETE-then-INSERTs
+    per (document_id, document_type): PO/GR can be re-uploaded onto the
+    SAME document_id (the existing `ORDER BY uploaded_at DESC LIMIT 1`
+    pattern elsewhere in this codebase confirms re-upload support), so
+    a stale previous upload's line items must not linger mixed in with
+    the new ones.
+
+MATCHING — by item_code or normalized description (routes/auditor.py):
+  - New `_line_item_key()`: item_code when present (normalized:
+    uppercase, strip non-alphanumerics) else normalized description
+    (case-insensitive, collapsed whitespace, via the existing
+    `_normalize_text()`) — same "tolerate minor OCR differences via
+    normalization, not fuzzy matching" philosophy as `_normalize_vendor`/
+    `_normalize_ref` elsewhere in this file. No Levenshtein/fuzzy
+    matching — out of scope, not requested beyond case/whitespace
+    tolerance.
+  - New `_match_line_items()`: unions the distinct keys across all three
+    documents' line items (invoice-then-PO-only-then-GR-only order),
+    and for each key compares quantity (all present values equal ->
+    Match, differ -> HARD Mismatch) and amount (all present values
+    equal -> Match, differ -> SOFT Mismatch — see "Scope decision"
+    below for why amount, not unit_price, was chosen), plus flags an
+    item present in one document but absent from another document that
+    WAS actually uploaded ("missing_on_po"/"missing_on_gr" — a HARD,
+    "critical audit finding" per the request, same severity as a
+    quantity mismatch).
+  - Deliberate defensive guard: a document that WAS uploaded but
+    produced ZERO line items (a total extraction failure, not a real
+    "nothing was ordered") is treated the SAME as "not uploaded" for
+    missing-item purposes — otherwise one failed extraction would flag
+    EVERY invoice item as "missing" on that document, a false signal
+    about extraction, not a real audit finding. Verified with a
+    dedicated regression test.
+  - Scope decision (flagged rather than silently narrowed): the request
+    asked to compare "quantity (and unit_price/amount where present)".
+    Implemented as a SINGLE `amount_match` per item rather than two
+    separate unit_price_match/amount_match checks — amount is the more
+    meaningful "does this line's total agree" audit signal (if quantity
+    and unit price both agree, amount agrees too; if amount disagrees,
+    something in the line total is wrong), and a second full comparison
+    dimension would need its own visible UI indicator per item, adding
+    real clutter to an already-dense table for a check redundant with
+    the quantity+amount checks already present.
+
+overall_status / Field Comparison table wiring (routes/auditor.py):
+  - `line_items_match` (any line item hard-mismatched or missing)
+    REPLACES the old single-value `quantity_match` (first item only) as
+    a HARD check (FAIL, red) — closes the "3-item invoice only ever
+    checks item #1" gap directly. `line_items_price_match` (any
+    matched item's amount disagrees) REPLACES the old single-value
+    `item_match` as a SOFT check (REVIEW, amber).
+  - The OLD single-value `item_match`/`quantity_match` are STILL
+    computed and returned in `match_result` (backward compatibility,
+    per the request), but — like `date_order_valid` before them —
+    deliberately EXCLUDED from the checks driving `overall_status`: the
+    Field Comparison table no longer has a single "Item / Description"/
+    "Quantity" row for them (replaced by the Line Items section), so
+    letting them still drive the banner would be an invisible check
+    silently affecting a green/amber/red state with no matching visible
+    row for an auditor to investigate — exactly the `date_order_valid`
+    bug fixed in an earlier entry, which would have been reintroduced
+    here for a different pair of fields if left wired in.
+  - Bug caught and fixed WHILE verifying the invariant, before treating
+    this as done: `line_items_price_match` (soft, drives the amber
+    REVIEW state) initially had NO visible per-item indicator in the
+    table at all — an item's `amount_match` was computed and could flip
+    the banner to REVIEW, but nothing in the rendered row showed WHY.
+    This is the exact same class of bug as the `date_order_valid`/
+    `po_reference_match` issues fixed in earlier entries, just
+    reintroduced for a new field in this same change. Fixed by adding a
+    visible "💲 Amount/unit price differs" note under the item
+    description whenever `amount_match === false`, and giving that row
+    standard `row-mismatch` (amber-ish) styling — without the extra
+    `row-quantity-alert` red stripe, which stays reserved for hard
+    quantity mismatches/missing items. Caught this by explicitly
+    checking the invariant against a REVIEW-only scenario, not by
+    assumption.
+  - `_classify_exception()`'s FAIL branch: the old "Quantity differs:
+    PO X vs GR Y vs Invoice Z" single-value detail text is replaced
+    with a per-line-item breakdown ("Line item mismatch: \"Widget A\":
+    PO 8000 vs GR 7500 vs Invoice 8000; \"Widget C\" missing on PO"),
+    capped at 3 items in the detail text (+N more) to keep it readable.
+    The REVIEW branch's old `item_match`-based text is replaced with a
+    `line_items_price_match`-based one. Reuses the existing 'mismatch'/
+    'review' exception types per the request ("reuse/extend the
+    existing quantity-mismatch exception type") rather than adding new
+    ones.
+
+FRONTEND (auditor-record-detail component): the old single "Item /
+Description" and "Quantity" `<tr>` rows are replaced with a Line Items
+section — a header row ("📦 Line Items (N)") followed by one `<tr>` per
+`comparison.line_items` entry (server-computed), each showing the
+description (+ item_code if present) and Invoice/PO/GR quantity side by
+side with a per-item Match/Mismatch pill (reusing the existing
+`row-mismatch`/`row-quantity-alert`/`pill-match`/`pill-differ` CSS
+classes — no new color language introduced). New TS helpers
+`lineItemRowClass()`/`lineItemPillClass()`/`lineItemPillIcon()`/
+`lineItemPillText()`, parameterized by `'po'|'gr'` side rather than
+duplicated per side. A `missing_on_po`/`missing_on_gr` item shows
+"⚠ Missing on PO"/"⚠ Missing on GR" in place of the pill+quantity, using
+the existing `pill-differ` (red) styling. The document-level summary
+rows (Vendor/PO Ref/Amount/Doc No) are UNCHANGED, per the request.
+
+Why: line-item-level matching is what "audit-grade" 3-way matching
+  actually requires — the whole point of a 3-way match is verifying that
+  what was ordered, delivered, and billed agree PER ITEM, not just in
+  aggregate (which, as the request notes, is exactly the kind of check a
+  single-total or summed-quantity comparison cannot catch: two
+  completely different item breakdowns can sum to the same total).
+
+Testing (all offline, no live Gemini/network call):
+  - `python -c "import ast; ast.parse(...)"` on every changed backend
+    file — compiles clean.
+  - Direct test of `_extract_all_line_items()` against a realistic
+    3-item document (qty 5000/8000/600, matching the request's example)
+    — confirmed all 3 items extract with correct description/quantity/
+    unit_price/amount, in order.
+  - New test (scratchpad, not committed) of `_match_line_items()`/
+    `_build_comparison()` via a mocked cursor covering exactly the 3
+    requested scenarios: (1) all 3 items match -> `line_items_match`
+    True, `overall_status` PASS; (2) item B's GR quantity is short
+    (8000 ordered/received per invoice+PO, 7500 actually received) ->
+    that item's `quantity_match` False, `line_items_match` False,
+    `overall_status` FAIL (line-item quantity mismatch is a hard
+    failure); (3) item C is on the invoice but was never ordered on the
+    PO (and never received on the GR) -> `missing_on_po`/`missing_on_gr`
+    both True, invoice_quantity still shown (600), po/gr_quantity None,
+    `overall_status` FAIL ("critical audit finding" per the request).
+    Also verified: item A (unaffected in scenarios 2/3) still correctly
+    shows Match; a PO uploaded but with 0 extracted line items does NOT
+    flood every invoice item as "missing" (the defensive guard);
+    item_code-based matching takes priority over description even when
+    descriptions differ (OCR wording); a genuinely clean single-item
+    record still shows PASS (the fix doesn't make PASS unreachable).
+  - Full browser-level verification with Playwright against the live
+    dev server (scratchpad, not committed, screenshot taken and visually
+    reviewed): the exact 3-item scenario above rendered end-to-end
+    through a fully-mocked `/auditor/record/1/comparison` response (no
+    real backend call, network fully intercepted) — confirmed the
+    banner reads "Mismatch Detected" (red), the Line Items section
+    header shows "(3)", no standalone "Item / Description"/bare
+    "Quantity" rows remain, item A shows green Match pills with no
+    row-mismatch styling, item B shows red `row-mismatch`+`row-quantity-
+    alert` styling with both 8000 and 7500 visible, and item C shows
+    "Missing on PO"/"Missing on GR" with its invoice quantity (600)
+    still visible. A second, separate Playwright run specifically
+    targeted the amount-mismatch-visibility bug found above: a
+    REVIEW-only scenario (quantity matches, amount doesn't) — confirmed
+    the banner reads "Review Required", the row gets `row-mismatch`
+    WITHOUT `row-quantity-alert`, and the "💲 Amount/unit price differs"
+    note is visibly present — closing the gap before this was ever
+    treated as done.
+  - Re-ran all six pre-existing offline test suites from prior entries
+    — all still pass, no regression from the new extraction/matching
+    logic sharing the same per-line loops and _build_comparison()
+    query path.
+  - `npx ng build --configuration=development` — passes clean both
+    before and after the amount-mismatch-visibility fix.
+
+Setup/config needed:
+  1. Redeploy the Render backend AND frontend TOGETHER — the frontend's
+     Line Items section depends on the backend's new `comparison.
+     line_items` array and `match_result.line_items_match`/
+     `line_items_price_match` fields being present in the API response;
+     the old fields it used to read (`item_match`/single `quantity`)
+     are still returned but no longer drive what's displayed.
+  2. The `document_line_items` migration runs automatically at startup
+     (same as every other `_ensure_` function in this repo) — no manual
+     SQL needed, but it only takes effect after the backend redeploys.
+  3. Existing invoice/PO/GR records uploaded before this deploy have NO
+     rows in `document_line_items` yet — their Line Items section will
+     show "No line items extracted" until they're re-uploaded or
+     Re-checked (Re-check re-runs the merged Gemini call, which now
+     also returns `line_items`, but does not currently re-save them to
+     `document_line_items` — that path only writes on upload; flagging
+     this as a known gap for a follow-up if backfilling old records via
+     Re-check turns out to matter).

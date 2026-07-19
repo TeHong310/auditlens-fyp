@@ -137,6 +137,131 @@ def _extract_first_line_item(lines):
     return description, quantity
 
 
+# Defensive cap on how many line items a single document can contribute —
+# a malformed/garbled document must not be able to produce an unbounded
+# result (Render free tier is 512MB).
+MAX_LINE_ITEMS = 50
+
+# A line matching any of these ends the line-item table — the totals/
+# footer section that follows the last real row.
+_LINE_ITEMS_END_RE = re.compile(
+    r'\b(?:sub[\s\-]?total|grand\s*total|total|amount\s*due)\b', re.IGNORECASE
+)
+
+
+def _extract_all_line_items(lines, max_items=MAX_LINE_ITEMS):
+    """
+    Extracts EVERY line-item row from this app's actual document table
+    layout (see _TABLE_HEADER_LINE_RES above for the confirmed real
+    Google Vision OCR structure — one cell per line), not just the
+    first. After the header block, rows repeat: a row-number line,
+    description, integer quantity, decimal unit price, decimal amount —
+    until a totals/footer line (Subtotal/Total/Grand Total/Amount Due)
+    or the end of the document.
+
+    Returns a list of dicts (possibly empty), in table order:
+      {'line_no', 'item_code', 'description', 'quantity', 'unit_price', 'amount'}
+    item_code is always None here — this app's OCR table has no separate
+    item-code column (only row number + description); Gemini's vision
+    call is the only source for item_code, since it can read a SKU
+    column if the document actually has one.
+
+    The FIRST item's parsing rules mirror _extract_first_line_item()'s
+    bail-out behavior (never guess): if the very first row doesn't parse
+    cleanly, returns []. A malformed row AFTER at least one item has
+    already been found just ends scanning — the items found so far are
+    kept rather than discarded.
+    """
+    stripped = [l.strip() for l in lines]
+    n = len(stripped)
+
+    header_start = None
+    for i in range(n - 3):
+        if all(pat.match(stripped[i + j]) for j, pat in enumerate(_TABLE_HEADER_LINE_RES)):
+            header_start = i
+            break
+    if header_start is None:
+        return []
+
+    idx = header_start + 4
+    items = []
+
+    while idx < n and len(items) < max_items:
+        while idx < n and not stripped[idx]:
+            idx += 1
+        if idx >= n:
+            break
+
+        line = stripped[idx]
+
+        if _LINE_ITEMS_END_RE.search(line):
+            break
+
+        # A bare integer here is the row number (1, 2, 3, ...) — skip it,
+        # same as _extract_first_line_item()'s "skip a leading row-number
+        # line". If a row's number is missing entirely (OCR drop), this
+        # simply doesn't fire and the line below is tried as a description
+        # instead — no special-casing needed.
+        if _INTEGER_LINE_RE.match(line):
+            idx += 1
+            continue
+
+        if HEADER_WORD_RE.match(line):
+            idx += 1
+            continue
+
+        # This should be the description — same two bail checks as
+        # _extract_first_line_item() (never guess a description).
+        if _DECIMAL_LINE_RE.match(line) or re.search(r'\d+\.\d+\s+[\d,]+\.\d+\s*$', line):
+            break
+
+        description = line
+        idx += 1
+
+        # Quantity: first bare integer after the description.
+        quantity = None
+        while idx < n:
+            l2 = stripped[idx]
+            if _INTEGER_LINE_RE.match(l2):
+                quantity = float(l2)
+                idx += 1
+                break
+            if _DECIMAL_LINE_RE.match(l2) or not l2:
+                idx += 1
+                continue
+            break
+        if quantity is None:
+            break
+
+        # Unit price then amount: the next two decimal lines, in order.
+        unit_price = None
+        amount = None
+        while idx < n and amount is None:
+            l3 = stripped[idx]
+            if _DECIMAL_LINE_RE.match(l3):
+                if unit_price is None:
+                    unit_price = extract_amount(l3)
+                else:
+                    amount = extract_amount(l3)
+                idx += 1
+                continue
+            if not l3:
+                idx += 1
+                continue
+            break
+
+        items.append({
+            'line_no':     len(items) + 1,
+            'item_code':   None,
+            'description': description[:200],
+            'quantity':    quantity,
+            'unit_price':  unit_price,
+            'amount':      amount,
+        })
+
+    return items
+
+
 def clean_vendor_name(vendor):
     if not vendor:
         return vendor
@@ -329,10 +454,17 @@ def extract_fields(ocr_text):
         'item_description': None,
         'quantity':         None,
         'currency':         None,
+        # EVERY line item (not just the first) — see _extract_all_line_
+        # items() — for line-item-level 3-way audit matching. item_
+        # description/quantity above stay the FIRST item only, kept for
+        # backward compatibility with anything still reading them.
+        'line_items':       [],
     }
 
     lines = ocr_text.split('\n')
     full_text_lower = ocr_text.lower()
+
+    fields['line_items'] = _extract_all_line_items(lines)
 
     # Primary line-item extraction — Google Vision emits this app's
     # tables with each cell on its own line (confirmed against real OCR
@@ -751,6 +883,8 @@ def extract_po_fields(ocr_text):
         # own anchor reference, so no separate po_reference field here.
         'item_description': None,
         'quantity':         None,
+        # EVERY line item (not just the first) — see extract_fields().
+        'line_items':       [],
     }
 
     lines = ocr_text.split('\n')
@@ -762,6 +896,8 @@ def extract_po_fields(ocr_text):
     # below is gated on this flag so it never grabs the letterhead: it
     # only starts trying once a supplier heading has actually been seen.
     seen_supplier_heading = False
+
+    fields['line_items'] = _extract_all_line_items(lines)
 
     # Primary line-item extraction — see extract_fields() for why this
     # runs over the whole line list up front rather than per-line below.
@@ -954,6 +1090,8 @@ def extract_gr_fields(ocr_text):
         'po_reference':     None,
         'item_description': None,
         'quantity':         None,
+        # EVERY line item (not just the first) — see extract_fields().
+        'line_items':       [],
     }
 
     lines = ocr_text.split('\n')
@@ -964,6 +1102,8 @@ def extract_gr_fields(ocr_text):
     # "Supplier"/"Delivered By" heading further down. Same gating pattern
     # as extract_po_fields()'s vendor extraction.
     seen_supplier_heading = False
+
+    fields['line_items'] = _extract_all_line_items(lines)
 
     # Primary line-item extraction — see extract_fields() for why this
     # runs over the whole line list up front rather than per-line below.

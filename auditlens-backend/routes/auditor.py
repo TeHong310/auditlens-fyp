@@ -80,6 +80,129 @@ def _normalize_text(val):
     return v or None
 
 
+def _line_item_key(item_code, description):
+    """Matching key for a line item across documents: item_code when
+    present (normalized: uppercase, strip non-alphanumerics), otherwise
+    normalized description (case-insensitive, collapsed whitespace) via
+    _normalize_text — same "tolerate minor OCR differences via
+    normalization, not fuzzy matching" philosophy as _normalize_vendor/
+    _normalize_ref elsewhere in this file. Returns None if neither is
+    usable (nothing to match this item on)."""
+    if item_code:
+        code = re.sub(r'[^A-Za-z0-9]', '', str(item_code)).upper()
+        if code:
+            return ('code', code)
+    desc = _normalize_text(description)
+    return ('desc', desc) if desc else None
+
+
+def _match_line_items(invoice_items, po_items, gr_items):
+    """
+    Matches line items across Invoice/PO/GR by item_code (when present)
+    else normalized description, and compares quantity/amount per
+    matched item. Each of invoice_items/po_items/gr_items is a list of
+    dicts (from document_line_items: 'item_code','description',
+    'quantity','unit_price','amount') for a document that WAS uploaded,
+    or None for a document that was NOT uploaded — that distinction
+    matters for missing-item detection: an item can only be "missing on
+    PO" if a PO actually exists and simply doesn't have it, not because
+    no PO was uploaded at all (a separate, already-handled state).
+
+    A document that WAS uploaded but produced ZERO line items (extraction
+    failure, not a real "nothing ordered") is treated the same as "not
+    uploaded" for missing-item purposes — otherwise a single failed
+    extraction would flag EVERY invoice item as "missing" on that
+    document, which is a false signal about extraction, not the audit.
+
+    Returns (rows, has_hard_mismatch, has_soft_mismatch):
+      rows: one dict per distinct matched item, in invoice-then-PO-only-
+        then-GR-only order: {'description', 'item_code', 'invoice_
+        quantity', 'po_quantity', 'gr_quantity', 'quantity_match',
+        'amount_match', 'missing_on_po', 'missing_on_gr'}
+      has_hard_mismatch: True if any item has a quantity mismatch or a
+        missing-item finding — a HARD failure (escalates overall_status
+        to FAIL), same severity as the existing vendor/amount/quantity
+        checks.
+      has_soft_mismatch: True if any item has an amount mismatch (with
+        no hard issue on that same item) — a SOFT signal (REVIEW), same
+        severity as the existing po_reference/item checks.
+    """
+    def keyed(items):
+        mapping = {}
+        order = []
+        for it in (items or []):
+            key = _line_item_key(it.get('item_code'), it.get('description'))
+            if key is None or key in mapping:
+                continue
+            mapping[key] = it
+            order.append(key)
+        return mapping, order
+
+    # Treat "uploaded but 0 items extracted" the same as "not uploaded"
+    # for missing-item purposes (see docstring) — po_present/gr_present
+    # track the REAL "was this document type ever a candidate for a
+    # missing-item finding at all" state.
+    po_present = po_items is not None and len(po_items) > 0
+    gr_present = gr_items is not None and len(gr_items) > 0
+
+    inv_map, inv_order = keyed(invoice_items)
+    po_map, po_order = keyed(po_items if po_present else [])
+    gr_map, gr_order = keyed(gr_items if gr_present else [])
+
+    seen = set()
+    ordered_keys = []
+    for key in inv_order + po_order + gr_order:
+        if key not in seen:
+            seen.add(key)
+            ordered_keys.append(key)
+
+    rows = []
+    has_hard_mismatch = False
+    has_soft_mismatch = False
+
+    for key in ordered_keys:
+        inv_item = inv_map.get(key)
+        po_item = po_map.get(key)
+        gr_item = gr_map.get(key)
+
+        description = (inv_item or po_item or gr_item or {}).get('description')
+        item_code = (inv_item or po_item or gr_item or {}).get('item_code')
+
+        missing_on_po = po_present and po_item is None
+        missing_on_gr = gr_present and gr_item is None
+
+        qty_values = [it['quantity'] for it in (inv_item, po_item, gr_item)
+                      if it and it.get('quantity') is not None]
+        quantity_match = None
+        if len(qty_values) >= 2:
+            quantity_match = all(abs(v - qty_values[0]) < 0.01 for v in qty_values[1:])
+
+        amt_values = [it['amount'] for it in (inv_item, po_item, gr_item)
+                      if it and it.get('amount') is not None]
+        amount_match = None
+        if len(amt_values) >= 2:
+            amount_match = all(abs(v - amt_values[0]) < 0.01 for v in amt_values[1:])
+
+        if quantity_match is False or missing_on_po or missing_on_gr:
+            has_hard_mismatch = True
+        if amount_match is False:
+            has_soft_mismatch = True
+
+        rows.append({
+            'description':      description,
+            'item_code':        item_code,
+            'invoice_quantity': inv_item['quantity'] if inv_item else None,
+            'po_quantity':      po_item['quantity'] if po_item else None,
+            'gr_quantity':      gr_item['quantity'] if gr_item else None,
+            'quantity_match':   quantity_match,
+            'amount_match':     amount_match,
+            'missing_on_po':    missing_on_po,
+            'missing_on_gr':    missing_on_gr,
+        })
+
+    return rows, has_hard_mismatch, has_soft_mismatch
+
+
 def _three_way_match(values):
     """True if every present (non-None) value is identical, False if
     they differ, None if fewer than 2 are present to compare."""
@@ -142,6 +265,27 @@ def _build_comparison(cursor, invoice_document_id):
     )
     gr_row = cursor.fetchone()
 
+    # Line-item level 3-way matching (every row of each document's table,
+    # not just the first) — document_line_items is keyed by the SAME
+    # invoice document_id across all 3 types, matching how purchase_
+    # orders/goods_receipts already key off it (not po_id/gr_id).
+    cursor.execute(
+        '''SELECT document_type, item_code, description, quantity, unit_price, amount
+           FROM document_line_items WHERE document_id = %s ORDER BY document_type, line_no''',
+        (invoice_document_id,)
+    )
+    line_item_rows_by_type = {'invoice': [], 'po': [], 'gr': []}
+    for row in cursor.fetchall():
+        doc_type = row['document_type']
+        if doc_type in line_item_rows_by_type:
+            line_item_rows_by_type[doc_type].append({
+                'item_code':   row['item_code'],
+                'description': row['description'],
+                'quantity':    float(row['quantity']) if row['quantity'] is not None else None,
+                'unit_price':  float(row['unit_price']) if row['unit_price'] is not None else None,
+                'amount':      float(row['amount']) if row['amount'] is not None else None,
+            })
+
     invoice = {
         'document_id':      inv_row['document_id'],
         'filename':         inv_row['file_name'],
@@ -183,6 +327,19 @@ def _build_comparison(cursor, invoice_document_id):
             'item_description': gr_row['item_description'],
             'quantity':         float(gr_row['quantity']) if gr_row['quantity'] is not None else None,
         }
+
+    # ── Line items: EVERY row of each document's table, not just the
+    # first — po_items/gr_items are None when that document type isn't
+    # uploaded at all (a different state from "uploaded with 0 items"),
+    # see _match_line_items()'s docstring for why that distinction
+    # matters for missing-item detection. ──
+    line_items, line_items_hard_mismatch, line_items_soft_mismatch = _match_line_items(
+        line_item_rows_by_type['invoice'],
+        line_item_rows_by_type['po'] if po else None,
+        line_item_rows_by_type['gr'] if gr else None,
+    )
+    line_items_match = (not line_items_hard_mismatch) if line_items else None
+    line_items_price_match = (not line_items_soft_mismatch) if line_items else None
 
     # ── Vendor match: compare normalized vendor_name across every
     # present doc (invoice always present; PO/GR only if uploaded) ──
@@ -260,28 +417,40 @@ def _build_comparison(cursor, invoice_document_id):
         date_order_valid = gr['receipt_date'] <= invoice['invoice_date']
 
     # overall_status is driven by EVERY check that has a visible row/pill
-    # in the Field Comparison table (Vendor, Amount, PO Ref, Item,
-    # Quantity) — invariant: the banner can say "All Fields Match" (PASS,
-    # green) if and only if NONE of these rows is showing a Mismatch
-    # pill. Previously po_reference_match/item_match were excluded here
+    # in the Field Comparison table (Vendor, Amount, PO Ref, Line Items)
+    # — invariant: the banner can say "All Fields Match" (PASS, green) if
+    # and only if NONE of these rows is showing a Mismatch pill.
+    # Previously po_reference_match/item_match were excluded here
     # entirely, which meant a record could show a real "✗ Mismatch" pill
     # on the PO Ref or Item row while the banner still read "All Fields
     # Match — Ready for approval" — a direct contradiction an auditor
     # could act on (approving a record with a visible mismatch).
     #
-    # vendor_match/amount_match/quantity_match are HARD mismatches (FAIL,
-    # red) — these are the mature, high-confidence checks. po_reference_
-    # match/item_match are SOFT mismatches (REVIEW, amber) — best-effort
-    # regex/OCR fields more prone to false positives from wording/format
-    # differences, so a soft mismatch alone doesn't escalate all the way
-    # to FAIL, but it MUST still stop the banner from claiming a clean
-    # match. Every check here already correctly treats a missing/absent
-    # value as "not applicable" (None), never as a false mismatch —
-    # _amounts_equal/_quantities_match/_three_way_match all return None
-    # unless 2+ PRESENT values exist to compare. date_order_valid stays
-    # excluded (no visible row for it, see comment above).
-    hard_checks = [vendor_match, amount_match, quantity_match]
-    soft_checks = [po_reference_match, item_match]
+    # The single-value item_match/quantity_match (first line item only)
+    # are STILL computed and returned in match_result below for backward
+    # compatibility, but — like date_order_valid — deliberately EXCLUDED
+    # from the checks that drive overall_status: the Field Comparison
+    # table no longer has a single "Item / Description"/"Quantity" row
+    # for them (replaced by the per-line-item Line Items section), so an
+    # invisible check silently failing the banner with no matching visible
+    # row is exactly the bug the date_order_valid fix addressed, and
+    # would reintroduce it here for a different pair of fields.
+    # line_items_match (any line item quantity-mismatched or missing on
+    # PO/GR — a "critical audit finding") REPLACES quantity_match as the
+    # HARD, line-item-level check; line_items_price_match (any matched
+    # item's amount/unit_price disagrees) REPLACES item_match as the
+    # SOFT check — both computed over EVERY line item, not just the
+    # first, closing the "invoice with 3 items only ever compares item
+    # #1" gap. vendor_match/amount_match are HARD mismatches (FAIL, red)
+    # — the mature, document-level checks. po_reference_match/line_items_
+    # price_match are SOFT mismatches (REVIEW, amber) — best-effort
+    # fields more prone to false positives, so a soft mismatch alone
+    # doesn't escalate all the way to FAIL, but it MUST still stop the
+    # banner from claiming a clean match. Every check here already
+    # correctly treats a missing/absent value as "not applicable" (None),
+    # never as a false mismatch.
+    hard_checks = [vendor_match, amount_match, line_items_match]
+    soft_checks = [po_reference_match, line_items_price_match]
     applicable_checks = [c for c in hard_checks + soft_checks if c is not None]
 
     if any(c is False for c in hard_checks):
@@ -302,23 +471,27 @@ def _build_comparison(cursor, invoice_document_id):
     # disagreement.
     print(f"DEBUG comparison doc={invoice_document_id}: "
           f"vendor_match={vendor_match} amount_match={amount_match} "
-          f"po_reference_match={po_reference_match} item_match={item_match} "
-          f"quantity_match={quantity_match} date_order_valid={date_order_valid} "
-          f"(date_order_valid excluded from overall_status — see comment above) "
+          f"po_reference_match={po_reference_match} "
+          f"line_items_match={line_items_match} line_items_price_match={line_items_price_match} "
+          f"(legacy item_match={item_match} quantity_match={quantity_match} "
+          f"date_order_valid={date_order_valid} all excluded from overall_status — see comment above) "
           f"-> overall_status={overall_status}")
 
     return {
         'invoice': invoice,
         'po': po,
         'gr': gr,
+        'line_items': line_items,
         'match_result': {
-            'vendor_match':        vendor_match,
-            'amount_match':        amount_match,
-            'po_reference_match':  po_reference_match,
-            'item_match':          item_match,
-            'quantity_match':      quantity_match,
-            'date_order_valid':    date_order_valid,
-            'overall_status':      overall_status,
+            'vendor_match':           vendor_match,
+            'amount_match':           amount_match,
+            'po_reference_match':     po_reference_match,
+            'line_items_match':       line_items_match,
+            'line_items_price_match': line_items_price_match,
+            'item_match':             item_match,
+            'quantity_match':         quantity_match,
+            'date_order_valid':       date_order_valid,
+            'overall_status':         overall_status,
         }
     }
 
@@ -376,12 +549,31 @@ def _classify_exception(cursor, doc_row, comparison):
             po_cur  = (comparison['po']['currency'] or 'RM') if comparison['po'] else 'RM'
             parts.append(f"Amount differs: Invoice {inv_cur}{inv_amt} vs PO {po_cur}{po_amt}")
             label_parts.append('Amount')
-        if mr['quantity_match'] is False:
-            inv_qty = comparison['invoice']['quantity']
-            po_qty  = comparison['po']['quantity'] if comparison['po'] else None
-            gr_qty  = comparison['gr']['quantity'] if comparison['gr'] else None
-            parts.append(f"Quantity differs: PO {po_qty} vs GR {gr_qty} vs Invoice {inv_qty}")
-            label_parts.append('Quantity')
+        if mr['line_items_match'] is False:
+            # Line-item level (every row, not just the first) — a
+            # quantity mismatch OR a missing-item finding (present in one
+            # document, legitimately absent in another uploaded one) is a
+            # HARD failure per the request ("this is a critical audit
+            # finding"), same severity as vendor/amount.
+            bad_items = [
+                li for li in comparison['line_items']
+                if li['quantity_match'] is False or li['missing_on_po'] or li['missing_on_gr']
+            ]
+            item_parts = []
+            for li in bad_items[:3]:
+                desc = li['description'] or 'Unnamed item'
+                if li['missing_on_po']:
+                    item_parts.append(f'"{desc}" missing on PO')
+                elif li['missing_on_gr']:
+                    item_parts.append(f'"{desc}" missing on GR')
+                else:
+                    item_parts.append(
+                        f'"{desc}": PO {li["po_quantity"]} vs GR {li["gr_quantity"]} vs Invoice {li["invoice_quantity"]}'
+                    )
+            if len(bad_items) > 3:
+                item_parts.append(f'+{len(bad_items) - 3} more')
+            parts.append('Line item mismatch: ' + '; '.join(item_parts))
+            label_parts.append('Line Items')
         if mr['date_order_valid'] is False:
             parts.append('Document dates out of expected order')
             label_parts.append('Date')
@@ -400,9 +592,9 @@ def _classify_exception(cursor, doc_row, comparison):
         if mr['po_reference_match'] is False:
             parts.append('PO reference differs across documents')
             label_parts.append('PO Ref')
-        if mr['item_match'] is False:
-            parts.append('Item/description differs across documents')
-            label_parts.append('Item')
+        if mr['line_items_price_match'] is False:
+            parts.append('Line item amount/unit price differs across documents')
+            label_parts.append('Line Item Amount')
         label = (' & '.join(label_parts) + ' Differs') if label_parts else 'Review Required'
         detail = '; '.join(parts) or 'Some fields differ — review recommended'
         candidates.append((2, 'review', label, detail, 'medium'))

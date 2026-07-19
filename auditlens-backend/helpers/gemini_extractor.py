@@ -111,6 +111,17 @@ CURRENCY_NOTE = """
   5. If only one currency appears on the document, use that currency and
      ignore this rule."""
 
+LINE_ITEMS_NOTE = """
+- LINE ITEMS: extract EVERY row of the goods/services table (not just the first) as a "line_items"
+  array, in the SAME order as printed. Each entry:
+  {"item_code": string or null, "description": string, "quantity": number or null,
+   "unit_price": number or null, "amount": number or null}
+  1. item_code is the SKU/part-code column if the table has one (separate from description) — null
+     if there's no such column.
+  2. quantity/unit_price/amount: null for any cell you cannot confidently read, never a guess.
+  3. If there are more than 50 rows, return only the first 50.
+  4. If no line-item table can be found at all, return an empty array []."""
+
 AUTHENTICITY_SIGNALS_BLOCK = """=== PART 2: AUTHENTICITY SIGNALS ===
 Detect the following signals AND identify how this document was captured/uploaded.
 
@@ -190,7 +201,7 @@ IMPORTANT RULES:
 - PO REFERENCE: the PO number THIS invoice is billing against (often labeled "PO No.", "PO Ref", "Your PO No.") — this is
   NOT the invoice's own number.
 - ITEM DESCRIPTION and QUANTITY: from the FIRST line-item row of the goods/services table (columns like
-  "Description"/"Qty"). If multiple rows exist, use the first row.
+  "Description"/"Qty"). If multiple rows exist, use the first row.""" + LINE_ITEMS_NOTE + """
 - TOTAL AMOUNT: invoices list several amount lines — Subtotal, SST/GST/Tax, and the final Total.
   1. Return the amount on the line labeled "Total", "Grand Total", "Amount Due", or "Total (incl ...)" —
      this is the FINAL amount the customer must pay, after tax.
@@ -213,6 +224,7 @@ IMPORTANT RULES:
   "po_reference": "string or null (the PO number this invoice bills against)",
   "item_description": "string or null (first line-item row)",
   "quantity": number or null (first line-item row),
+  "line_items": [{"item_code": null, "description": "string", "quantity": null, "unit_price": null, "amount": null}],
 """ + AUTHENTICITY_JSON_TAIL
 
 PO_FULL_PROMPT = """You are an expert at extracting structured data from Malaysian SME
@@ -244,7 +256,7 @@ IMPORTANT RULES:
   5. Common Malaysian SME PO number formats: PONNNNNNN (e.g. PO3005713), PO-YYYY-NNNN, or numeric-only.
   6. If no clearly labeled PO number field exists, return null. Do NOT guess or extract from unrelated text.
   7. Length is typically 6-12 characters. Reject candidates shorter than 5.""" + DOCUMENT_NUMBER_NOTE + """
-- ITEM DESCRIPTION and QUANTITY: from the FIRST line-item row of the goods table. If multiple rows exist, use the first row.
+- ITEM DESCRIPTION and QUANTITY: from the FIRST line-item row of the goods table. If multiple rows exist, use the first row.""" + LINE_ITEMS_NOTE + """
 - Total Amount priority (return the FIRST match found):
   1. "Total Payable Incl. Tax (RM)" — highest priority (this is the final amount)
   2. "Grand Total"
@@ -270,6 +282,7 @@ IMPORTANT RULES:
   "currency": "string or null (the ORIGINAL currency of total_amount, e.g. RM, MYR, USD)",
   "item_description": "string or null (first line-item row)",
   "quantity": number or null (first line-item row),
+  "line_items": [{"item_code": null, "description": "string", "quantity": null, "unit_price": null, "amount": null}],
 """ + AUTHENTICITY_JSON_TAIL
 
 GR_FULL_PROMPT = """You are an expert at extracting structured data from Malaysian SME
@@ -303,7 +316,7 @@ IMPORTANT RULES:
   - Item Code / Part Number""" + DOCUMENT_NUMBER_NOTE + """
 - PO REFERENCE: the PO number this GR was received against (often labeled "PO Ref", "From Doc No.") — this is
   NOT the GR's own number.
-- ITEM DESCRIPTION and QUANTITY: from the FIRST line-item row of the goods table. If multiple rows exist, use the first row.
+- ITEM DESCRIPTION and QUANTITY: from the FIRST line-item row of the goods table. If multiple rows exist, use the first row.""" + LINE_ITEMS_NOTE + """
 - TOTAL AMOUNT / CURRENCY: most GRNs carry no monetary total (they record quantity received, not money) — leave
   total_amount and currency null in that case. If the GR DOES show a monetary value, apply the same original-
   currency-vs-converted-value rule as below.""" + CURRENCY_NOTE + """
@@ -320,6 +333,7 @@ IMPORTANT RULES:
   "quantity": number or null (first line-item row),
   "total_amount": number or null (usually null — most GRNs carry no monetary total),
   "currency": "string or null (only if total_amount is present)",
+  "line_items": [{"item_code": null, "description": "string", "quantity": null, "unit_price": null, "amount": null}],
 """ + AUTHENTICITY_JSON_TAIL
 
 

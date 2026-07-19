@@ -15,6 +15,67 @@ from config import Config
 
 documents_bp = Blueprint('documents', __name__)
 
+MAX_LINE_ITEMS = 50
+
+
+def _sanitize_line_items(items):
+    """Coerces a line_items list (from Gemini or the regex fallback) into
+    a clean, bounded list ready for DB insertion — never trusts Gemini's
+    JSON shape blindly. Caps at MAX_LINE_ITEMS (defensive against a
+    malformed/garbled document producing an unreasonably large result on
+    Render's free tier), drops any entry with no description (useless
+    for line-item matching), and coerces quantity/unit_price/amount to
+    float or None rather than propagating a bad type into the DB.
+    """
+    if not isinstance(items, list):
+        return []
+
+    def _num(item, key):
+        val = item.get(key)
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return None
+
+    result = []
+    for item in items[:MAX_LINE_ITEMS]:
+        if not isinstance(item, dict):
+            continue
+        desc = item.get('description')
+        if not desc:
+            continue
+        code = item.get('item_code')
+        result.append({
+            'item_code':   str(code).strip()[:100] if code else None,
+            'description': str(desc).strip()[:200],
+            'quantity':    _num(item, 'quantity'),
+            'unit_price':  _num(item, 'unit_price'),
+            'amount':      _num(item, 'amount'),
+        })
+    return result
+
+
+def _save_line_items(cursor, document_id, document_type, items):
+    """Replaces this document's line items (DELETE then INSERT) — a
+    re-upload (PO/GR can be re-uploaded onto the same document_id, see
+    the ORDER BY uploaded_at DESC LIMIT 1 pattern elsewhere in this
+    codebase) must not leave stale rows from a previous upload mixed in
+    with the new ones."""
+    cursor.execute(
+        "DELETE FROM document_line_items WHERE document_id = %s AND document_type = %s",
+        (document_id, document_type)
+    )
+    for idx, item in enumerate(items, start=1):
+        cursor.execute(
+            '''INSERT INTO document_line_items
+               (document_id, document_type, line_no, item_code, description, quantity, unit_price, amount)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
+            (document_id, document_type, idx, item['item_code'], item['description'],
+             item['quantity'], item['unit_price'], item['amount'])
+        )
+
 
 def _send_document_file(file_bytes, file_mime, file_path, file_name):
     """
@@ -119,6 +180,11 @@ def upload_document():
                         'currency', 'po_reference', 'item_description', 'quantity'):
                 if gemini_result.get(key) is not None:
                     fields[key] = gemini_result[key]
+            # line_items is list-shaped: an empty [] from Gemini means "no
+            # table found", not "override with nothing" — only replace the
+            # regex fallback's items when Gemini actually found some.
+            if gemini_result.get('line_items'):
+                fields['line_items'] = gemini_result['line_items']
 
         if fields['total_amount'] is not None:
             fields['total_amount'] = float(fields['total_amount'])
@@ -141,6 +207,8 @@ def upload_document():
              fields['currency'])
         )
         extraction_id = cursor.fetchone()[0]
+
+        _save_line_items(cursor, document_id, 'invoice', _sanitize_line_items(fields['line_items']))
 
         cursor.execute(
             "UPDATE documents SET status = 'ocr_done' WHERE document_id = %s",
@@ -238,6 +306,8 @@ def upload_purchase_order(document_id):
                         'currency', 'item_description', 'quantity'):
                 if gemini_result.get(key) is not None:
                     fields[key] = gemini_result[key]
+            if gemini_result.get('line_items'):
+                fields['line_items'] = gemini_result['line_items']
 
         if fields['total_amount'] is not None:
             fields['total_amount'] = float(fields['total_amount'])
@@ -261,6 +331,9 @@ def upload_purchase_order(document_id):
              fields['item_description'], fields['quantity'])
         )
         po_id = cursor.fetchone()[0]
+
+        _save_line_items(cursor, document_id, 'po', _sanitize_line_items(fields['line_items']))
+
         conn.commit()
         conn.close()
 
@@ -343,6 +416,8 @@ def upload_goods_receipt(document_id):
                         'total_amount', 'currency'):
                 if gemini_result.get(key) is not None:
                     fields[key] = gemini_result[key]
+            if gemini_result.get('line_items'):
+                fields['line_items'] = gemini_result['line_items']
 
         if fields['total_amount'] is not None:
             fields['total_amount'] = float(fields['total_amount'])
@@ -366,6 +441,9 @@ def upload_goods_receipt(document_id):
              fields['po_reference'], fields['item_description'], fields['quantity'])
         )
         gr_id = cursor.fetchone()[0]
+
+        _save_line_items(cursor, document_id, 'gr', _sanitize_line_items(fields['line_items']))
+
         conn.commit()
         conn.close()
 
