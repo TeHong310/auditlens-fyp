@@ -1,18 +1,18 @@
 .layout-wrapper {
   display: flex;
   min-height: 100vh;
-  background: #F0F4F8;
+  background: var(--bg-hover);
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
 .sidebar {
   width: 220px;
-  background: white;
+  background: var(--bg-card);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   padding: 24px 0;
-  box-shadow: 1px 0 0 #E5E7EB;
+  box-shadow: 1px 0 0 var(--border);
   flex-shrink: 0;
   position: fixed;
   top: 0;
@@ -48,20 +48,21 @@
   padding: 10px 12px;
   border-radius: 8px;
   font-size: 13.5px;
-  color: #6B7280;
+  color: var(--text-secondary);
   text-decoration: none;
-  transition: background 0.15s, color 0.15s;
+  transition: transform .22s cubic-bezier(.34,1.4,.64,1), background .22s ease, color .22s ease;
   cursor: pointer;
 }
 
 .nav-item:hover {
-  background: #F3F4F6;
-  color: #1A5FAB;
+  transform: translateX(5px);
+  background: var(--bg-hover);
+  color: var(--accent-soft);
 }
 
 .nav-item.active {
-  background: #EFF5FB;
-  color: #1A5FAB;
+  background: var(--accent-bg);
+  color: var(--accent-soft);
   font-weight: 600;
 }
 
@@ -81,18 +82,18 @@
   gap: 10px;
   padding: 12px;
   border-radius: 10px;
-  background: #F9FAFB;
+  background: var(--bg-hover);
   cursor: pointer;
 }
 
-.user-info:hover { background: #F3F4F6; }
+.user-info:hover { background: var(--bg-hover); }
 
 .user-avatar {
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #4A90D9, #1A5FAB);
-  color: white;
+  background: linear-gradient(135deg, var(--accent), var(--accent));
+  color: var(--text-primary);
   font-size: 14px;
   font-weight: 700;
   display: flex;
@@ -104,19 +105,19 @@
 .user-name {
   font-size: 13px;
   font-weight: 600;
-  color: #111827;
+  color: var(--text-primary);
   margin: 0;
 }
 
 .user-role {
   font-size: 11px;
-  color: #9CA3AF;
+  color: var(--text-muted);
   margin: 0;
 }
 
 .user-menu {
-  background: white;
-  border: 1px solid #E5E7EB;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 -4px 12px rgba(0,0,0,0.08);
   overflow: hidden;
@@ -136,8 +137,8 @@
   transition: background 0.15s;
 }
 
-.user-menu-item.logout { color: #EF4444; }
-.user-menu-item.logout:hover { background: #FEF2F2; }
+.user-menu-item.logout { color: var(--danger); }
+.user-menu-item.logout:hover { background: var(--danger-bg); }
 
 .main-content {
   margin-left: 220px;
@@ -153,8 +154,8 @@
   top: 12px;
   left: 12px;
   z-index: 1001;
-  background: white;
-  border: 1px solid #e5e7eb;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px 14px;
   font-size: 20px;

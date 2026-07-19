@@ -1,5 +1,37 @@
+:root {
+  --bg-app: #0D0E15;
+  --bg-card: #14151E;
+  --bg-hover: #191A24;
+  --bg-active: #1E2030;
+  --border: #1F2130;
+  --border-hover: #3A2F6B;
+  --text-primary: #FFFFFF;
+  --text-secondary: #E6E7EE;
+  --text-muted: #8B8FA3;
+  --accent: #6C4FFF;
+  --accent-soft: #8B72FF;
+  --accent-glow: rgba(108, 79, 255, .16);
+  --accent-bg: #1A1630;
+  --success: #5DCAA5;
+  --success-bg: #12241E;
+  --warning: #F0A93B;
+  --warning-bg: #2A1F0E;
+  --danger: #E5605E;
+  --danger-bg: #2A1414;
+}
+
+/* Motion respects the user's reduced-motion preference across every
+   hover micro-interaction added in this restyle. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
 html, body {
   touch-action: none;
+  background: var(--bg-app);
 }
 
 @media (max-width: 768px) {

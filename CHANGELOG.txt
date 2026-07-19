@@ -5030,3 +5030,98 @@ Setup/config needed:
      Items counts after redeploying — the pair count should drop to the
      real number of distinct products, with genuine mismatches
      (quantity shortfalls, truly missing items) still visible.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-19
+What was changed:
+  Frontend (auditlens-frontend/) — colour palette + hover micro-interactions only:
+    - Added a design-token palette (--bg-app, --bg-card, --bg-hover,
+      --bg-active, --border, --border-hover, --text-primary,
+      --text-secondary, --text-muted, --accent, --accent-soft,
+      --accent-glow, --accent-bg, --success/-bg, --warning/-bg,
+      --danger/-bg) to src/styles.css :root, moving the app from a
+      light theme to a dark one (#0D0E15 app background, #6C4FFF violet
+      accent).
+    - Swept all 17 component .css files (~5400 lines), replacing every
+      hardcoded hex/rgba colour with the matching token: old blue
+      accent (#4A90D9/#1A5FAB) -> --accent, old grays/whites -> the new
+      bg/text/border tokens, old green/amber/red status colours ->
+      --success/--warning/--danger (kept strictly semantic, never
+      reused for --accent). Old rgba() tints (e.g.
+      rgba(220,38,38,0.15)) were converted to
+      color-mix(in srgb, var(--token) N%, transparent) since a CSS
+      variable holding a full colour can't be split into rgba()'s
+      separate R/G/B arguments.
+    - Kept the uploaded-document viewing surfaces on a WHITE/paper
+      background as required: .image-panel (authenticity detail) and
+      .modal-box (record detail's PDF quick-view), plus their direct
+      children (.image-hint, .image-fallback, .legend,
+      .modal-body, .modal-spinner-wrap, .modal-error-wrap) — these sit
+      on the white surface, not app chrome, so they kept their original
+      light-appropriate colours instead of the dark tokens. Everything
+      surrounding them (headers, footers, buttons) follows the dark
+      theme normally.
+    - Added hover micro-interactions to existing elements only (no
+      markup/layout changes): sidebar nav items translateX(5px) +
+      background lift; cards/tiles translateY(-4px) + accent-glow
+      shadow (card "border" hover implemented as an inset box-shadow
+      ring rather than a literal `border` property, since
+      box-sizing:border-box isn't applied everywhere and a real border
+      would have shifted layout size); table/list rows
+      translateX(3px) + background lift; buttons and filter pills get
+      a `transition: all .2s ease` background lift. All motion wrapped
+      in `@media (prefers-reduced-motion: reduce)`.
+    - Fixed along the way (all pre-existing bugs surfaced by the dark
+      background, not introduced by it):
+        - Several status boxes had their border mapped to the same
+          token as their background (e.g. success background + success
+          background border), making 1px borders invisible; borders now
+          use the solid status token instead of the `-bg` tint.
+        - Three "combined selector, hover" CSS rules
+          (auditor-dashboard, finance-ocr-review, finance-upload) were
+          malformed as `.a, .b:hover { ... }`, applying the hover style
+          to `.a` unconditionally; fixed to `.a:hover, .b:hover`.
+        - `.note-input` (record detail's Remarks textarea) and
+          `.date-range input[type="date"]` (report page) never had an
+          explicit `background` — invisible on the old white theme,
+          rendered as a jarring white box on the new dark one. Both now
+          set `background: var(--bg-hover)`; the date input also gets
+          `color-scheme: dark` so its native calendar popup matches.
+        - ~50 usages of `color: var(--accent)` as small (11-15px) text
+          only reached 3.2-3.9:1 contrast against the dark backgrounds
+          (fails WCAG AA 4.5:1 for normal text). Swapped to the lighter
+          `--accent-soft` (#8B72FF, 4.5-5.5:1) everywhere except
+          `.brand-title` (32px/700 heading), which legitimately passes
+          the 3:1 large-text threshold at full accent strength.
+
+Why:
+  Visual refresh requested: swap the light theme for a dark violet-accented
+  one and add hover motion, with an explicit constraint to touch colour and
+  hover state only — no layout, spacing, font, border-radius, markup, route,
+  or logic changes, and the uploaded document image/PDF viewers must stay a
+  white "paper" background so real documents and their overlay markers don't
+  look wrong or lose contrast.
+
+Testing:
+  - `npx ng build --configuration=development` after each major batch of
+    changes and once more as the final check — all passed cleanly, no
+    template/markup touched.
+  - Grep-based verification that no component .css file contains a raw hex
+    value outside the deliberately-exempted white document-panel selectors
+    (.image-panel/.image-hint/.image-fallback/.legend/.modal-box/
+    .modal-body/.modal-spinner-wrap/.modal-error-wrap), each confirmed via
+    file inspection to be within the exempted zone.
+  - Computed WCAG relative-luminance contrast ratios (official formula) for
+    every text/background token pairing and every `color: var(--accent)`
+    usage; fixed the ~50 failing cases as described above.
+  - Live Playwright verification against the running dev server (all
+    backend calls intercepted/mocked, no real network calls): login,
+    auditor dashboard (including nav-item and stat-card hover states
+    captured mid-transition), record detail, exceptions, finance home, and
+    finance upload pages — confirmed dark theme renders correctly, hover
+    motion works, and caught the `.note-input` missing-background bug
+    (which static analysis alone had missed) before it shipped.
+
+Setup/config needed:
+  1. Redeploy the Render FRONTEND only — no backend files were touched.
