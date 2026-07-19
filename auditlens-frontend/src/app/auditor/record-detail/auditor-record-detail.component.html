@@ -175,8 +175,8 @@
                     <div class="li-amount-note" *ngIf="li.amount_match === false">💲 Amount/unit price differs</div>
                   </td>
                   <td class="cell-value cell-quantity">
-                    <span class="not-uploaded-label li-missing-label" *ngIf="li.invoice_quantity === null">Missing on Invoice</span>
-                    <ng-container *ngIf="li.invoice_quantity !== null">{{ formatQuantity(li.invoice_quantity) }}</ng-container>
+                    <span class="not-uploaded-label li-missing-label" *ngIf="li.missing_on_invoice">Missing on Invoice</span>
+                    <ng-container *ngIf="!li.missing_on_invoice">{{ formatQuantity(li.invoice_quantity) }}</ng-container>
                   </td>
                   <td class="cell-value" *ngIf="comparison.po">
                     <span class="match-pill" [ngClass]="lineItemPillClass(li, 'po')">

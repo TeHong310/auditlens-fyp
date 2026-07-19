@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request, Response
 from flask_jwt_extended import jwt_required, get_jwt_identity
 import psycopg2.extras
 from db import get_db_connection, get_user_by_id
+from helpers.ocr_helper import split_item_code_prefix
 
 auditor_bp = Blueprint('auditor', __name__)
 
@@ -80,28 +81,76 @@ def _normalize_text(val):
     return v or None
 
 
-def _line_item_key(item_code, description):
-    """Matching key for a line item across documents: item_code when
-    present (normalized: uppercase, strip non-alphanumerics), otherwise
-    normalized description (case-insensitive, collapsed whitespace) via
-    _normalize_text — same "tolerate minor OCR differences via
-    normalization, not fuzzy matching" philosophy as _normalize_vendor/
-    _normalize_ref elsewhere in this file. Returns None if neither is
-    usable (nothing to match this item on)."""
-    if item_code:
-        code = re.sub(r'[^A-Za-z0-9]', '', str(item_code)).upper()
-        if code:
-            return ('code', code)
-    desc = _normalize_text(description)
-    return ('desc', desc) if desc else None
+def _line_item_tokens(item):
+    """(code_key, desc_key) for one line item, used by _find_line_item_
+    match() below. code_key is the normalized item_code (uppercase,
+    non-alphanumerics stripped) or None. desc_key is the normalized
+    description via _normalize_text, with any leading item-code-shaped
+    token STRIPPED first (split_item_code_prefix) — this is what makes
+    matching robust even when item_code wasn't split out on one side:
+    "SLT-MOS-N60R MOSFET N-Ch 600V TO-220" and "MOSFET N-Ch 600V TO-220"
+    both reduce to the same desc_key regardless of which document's
+    extraction path already normalized it (persistence-time
+    normalization in routes/documents.py's _sanitize_line_items() is
+    the primary fix for NEW uploads; this is the defense-in-depth
+    fallback that also fixes matching for records already in the DB
+    from before that fix existed)."""
+    code = item.get('item_code')
+    code_key = re.sub(r'[^A-Za-z0-9]', '', str(code)).upper() if code else None
+    desc = item.get('description') or ''
+    _, stripped = split_item_code_prefix(desc)
+    desc_key = _normalize_text(stripped or desc)
+    return code_key, desc_key
+
+
+def _find_line_item_match(target, candidates, used):
+    """Finds the first not-yet-used candidate matching `target`, trying
+    (in order): exact item_code, exact normalized description, then a
+    containment check (one normalized description contains the other —
+    guards against a length-4 description trivially matching everything
+    by requiring at least 6 normalized characters). Returns the matching
+    index into `candidates`, or None."""
+    target_code, target_desc = _line_item_tokens(target)
+
+    if target_code:
+        for i, cand in enumerate(candidates):
+            if i in used:
+                continue
+            cand_code, _ = _line_item_tokens(cand)
+            if cand_code and cand_code == target_code:
+                return i
+
+    if not target_desc:
+        return None
+
+    for i, cand in enumerate(candidates):
+        if i in used:
+            continue
+        _, cand_desc = _line_item_tokens(cand)
+        if cand_desc and cand_desc == target_desc:
+            return i
+
+    if len(target_desc) >= 6:
+        for i, cand in enumerate(candidates):
+            if i in used:
+                continue
+            _, cand_desc = _line_item_tokens(cand)
+            if cand_desc and len(cand_desc) >= 6 and (target_desc in cand_desc or cand_desc in target_desc):
+                return i
+
+    return None
 
 
 def _match_line_items(invoice_items, po_items, gr_items):
     """
     Matches line items across Invoice/PO/GR by item_code (when present)
-    else normalized description, and compares quantity/amount per
-    matched item. Each of invoice_items/po_items/gr_items is a list of
-    dicts (from document_line_items: 'item_code','description',
+    else normalized description — with a containment fallback so
+    "SLT-MOS-N60R MOSFET N-Ch 600V TO-220" (code left inline, e.g. from
+    the regex fallback or an older upload) still pairs with "MOSFET
+    N-Ch 600V TO-220" + item_code "SLT-MOS-N60R" (code split out, e.g.
+    by Gemini) — see _find_line_item_match(). Compares quantity/amount
+    per matched item. Each of invoice_items/po_items/gr_items is a list
+    of dicts (from document_line_items: 'item_code','description',
     'quantity','unit_price','amount') for a document that WAS uploaded,
     or None for a document that was NOT uploaded — that distinction
     matters for missing-item detection: an item can only be "missing on
@@ -118,56 +167,48 @@ def _match_line_items(invoice_items, po_items, gr_items):
       rows: one dict per distinct matched item, in invoice-then-PO-only-
         then-GR-only order: {'description', 'item_code', 'invoice_
         quantity', 'po_quantity', 'gr_quantity', 'quantity_match',
-        'amount_match', 'missing_on_po', 'missing_on_gr'}
+        'amount_match', 'missing_on_po', 'missing_on_gr',
+        'missing_on_invoice'}
       has_hard_mismatch: True if any item has a quantity mismatch or a
-        missing-item finding — a HARD failure (escalates overall_status
-        to FAIL), same severity as the existing vendor/amount/quantity
-        checks.
+        missing-item finding (on ANY of the three documents, including
+        an item present on PO/GR but missing from the invoice) — a HARD
+        failure (escalates overall_status to FAIL), same severity as
+        the existing vendor/amount/quantity checks.
       has_soft_mismatch: True if any item has an amount mismatch (with
         no hard issue on that same item) — a SOFT signal (REVIEW), same
         severity as the existing po_reference/item checks.
     """
-    def keyed(items):
-        mapping = {}
-        order = []
-        for it in (items or []):
-            key = _line_item_key(it.get('item_code'), it.get('description'))
-            if key is None or key in mapping:
-                continue
-            mapping[key] = it
-            order.append(key)
-        return mapping, order
-
-    # Treat "uploaded but 0 items extracted" the same as "not uploaded"
-    # for missing-item purposes (see docstring) — po_present/gr_present
-    # track the REAL "was this document type ever a candidate for a
-    # missing-item finding at all" state.
     po_present = po_items is not None and len(po_items) > 0
     gr_present = gr_items is not None and len(gr_items) > 0
+    po_items = po_items if po_present else []
+    gr_items = gr_items if gr_present else []
+    invoice_items = invoice_items or []
 
-    inv_map, inv_order = keyed(invoice_items)
-    po_map, po_order = keyed(po_items if po_present else [])
-    gr_map, gr_order = keyed(gr_items if gr_present else [])
-
-    seen = set()
-    ordered_keys = []
-    for key in inv_order + po_order + gr_order:
-        if key not in seen:
-            seen.add(key)
-            ordered_keys.append(key)
-
+    po_used, gr_used = set(), set()
     rows = []
     has_hard_mismatch = False
     has_soft_mismatch = False
 
-    for key in ordered_keys:
-        inv_item = inv_map.get(key)
-        po_item = po_map.get(key)
-        gr_item = gr_map.get(key)
+    def build_row(inv_item, po_item, gr_item):
+        nonlocal has_hard_mismatch, has_soft_mismatch
 
-        description = (inv_item or po_item or gr_item or {}).get('description')
-        item_code = (inv_item or po_item or gr_item or {}).get('item_code')
+        # Canonical label: prefer whichever side has item_code split out
+        # already (the "clean" representation) over one that still has
+        # it inline in description, so the row shows ONE consistent
+        # label regardless of which document's extraction happened to
+        # be picked — not two different formats for the same product.
+        description = item_code = None
+        for it in (inv_item, po_item, gr_item):
+            if it and it.get('item_code'):
+                description, item_code = it.get('description'), it.get('item_code')
+                break
+        if item_code is None:
+            for it in (inv_item, po_item, gr_item):
+                if it and it.get('description'):
+                    description, item_code = it.get('description'), it.get('item_code')
+                    break
 
+        missing_on_invoice = inv_item is None
         missing_on_po = po_present and po_item is None
         missing_on_gr = gr_present and gr_item is None
 
@@ -183,22 +224,51 @@ def _match_line_items(invoice_items, po_items, gr_items):
         if len(amt_values) >= 2:
             amount_match = all(abs(v - amt_values[0]) < 0.01 for v in amt_values[1:])
 
-        if quantity_match is False or missing_on_po or missing_on_gr:
+        if quantity_match is False or missing_on_invoice or missing_on_po or missing_on_gr:
             has_hard_mismatch = True
         if amount_match is False:
             has_soft_mismatch = True
 
         rows.append({
-            'description':      description,
-            'item_code':        item_code,
-            'invoice_quantity': inv_item['quantity'] if inv_item else None,
-            'po_quantity':      po_item['quantity'] if po_item else None,
-            'gr_quantity':      gr_item['quantity'] if gr_item else None,
-            'quantity_match':   quantity_match,
-            'amount_match':     amount_match,
-            'missing_on_po':    missing_on_po,
-            'missing_on_gr':    missing_on_gr,
+            'description':        description,
+            'item_code':          item_code,
+            'invoice_quantity':   inv_item['quantity'] if inv_item else None,
+            'po_quantity':        po_item['quantity'] if po_item else None,
+            'gr_quantity':        gr_item['quantity'] if gr_item else None,
+            'quantity_match':     quantity_match,
+            'amount_match':       amount_match,
+            'missing_on_invoice': missing_on_invoice,
+            'missing_on_po':      missing_on_po,
+            'missing_on_gr':      missing_on_gr,
         })
+
+    # Anchor on invoice items first (existing row-ordering convention:
+    # invoice-then-PO-only-then-GR-only), pairing each with its best
+    # match (if any) among the not-yet-used PO/GR items.
+    for inv_item in invoice_items:
+        po_idx = _find_line_item_match(inv_item, po_items, po_used) if po_present else None
+        gr_idx = _find_line_item_match(inv_item, gr_items, gr_used) if gr_present else None
+        if po_idx is not None:
+            po_used.add(po_idx)
+        if gr_idx is not None:
+            gr_used.add(gr_idx)
+        build_row(inv_item, po_items[po_idx] if po_idx is not None else None,
+                  gr_items[gr_idx] if gr_idx is not None else None)
+
+    # PO items with no invoice counterpart — still try to pair with GR.
+    for i, po_item in enumerate(po_items):
+        if i in po_used:
+            continue
+        gr_idx = _find_line_item_match(po_item, gr_items, gr_used) if gr_present else None
+        if gr_idx is not None:
+            gr_used.add(gr_idx)
+        build_row(None, po_item, gr_items[gr_idx] if gr_idx is not None else None)
+
+    # GR items with no invoice/PO counterpart at all.
+    for i, gr_item in enumerate(gr_items):
+        if i in gr_used:
+            continue
+        build_row(None, None, gr_item)
 
     return rows, has_hard_mismatch, has_soft_mismatch
 

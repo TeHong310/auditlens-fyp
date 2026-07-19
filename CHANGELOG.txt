@@ -4867,3 +4867,166 @@ Setup/config needed:
      `document_line_items` — that path only writes on upload; flagging
      this as a known gap for a follow-up if backfilling old records via
      Re-check turns out to matter).
+
+------------------------------------------------------------------------------
+2026-07-19 - Fix line-item matching failing to pair identical items
+             extracted in different formats, producing duplicated
+             "Missing on X" rows for the same real product
+
+Root cause: the SAME product was extracted with a DIFFERENT item_code/
+  description shape depending on which extraction path ran for each
+  document — e.g. invoice: item_code="SLT-MOS-N60R", description="MOSFET
+  N-Ch 600V TO-220" (code split out); PO/GR: item_code=null,
+  description="SLT-MOS-N60R MOSFET N-Ch 600V TO-220" (code left inline).
+  The previous entry's matching key was pure dict lookup (item_code if
+  present, ELSE the RAW normalized description) — since the two sides'
+  descriptions were literally different strings ("MOSFET N-Ch 600V
+  TO-220" vs "SLT-MOS-N60R MOSFET N-Ch 600V TO-220"), they never
+  produced the same key and were treated as two unrelated items, each
+  reported as "Missing on X" on the document that had the OTHER format
+  — a 4-item matched set rendered as "Line Items (8)".
+
+FIX 1 — normalize item_code/description consistently at the SOURCE
+(helpers/ocr_helper.py, routes/documents.py):
+  - New `split_item_code_prefix()`: splits a leading item-code-shaped
+    token off a description (requires a hyphen AND a digit in the
+    token, e.g. "SLT-MOS-N60R", "MTC-IND-4R7M" — deliberately narrower
+    than "starts with a hyphenated word", which would false-split an
+    ordinary hyphenated product name like "Heavy-Duty Bracket").
+  - New `normalize_line_item_code()`: applies that split uniformly to
+    ONE line item dict — if item_code is already set (e.g. Gemini split
+    it out itself) and description ALSO still starts with that same
+    code (Gemini put it in both places on some rows), the duplicate is
+    stripped from description too, so the displayed label is never
+    "SLT-MOS-N60R MOSFET N-Ch 600V TO-220" when item_code is already
+    "SLT-MOS-N60R" — the "one consistent label" part of the request.
+  - Wired into `routes/documents.py`'s `_sanitize_line_items()` — the
+    single choke point BOTH the regex fallback's and Gemini's
+    line_items already pass through before persistence (established in
+    the previous entry), so this one change point covers every
+    extraction path × every document type without duplicating the
+    logic three times.
+  - Strengthened the shared `LINE_ITEMS_NOTE` Gemini prompt (used by
+    all three of invoice/PO/GR) to explicitly instruct splitting a
+    leading code token EITHER from a real separate code column OR from
+    a single combined description cell, consistently across every row
+    and every document type — reduces how often Gemini produces the
+    inconsistent shape in the first place, though the ingestion-side
+    fix above is what actually GUARANTEES consistency regardless of
+    what Gemini does.
+
+FIX 2 — make matching robust regardless of format, as defense-in-depth
+(routes/auditor.py): the ingestion-side fix only helps NEW uploads —
+records already in `document_line_items` from before this fix keep
+their old inconsistent shape, so matching itself also needed to be
+resilient:
+  - Replaced the old pure-dict-key matching (`_line_item_key`) with
+    `_line_item_tokens()` + `_find_line_item_match()`: for each
+    candidate pairing, tries (in order) exact item_code match, exact
+    normalized-description match, then a CONTAINMENT check (one
+    normalized description contains the other — guarded to require at
+    least 6 characters on each side, so short descriptions can't
+    trivially "contain" everything). Description-based matching now
+    also runs `split_item_code_prefix()` on-the-fly before comparing —
+    "SLT-MOS-N60R MOSFET N-Ch 600V TO-220" and "MOSFET N-Ch 600V
+    TO-220" reduce to the same comparison key even if neither side was
+    ever normalized at ingestion (e.g. old data).
+  - `_match_line_items()` rewritten around this: invoice items are
+    matched first against not-yet-used PO/GR items (greedy, first-fit),
+    then leftover PO-only items are matched against remaining GR items,
+    then leftover GR-only items form their own rows — same
+    invoice-then-PO-only-then-GR-only row ordering as before.
+  - Canonical label selection: a matched row's displayed description/
+    item_code now prefers whichever side ALREADY has item_code split
+    out (the "clean" representation) over a side that still has it
+    inline, rather than an arbitrary "whichever document happened to be
+    checked first" pick — directly serves the "one consistent label,
+    not two different formats" part of the request even for legacy
+    unnormalized data.
+  - Bug found and fixed while implementing this: a line item present on
+    PO/GR but with NO invoice counterpart at all (e.g. a PO item that
+    was included as a leftover, unmatched row) was previously never
+    flagged as a hard mismatch — `missing_on_po`/`missing_on_gr` are
+    computed as "this document exists but doesn't have this item",
+    which is FALSE for an item that DOES exist on that same document (a
+    PO-only row's `po_item` is, by definition, present). Added a new
+    `missing_on_invoice` field (`True` when a row has no invoice-side
+    item) and included it in `has_hard_mismatch` — the "PO item never
+    received"/"invoice bills an item never ordered" cases from the
+    original request were both about items missing FROM the invoice's
+    perspective, but a PO/GR-originated extra item is symmetrically
+    just as real a finding and wasn't being caught.
+
+FRONTEND: the Invoice column's "Missing on Invoice" marker now reads the
+new explicit `missing_on_invoice` field instead of inferring it from
+`invoice_quantity === null` (the same signal, but explicit rather than
+implied — and now also correctly drives the row's hard-mismatch styling
+via the backend fix above, which the implicit check never did).
+
+Why: line-item matching is only useful if it actually recognizes the
+  same product across independently-extracted documents — an extraction-
+  format inconsistency that makes every real match look like two missing
+  items is worse than not having line-item matching at all, since it
+  actively misleads the auditor into thinking documents disagree about
+  more items than they actually do.
+
+Testing (all offline, no live Gemini/network/DB call):
+  - `python -c "import ast; ast.parse(...)"` on every changed backend
+    file — compiles clean. `npx ng build --configuration=development` —
+    passes clean.
+  - New test (scratchpad, not committed) covering, in order:
+    (1) `split_item_code_prefix()`/`normalize_line_item_code()` directly
+    — confirmed a real code prefix splits correctly, a plain description
+    with no hyphen is left alone, and a hyphenated word with NO digit
+    ("Heavy-Duty Bracket") is correctly NOT split (guards against false
+    positives); confirmed a Gemini-already-split item and a regex-inline
+    item for the SAME product normalize to the IDENTICAL shape.
+    (2) `_sanitize_line_items()` directly against a raw, format-
+    inconsistent 2-item Gemini-shaped list — confirmed both items end up
+    with the same item_code/description shape.
+    (3) THE exact reported bug, end-to-end through `_build_comparison()`:
+    a 4-item set where invoice items are given as description-without-
+    code + separate item_code (simulating Gemini's split behavior) and
+    PO/GR items are given as "CODE description" in one string with
+    item_code null (simulating the regex fallback/inconsistent Gemini
+    behavior) — confirmed exactly 4 rows (not 8), and that the format
+    inconsistency doesn't mask or fabricate findings: item 1 (fully
+    matching across all 3 documents) correctly shows `quantity_match`
+    True and neither missing flag; item 2's GENUINE short-receipt (5000
+    ordered/invoiced, 4800 actually received) still correctly shows
+    `quantity_match` False with the real 4800 figure visible; item 3
+    (fully matching) shows True; item 4 (genuinely never ordered on the
+    PO nor received on the GR — on the invoice only) correctly shows
+    both `missing_on_po` and `missing_on_gr` True with its invoice
+    quantity (600) still visible; `overall_status` is FAIL (driven by
+    the two genuine issues, not the four format-inconsistent items that
+    are NOT flagged as mismatched). Also confirmed the displayed
+    description for the paired item has the code prefix stripped (one
+    consistent label), not "SLT-MOS-N60R MOSFET N-Ch 600V TO-220" with
+    the code duplicated in the text.
+  - Full browser-level Playwright verification against the live dev
+    server (scratchpad, not committed, screenshots taken and visually
+    reviewed): a PO-only item with no invoice counterpart at all —
+    confirmed the row gets `row-mismatch` + `row-quantity-alert` styling
+    and visibly shows "Missing on Invoice", and the banner correctly
+    reads "Mismatch Detected" (closing the `missing_on_invoice` gap
+    found while implementing FIX 2, before treating it as done).
+  - Re-ran all seven pre-existing offline test suites from prior
+    entries — all still pass, no regression from the rewritten matching
+    logic or the new normalization step.
+
+Setup/config needed:
+  1. Redeploy the Render backend AND frontend together — the frontend's
+     `missing_on_invoice` field read depends on the backend actually
+     returning it.
+  2. Existing `document_line_items` rows from before this fix keep their
+     original inconsistent item_code/description shape (this fix
+     doesn't retroactively rewrite stored data) — FIX 2's robust
+     matching (description-stripping + containment fallback) is what
+     makes those existing records match correctly without needing a
+     re-upload; only NEWLY uploaded/re-checked documents get the
+     cleaner, consistent item_code/description shape from FIX 1.
+  3. Re-open any record that previously showed inflated/duplicated Line
+     Items counts after redeploying — the pair count should drop to the
+     real number of distinct products, with genuine mismatches
+     (quantity shortfalls, truly missing items) still visible.

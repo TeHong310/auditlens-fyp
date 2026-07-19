@@ -116,11 +116,19 @@ LINE_ITEMS_NOTE = """
   array, in the SAME order as printed. Each entry:
   {"item_code": string or null, "description": string, "quantity": number or null,
    "unit_price": number or null, "amount": number or null}
-  1. item_code is the SKU/part-code column if the table has one (separate from description) — null
-     if there's no such column.
-  2. quantity/unit_price/amount: null for any cell you cannot confidently read, never a guess.
-  3. If there are more than 50 rows, return only the first 50.
-  4. If no line-item table can be found at all, return an empty array []."""
+  1. item_code is the SKU/part-code (e.g. "SLT-MOS-N60R", "MTC-IND-4R7M") if the description cell
+     has one — whether it's printed in a SEPARATE code column, OR as the leading token of a single
+     combined description cell (e.g. the cell reads "SLT-MOS-N60R MOSFET N-Ch 600V TO-220"). EITHER
+     WAY, split it out into item_code and put ONLY the remaining text ("MOSFET N-Ch 600V TO-220")
+     in description — never leave the code duplicated inside description once it's been captured
+     in item_code. This must be done CONSISTENTLY for every row, on every document type (invoice,
+     PO, GR) — the SAME product on different documents must end up with the SAME item_code and
+     description, since these are matched against each other across documents.
+  2. If a row's description has no code-shaped prefix at all, item_code is null and description is
+     the full cell text unchanged.
+  3. quantity/unit_price/amount: null for any cell you cannot confidently read, never a guess.
+  4. If there are more than 50 rows, return only the first 50.
+  5. If no line-item table can be found at all, return an empty array []."""
 
 AUTHENTICITY_SIGNALS_BLOCK = """=== PART 2: AUTHENTICITY SIGNALS ===
 Detect the following signals AND identify how this document was captured/uploaded.

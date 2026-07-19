@@ -329,7 +329,7 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   }
 
   lineItemRowClass(li: any): string[] {
-    const hardIssue = li.quantity_match === false || li.missing_on_po || li.missing_on_gr;
+    const hardIssue = li.quantity_match === false || li.missing_on_invoice || li.missing_on_po || li.missing_on_gr;
     if (hardIssue) return ['row-mismatch', 'row-quantity-alert'];
     // amount_match is a SOFT check (drives the amber REVIEW banner state,
     // never red FAIL) — still needs a visible row indicator, or it would

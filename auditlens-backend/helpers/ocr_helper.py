@@ -339,6 +339,75 @@ def extract_amount(text):
             pass
     return None
 
+
+def split_item_code_prefix(text):
+    """
+    Splits a leading item-code-shaped token off a line-item description,
+    e.g. "SLT-MOS-N60R MOSFET N-Ch 600V TO-220" -> ("SLT-MOS-N60R",
+    "MOSFET N-Ch 600V TO-220"). This app's document tables put the item
+    code as the first token of the Description cell when a code exists
+    at all — but WHICH extraction path produced a given line item
+    (Gemini vision, which sometimes splits the code into its own field
+    and sometimes leaves it inline; the regex fallback, which never
+    splits) is inconsistent, and the SAME product extracted via two
+    different paths (e.g. invoice via Gemini, PO via regex fallback)
+    would otherwise compare as two different items during 3-way
+    matching. Called uniformly on every line item regardless of source
+    so item_code/description end up in the same shape either way.
+
+    A token counts as code-shaped only if it contains a hyphen AND a
+    digit (e.g. "SLT-MOS-N60R", "MTC-IND-4R7M") — this rules out an
+    ordinary hyphenated word (no digit) accidentally being split off a
+    plain description. Returns (item_code, remaining_description); if
+    the text doesn't start with a code-shaped token, returns
+    (None, text) unchanged.
+    """
+    if not text:
+        return None, text
+    parts = text.split(None, 1)
+    if len(parts) != 2:
+        return None, text
+    token, rest = parts
+    if '-' not in token or not re.match(r'^[A-Za-z0-9-]+$', token):
+        return None, text
+    if not re.search(r'\d', token):
+        return None, text
+    if not re.match(r'^[A-Za-z]', rest):
+        return None, text
+    return token.upper(), rest.strip()
+
+
+def normalize_line_item_code(item):
+    """
+    Ensures a single line-item dict's item_code/description end up in a
+    consistent shape via split_item_code_prefix() — called uniformly on
+    every extracted item (Gemini AND regex fallback, invoice AND PO AND
+    GR) right before persistence, which is what actually guarantees the
+    same product compares equal across documents regardless of which
+    extraction path produced each side. Mutates and returns `item`.
+
+    If item_code is already set (e.g. Gemini split it out itself) and
+    description STILL starts with that same code (Gemini put it in
+    both places), the duplicate is stripped from description too. If
+    item_code is unset, a code-shaped prefix is split out of
+    description into item_code.
+    """
+    desc = (item.get('description') or '').strip()
+    code = (item.get('item_code') or '').strip() or None
+    prefix_code, remainder = split_item_code_prefix(desc)
+
+    if code:
+        norm_code = re.sub(r'[^A-Za-z0-9]', '', code).upper()
+        norm_prefix = re.sub(r'[^A-Za-z0-9]', '', prefix_code).upper() if prefix_code else None
+        if norm_prefix and norm_prefix == norm_code:
+            item['description'] = remainder
+    elif prefix_code:
+        item['item_code'] = prefix_code
+        item['description'] = remainder
+
+    return item
+
+
 def is_buyer_line(line):
     line_lower = line.lower()
     for keyword in BUYER_KEYWORDS:

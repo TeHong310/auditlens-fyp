@@ -7,7 +7,10 @@ import mimetypes
 from datetime import datetime
 from db import get_db_connection, get_user_by_id
 from helpers.audit_log import log_audit
-from helpers.ocr_helper import run_ocr, extract_fields, extract_po_fields, extract_gr_fields, calculate_confidence, parse_date
+from helpers.ocr_helper import (
+    run_ocr, extract_fields, extract_po_fields, extract_gr_fields, calculate_confidence, parse_date,
+    normalize_line_item_code,
+)
 from helpers.anomaly_detector import run_anomaly_detection
 from helpers.authenticity_check import run_authenticity_check
 from helpers.gemini_extractor import gemini_extract_invoice_full, gemini_extract_po_full, gemini_extract_gr_full
@@ -26,6 +29,15 @@ def _sanitize_line_items(items):
     Render's free tier), drops any entry with no description (useless
     for line-item matching), and coerces quantity/unit_price/amount to
     float or None rather than propagating a bad type into the DB.
+
+    Also runs normalize_line_item_code() on every item — Gemini
+    sometimes splits a leading item-code token (e.g. "SLT-MOS-N60R") out
+    of the description into its own item_code field, sometimes leaves
+    it inline, and the regex fallback never splits it at all. Without
+    this, the SAME product extracted via different paths (e.g. invoice
+    via Gemini, PO via the regex fallback) ends up with a different
+    item_code/description shape and 3-way matching (routes/auditor.py)
+    fails to pair them, reporting each side as "missing" on the other.
     """
     if not isinstance(items, list):
         return []
@@ -47,9 +59,13 @@ def _sanitize_line_items(items):
         if not desc:
             continue
         code = item.get('item_code')
-        result.append({
+        clean = normalize_line_item_code({
             'item_code':   str(code).strip()[:100] if code else None,
             'description': str(desc).strip()[:200],
+        })
+        result.append({
+            'item_code':   clean['item_code'],
+            'description': clean['description'],
             'quantity':    _num(item, 'quantity'),
             'unit_price':  _num(item, 'unit_price'),
             'amount':      _num(item, 'amount'),
