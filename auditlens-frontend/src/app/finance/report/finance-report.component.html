@@ -149,7 +149,7 @@
             <th>File Name</th>
             <th>Invoice No</th>
             <th>Vendor</th>
-            <th>Amount (RM)</th>
+            <th>Amount</th>
             <th>Upload Date</th>
             <th>Status</th>
             <th>Match Score</th>
@@ -167,7 +167,7 @@
             <td class="doc-name">{{ doc.file_name }}</td>
             <td>{{ doc.invoice_number || '-' }}</td>
             <td class="vendor-name">{{ doc.vendor_name || '-' }}</td>
-            <td>{{ doc.total_amount ? 'RM ' + doc.total_amount : '-' }}</td>
+            <td>{{ doc.total_amount ? (doc.currency || '') + ' ' + doc.total_amount : '-' }}</td>
             <td>{{ formatDate(doc.uploaded_at) }}</td>
             <td>
               <span class="badge" [ngClass]="getStatusClass(doc.status)">

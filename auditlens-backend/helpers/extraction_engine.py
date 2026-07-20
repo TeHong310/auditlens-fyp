@@ -139,21 +139,34 @@ def log_extraction_result(document_type, field, candidates, selected):
 # ============================================================
 # AMOUNT scoring (invoice total_amount / PO total_amount / GR total_amount)
 # ============================================================
-# Checked in this order — SUB TOTAL/SUBTOTAL must be tested before the
-# bare "total" keyword below it (it's a substring of "sub total"), and
-# any HIGH_PRIORITY label must be tested before NEGATIVE keywords so a
-# legitimate label like "Total Payable Incl. Tax" scores as a real total
-# rather than getting penalized just for containing the word "tax".
-_AMOUNT_SUBTOTAL_LABELS = ('sub total', 'subtotal')
-_AMOUNT_HIGH_PRIORITY_LABELS = (
-    'grand total', 'total amount', 'amount due', 'balance due',
-    'net payable', 'order total', 'purchase total', 'total payable',
-    'total value', 'total',
+# AP-aware amount candidate scoring. The requested point scale (+50/+40/
+# +30/... , -40/-30/-20) is reported verbatim in the `reason` text for
+# every candidate (visible in every "TOTAL CANDIDATES"/EXTRACTION RESULT
+# debug log) but the actual returned confidence_score stays on this
+# engine's existing 0-100 scale — used by select_best_amount()'s ">5 is
+# usable" floor and log_extraction_result()'s NEEDS_REVIEW_THRESHOLD
+# (=60), both shared across amount/document-number/date scoring — so the
+# relative-priority POINT VALUES the spec asks for are preserved exactly
+# (Grand Total/Total Payable > Amount Due/Invoice Total > Total Amount >
+# medium > negative) without needing a field-type-specific threshold.
+#
+# Checked in this order — more specific/longer phrases first, since a
+# phrase like "Total Payable Incl. Tax" or "Invoice Total" must win on
+# its OWN tier before the negative "tax" keyword (or the generic bare
+# "total") ever gets a chance to match a substring of it.
+_AMOUNT_SUBTOTAL_LABELS = ('sub total', 'subtotal')                      # AP score -30
+_AMOUNT_SCORE_50_LABELS = ('grand total', 'total payable')               # AP score +50
+_AMOUNT_SCORE_40_LABELS = (                                              # AP score +40
+    'amount due', 'invoice total', 'purchase order total',
+    'balance due', 'net payable',
 )
-_AMOUNT_MEDIUM_PRIORITY_LABELS = ('net amount', 'amount')
-_AMOUNT_NEGATIVE_KEYWORDS = (
-    'gst', 'tax', 'vat', 'sst', 'unit price', 'price each',
-    'qty', 'quantity', 'discount',
+_AMOUNT_SCORE_30_LABELS = (                                              # AP score +30
+    'total amount', 'order total', 'purchase total', 'total value', 'total',
+)
+_AMOUNT_MEDIUM_PRIORITY_LABELS = ('net amount', 'amount')                # AP score +15
+_AMOUNT_NEGATIVE_40_KEYWORDS = ('gst', 'tax', 'vat', 'sst')               # AP score -40
+_AMOUNT_NEGATIVE_20_KEYWORDS = (                                         # AP score -20
+    'unit price', 'price each', 'qty', 'quantity', 'discount',
 )
 
 
@@ -161,17 +174,26 @@ def score_amount_context(context_text):
     text = (context_text or '').lower()
     for kw in _AMOUNT_SUBTOTAL_LABELS:
         if kw in text:
-            return 55, f'medium priority keyword "{kw}"'
-    for kw in _AMOUNT_HIGH_PRIORITY_LABELS:
+            return 10, f'AP score -30: subtotal keyword "{kw}" (not the final total)'
+    for kw in _AMOUNT_SCORE_50_LABELS:
         if kw in text:
-            return 95, f'high priority total keyword "{kw}"'
+            return 95, f'AP score +50: high priority total keyword "{kw}"'
+    for kw in _AMOUNT_SCORE_40_LABELS:
+        if kw in text:
+            return 85, f'AP score +40: high priority total keyword "{kw}"'
+    for kw in _AMOUNT_SCORE_30_LABELS:
+        if kw in text:
+            return 70, f'AP score +30: total keyword "{kw}"'
     for kw in _AMOUNT_MEDIUM_PRIORITY_LABELS:
         if kw in text:
-            return 55, f'medium priority keyword "{kw}"'
-    for kw in _AMOUNT_NEGATIVE_KEYWORDS:
+            return 50, f'AP score +15: medium priority keyword "{kw}"'
+    for kw in _AMOUNT_NEGATIVE_40_KEYWORDS:
         if kw in text:
-            return 5, f'negative keyword "{kw}" present — likely not the document total'
-    return 30, 'no recognized total keyword (bare amount)'
+            return 5, f'AP score -40: negative keyword "{kw}" — likely not the document total'
+    for kw in _AMOUNT_NEGATIVE_20_KEYWORDS:
+        if kw in text:
+            return 15, f'AP score -20: negative keyword "{kw}" — likely not the document total'
+    return 30, 'AP score +10: no recognized total keyword (bare amount)'
 
 
 # ============================================================
@@ -200,6 +222,77 @@ def score_docnumber_context(context_text, high_priority_labels):
 
 def is_rejected_docnumber_value(value):
     return (not value) or (len(value) <= 2) or (value.strip().lower() in DOCNUMBER_REJECT_VALUES)
+
+
+# ============================================================
+# PO REFERENCE scoring (the PO an invoice/GR was raised against — NOT
+# that document's own number) — distinct from PO_NUMBER_LABELS above,
+# which scores a PO's OWN document-number extraction.
+# ============================================================
+# Priority order per spec: PO Number label > Purchase Order label >
+# P/O label > Document No. Checked in this order, first match wins.
+_PO_REFERENCE_PRIORITY = (
+    ('po number',       95, 'PO Number label (highest priority)'),
+    ('po no',           85, 'PO No label'),
+    ('purchase order',  80, 'Purchase Order label'),
+    ('p/o',             70, 'P/O label'),
+    ('document no',     60, 'Document No label'),
+    ('doc no',          60, 'Doc No label'),
+)
+_PO_REFERENCE_REJECT_KEYWORDS = (
+    'invoice no', 'delivery no', 'gr no', 'goods receipt no', 'receipt no',
+)
+
+
+def score_po_reference_context(context_text):
+    text = (context_text or '').lower()
+    for kw in _PO_REFERENCE_REJECT_KEYWORDS:
+        if kw in text:
+            return 5, f'reject-list keyword "{kw}" — likely a different document\'s number, not the PO reference'
+    for kw, score, label in _PO_REFERENCE_PRIORITY:
+        if kw in text:
+            return score, label
+    return 35, 'no recognized PO-reference label'
+
+
+# ============================================================
+# VENDOR NAME scoring — AP vendor intelligence: the vendor is the
+# SUPPLIER/SELLER/invoice issuer, never the buyer/customer/receiving
+# company. Checked in this order — the negative (buyer-side) labels
+# first, since a "Bill To"/"Ship To" section can still contain a company
+# name shaped exactly like a real vendor name.
+# ============================================================
+VENDOR_LABEL_SCORES = (
+    ('bill to',           -50, 'Bill To (the customer/buyer, not the vendor)'),
+    ('ship to',           -50, 'Ship To (the customer/buyer, not the vendor)'),
+    ('invoice to',        -50, 'Invoice To (the customer/buyer, not the vendor)'),
+    ('customer',          -40, 'Customer (the buyer, not the vendor)'),
+    ('buyer',             -40, 'Buyer (the buyer, not the vendor)'),
+    ('delivery address',  -30, 'Delivery address (the buyer\'s, not the vendor\'s)'),
+    ('deliver to',        -30, 'Deliver To (the buyer\'s address, not the vendor\'s)'),
+    ('supplier',           60, 'Supplier label'),
+    ('vendor',             60, 'Vendor label'),
+    ('seller',             60, 'Seller label'),
+    ('invoice issuer',     40, 'Invoice issuer label'),
+    ('issued by',          40, 'Issued by label'),
+)
+
+
+def score_vendor_context(context_text, is_header=False, near_invoice_number=False):
+    """context_text: the line (or heading) the candidate company name was
+    found on/near. is_header: True if this candidate came from the
+    document's header/letterhead area (top of the page, before any
+    Bill-To/Ship-To section). near_invoice_number: True if found close to
+    the invoice/PO/GR's own document-number line."""
+    text = (context_text or '').lower()
+    for kw, score, label in VENDOR_LABEL_SCORES:
+        if kw in text:
+            return score, label
+    if is_header:
+        return 50, 'Header company (top of document)'
+    if near_invoice_number:
+        return 30, 'Company near invoice/document number'
+    return 20, 'no recognized vendor label'
 
 
 # ============================================================
@@ -272,6 +365,11 @@ _CURRENCY_PATTERNS = (
     ('USD', (r'u\.s\.\$', r'\bus\$', r'\busd\b', r'\bdollar')),
     ('SGD', (r's\$', r'\bsgd\b')),
     ('EUR', (r'\beur\b', r'€')),
+    # JPY and CNY historically share the "¥" glyph — only JPY claims the
+    # bare symbol (the far more common case in these documents); CNY is
+    # only recognized via its unambiguous code/abbreviation.
+    ('JPY', (r'\bjpy\b', r'¥')),
+    ('CNY', (r'\bcny\b', r'\brmb\b')),
     ('MYR', (r'\brm\b', r'\bmyr\b', r'\bringgit')),
 )
 

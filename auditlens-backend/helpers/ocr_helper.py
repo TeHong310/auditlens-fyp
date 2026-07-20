@@ -9,6 +9,7 @@ from config import Config
 from helpers.extraction_engine import (
     make_candidate, select_best, select_best_amount, log_extraction_result,
     score_amount_context, score_docnumber_context, score_date_context,
+    score_vendor_context, score_po_reference_context,
     is_rejected_docnumber_value, find_reverse_proximity_amount,
     detect_currency_candidates, select_currency, log_currency_result,
     INVOICE_NUMBER_LABELS, PO_NUMBER_LABELS, GR_NUMBER_LABELS,
@@ -17,16 +18,11 @@ from helpers.extraction_engine import (
 
 INVOICE_BLACKLIST = ['account no', 'account number', 'deposit', 'page', 'sub total', 'total']
 
-# Companies that are typically BUYERS (to exclude from vendor detection)
-BUYER_KEYWORDS = [
-    'northern point', 'invoice to', 'bill to', 'sold to', 'deliver to',
-    'ship to', 'attn', 'attention'
-]
-
 # On a PO, the letterhead at the top is the BUYER (the company issuing the
 # order) — the actual vendor/supplier is named under one of these headings
-# instead. Unlike invoice's is_buyer_line() (skip a known-buyer line, take
-# the first company match otherwise), PO vendor extraction must not trust
+# instead. Unlike invoice's vendor extraction (score every company-name
+# candidate via score_vendor_context(), letting buyer-indicator keywords
+# demote rather than hard-reject), PO vendor extraction must not trust
 # ANY company match until one of these headings has been seen — see
 # extract_po_fields(). Matches "Supplier"/"Supplier Address"/"Vendor"/
 # "Bill To Vendor" anywhere in the line, or a bare "To"/"To:" label at the
@@ -416,13 +412,6 @@ def normalize_line_item_code(item):
     return item
 
 
-def is_buyer_line(line):
-    line_lower = line.lower()
-    for keyword in BUYER_KEYWORDS:
-        if keyword in line_lower:
-            return True
-    return False
-
 def run_google_vision_ocr(image_path):
     with open(image_path, 'rb') as f:
         image_data = base64.b64encode(f.read()).decode('utf-8')
@@ -577,6 +566,8 @@ def extract_fields(ocr_text):
     invoice_number_candidates = []
     invoice_date_candidates   = []
     amount_candidates         = []
+    vendor_candidates         = []
+    po_reference_candidates   = []
 
     fields['line_items'] = _extract_all_line_items(lines)
 
@@ -614,37 +605,50 @@ def extract_fields(ocr_text):
         next_line  = lines[i + 1].strip() if i + 1 < len(lines) else ''
 
         # ── VENDOR NAME ───────────────────────────────────
-        # Strategy: Find company name that is NOT the buyer
-        if fields['vendor_name'] is None:
-            # Look for company names (Sdn Bhd, Ltd, etc.)
-            company_match = re.search(
-                r'^([\w\s&\.\-\(\)\/]+(?:sdn\.?\s*bhd\.?|berhad|corporation|corp|ltd\.?|enterprise|trading|network|logistics|broadband|applications)[\w\s&\.\-\(\)\/\-]*)',
-                line_clean, re.IGNORECASE
-            )
-            if company_match:
-                vendor = company_match.group(1).strip()
-                # Skip if this line is part of buyer section
-                if (len(vendor) > 5 and
-                    not is_buyer_line(line_clean) and
-                    not is_buyer_line(lines[i-1] if i > 0 else '') and
-                    not re.search(r'\b(customer|invoice\s*to|bill\s*to|deliver\s*to|ship\s*to)\b',
-                                  ' '.join(lines[max(0,i-2):i]), re.IGNORECASE)):
-                    fields['vendor_name'] = clean_vendor_name(vendor)
+        # Every company-name-shaped match becomes a candidate — scored
+        # via score_vendor_context() using nearby buyer-indicator
+        # keywords (Bill To/Customer/Ship To — negative) and header
+        # position (positive, before any Bill-To/Invoice-To section)
+        # instead of hard-rejecting on a buyer-context check, so a
+        # document where the correct vendor line happens to sit near an
+        # ambiguous mention still has a scored fallback rather than
+        # nothing at all.
+        company_match = re.search(
+            r'^([\w\s&\.\-\(\)\/]+(?:sdn\.?\s*bhd\.?|berhad|corporation|corp|ltd\.?|enterprise|trading|network|logistics|broadband|applications)[\w\s&\.\-\(\)\/\-]*)',
+            line_clean, re.IGNORECASE
+        )
+        if company_match:
+            vendor = company_match.group(1).strip()
+            if len(vendor) > 5:
+                vendor_context = ' '.join(lines[max(0, i - 2):i + 1])
+                is_header = invoice_to_index == -1 or i < invoice_to_index
+                score, reason = score_vendor_context(vendor_context, is_header=is_header)
+                vendor_candidates.append(make_candidate(
+                    clean_vendor_name(vendor), vendor_context, i, score, reason))
 
         # ── PO REFERENCE ──────────────────────────────────
         # The PO number this invoice is billing against (not this
         # invoice's own number) — the anchor field for the 3-way audit
         # comparison. Requires an explicit ":"/"-" after the label so a
         # bare "PO" mention elsewhere on the page can't false-positive.
-        if fields['po_reference'] is None:
-            match = re.search(
-                r'\b(?:p\.?o\.?|purchase\s*order)\s*(?:no\.?|number|ref\.?)?\s*[:\-]\s*([A-Za-z0-9\-\/]+)',
-                line_clean, re.IGNORECASE
-            )
-            if match:
-                val = match.group(1).strip()
-                if len(val) > 2:
-                    fields['po_reference'] = val
+        # Every match becomes a candidate, scored via
+        # score_po_reference_context() (priority: PO Number > Purchase
+        # Order > P/O label).
+        match = re.search(
+            r'\b(?:p\.?o\.?|purchase\s*order)\s*(?:no\.?|number|ref\.?)?\s*[:\-]\s*([A-Za-z0-9\-\/]+)',
+            line_clean, re.IGNORECASE
+        )
+        if match:
+            val = match.group(1).strip()
+            if len(val) > 2:
+                score, reason = score_po_reference_context(line_clean)
+                po_reference_candidates.append(make_candidate(val, line_clean, i, score, reason))
+        elif re.search(r'^(?:p\.?o\.?|purchase\s*order)\s*(?:no\.?|number|ref\.?)?\s*$', line_clean, re.IGNORECASE):
+            # Two-line form: label alone, value on the next line — same
+            # pattern relied on elsewhere in this file.
+            if next_line and re.match(r'^[A-Za-z0-9\-\/]+$', next_line) and len(next_line) > 2:
+                score, reason = score_po_reference_context(line_clean)
+                po_reference_candidates.append(make_candidate(next_line, line_clean, i, score, reason))
 
         # ── LINE ITEM: description + qty from the SAME table row ──
         # Tabular layout: "1  Aluminium Bracket A100  120  8.00  960.00"
@@ -990,6 +994,23 @@ def extract_fields(ocr_text):
     fields['_confidence']['invoice_date'] = log_extraction_result(
         'Invoice', 'invoice_date', invoice_date_candidates, selected_invoice_date)
 
+    selected_vendor = select_best(vendor_candidates)
+    if selected_vendor:
+        fields['vendor_name'] = selected_vendor['value']
+    fields['_confidence']['vendor_name'] = log_extraction_result(
+        'Invoice', 'vendor_name', vendor_candidates, selected_vendor)
+    _vendor_cand_str = ',\n'.join(
+        f'{{\n"name": {c["value"]!r},\n"score": {c["confidence_score"]},\n"reason": {c["reason"]!r}\n}}'
+        for c in vendor_candidates
+    ) or '(none found)'
+    print(f"VENDOR EXTRACTION DEBUG\n\nCandidates:\n\n[\n{_vendor_cand_str}\n]\n\nSelected:\n{fields['vendor_name']}")
+
+    selected_po_reference = select_best(po_reference_candidates)
+    if selected_po_reference:
+        fields['po_reference'] = selected_po_reference['value']
+    fields['_confidence']['po_reference'] = log_extraction_result(
+        'Invoice', 'po_reference', po_reference_candidates, selected_po_reference)
+
     # ══════════════════════════════════════════════════════
     # FALLBACKS — Generic, works for any invoice
     # ══════════════════════════════════════════════════════
@@ -1115,6 +1136,7 @@ def extract_po_fields(ocr_text):
 
     lines = ocr_text.split('\n')
     amount_candidates = []
+    vendor_candidates = []
     # Every po_number attempt across all extraction passes below — scored
     # via score_docnumber_context()/PO_NUMBER_LABELS, selected via
     # select_best() once the whole document has been scanned (not
@@ -1299,11 +1321,16 @@ def extract_po_fields(ocr_text):
         if PO_SUPPLIER_HEADING_RE.search(line_clean):
             seen_supplier_heading = True
 
-        if fields['vendor_name'] is None and seen_supplier_heading:
+        if seen_supplier_heading:
             # Unanchored (unlike invoice/GR's `^...`) so a same-line label
             # like "Supplier: MEGATECH COMPONENTS (M) SDN. BHD." still
             # matches starting at the company name, not failing because
-            # "Supplier:" precedes it.
+            # "Supplier:" precedes it. Every match becomes a candidate,
+            # scored via score_vendor_context() — the heading gate above
+            # already guarantees the letterhead/buyer can never become a
+            # candidate at all, so this is purely for picking the best
+            # among multiple post-heading matches (e.g. supplier name vs.
+            # an unrelated company mentioned in their address).
             match = re.search(
                 r'([\w\s&\.\-\(\)]+(?:sdn\.?\s*bhd\.?|berhad|corporation|corp|ltd\.?|enterprise|trading)[\w\s&\.\-\(\)]*)',
                 line_clean, re.IGNORECASE
@@ -1311,7 +1338,9 @@ def extract_po_fields(ocr_text):
             if match:
                 vendor = match.group(1).strip()
                 if len(vendor) > 5:
-                    fields['vendor_name'] = clean_vendor_name(vendor)
+                    score, reason = score_vendor_context(line_clean)
+                    vendor_candidates.append(make_candidate(
+                        clean_vendor_name(vendor), line_clean, i, score, reason))
 
         # Every match becomes a candidate, scored via score_date_context()/
         # PO_DATE_LABEL_SCORES — not first-match-wins.
@@ -1405,6 +1434,18 @@ def extract_po_fields(ocr_text):
         fields['po_date'] = normalize_date_string(selected_po_date['value'])
     fields['_confidence']['po_date'] = log_extraction_result(
         'PO', 'po_date', po_date_candidates, selected_po_date)
+
+    selected_vendor = select_best(vendor_candidates)
+    if selected_vendor:
+        fields['vendor_name'] = selected_vendor['value']
+    fields['_confidence']['vendor_name'] = log_extraction_result(
+        'PO', 'vendor_name', vendor_candidates, selected_vendor)
+    _vendor_cand_str = ',\n'.join(
+        f'{{\n"name": {c["value"]!r},\n"score": {c["confidence_score"]},\n"reason": {c["reason"]!r}\n}}'
+        for c in vendor_candidates
+    ) or '(none found)'
+    print(f"VENDOR EXTRACTION DEBUG\n\nCandidates:\n\n[\n{_vendor_cand_str}\n]\n\nSelected:\n{fields['vendor_name']}")
+
     if fields['po_date'] is None:
         match = re.search(r'(\d{1,2}\/\d{1,2}\/\d{4})', ocr_text)
         if match:
@@ -1524,6 +1565,8 @@ def extract_gr_fields(ocr_text):
     lines = ocr_text.split('\n')
     amount_candidates = []
     gr_number_candidates = []
+    vendor_candidates = []
+    po_reference_candidates = []
     # On a GR the letterhead at the top is the RECEIVING company, never
     # the vendor — the actual supplier is named under a "Received From"/
     # "Supplier"/"Delivered By" heading further down. Same gating pattern
@@ -1591,16 +1634,31 @@ def extract_gr_fields(ocr_text):
         # ── PO REFERENCE ──────────────────────────────────
         # Real EMITS-style GRNs reference the PO via "From Doc No.:
         # PO3006000" rather than "PO No:"/"PO Ref:" — added as an
-        # alternative label alongside the existing ones.
-        if fields['po_reference'] is None:
-            match = re.search(
-                r'\b(?:p\.?o\.?|purchase\s*order|from\s*doc)\s*(?:no\.?|number|ref\.?)?\s*[:\-]\s*([A-Za-z0-9\-\/]+)',
-                line_clean, re.IGNORECASE
-            )
-            if match:
-                val = match.group(1).strip()
-                if len(val) > 2:
-                    fields['po_reference'] = val
+        # alternative label alongside the existing ones. Every match
+        # becomes a candidate, scored via score_po_reference_context()
+        # (priority: PO Number > Purchase Order > P/O > Document No —
+        # "From Doc No." scores at the Document No tier via its "doc no"
+        # substring).
+        match = re.search(
+            r'\b(?:p\.?o\.?|purchase\s*order|from\s*doc)\s*(?:no\.?|number|ref\.?)?\s*[:\-]\s*([A-Za-z0-9\-\/]+)',
+            line_clean, re.IGNORECASE
+        )
+        if match:
+            val = match.group(1).strip()
+            if len(val) > 2:
+                score, reason = score_po_reference_context(line_clean)
+                po_reference_candidates.append(make_candidate(val, line_clean, i, score, reason))
+        elif re.search(
+            r'^(?:p\.?o\.?|purchase\s*order|from\s*doc)\s*(?:no\.?|number|ref\.?)?\s*$',
+            line_clean, re.IGNORECASE
+        ):
+            # Two-line form: Google Vision OCR commonly puts the label
+            # and its value on SEPARATE lines (same pattern relied on
+            # elsewhere in this file) — a bare "From Doc No." label line,
+            # with the PO number as the very next line.
+            if next_line and re.match(r'^[A-Za-z0-9\-\/]+$', next_line) and len(next_line) > 2:
+                score, reason = score_po_reference_context(line_clean)
+                po_reference_candidates.append(make_candidate(next_line, line_clean, i, score, reason))
 
         # ── LINE ITEM: description + qty from the SAME table row ──
         # Tabular layout: "1  Aluminium Bracket A100  120  8.00  960.00"
@@ -1696,10 +1754,13 @@ def extract_gr_fields(ocr_text):
         if GR_SUPPLIER_HEADING_RE.search(line_clean):
             seen_supplier_heading = True
 
-        if fields['vendor_name'] is None and seen_supplier_heading:
+        if seen_supplier_heading:
             # Unanchored, same reason as extract_po_fields() — a same-line
             # label like "Received From: MEGATECH..." must still match
-            # starting at the company name.
+            # starting at the company name. Every match becomes a
+            # candidate, scored via score_vendor_context() — the heading
+            # gate above already guarantees the letterhead/receiving
+            # company can never become a candidate at all.
             match = re.search(
                 r'([\w\s&\.\-\(\)]+(?:sdn\.?\s*bhd\.?|berhad|corporation|corp|ltd\.?|enterprise|trading)[\w\s&\.\-\(\)]*)',
                 line_clean, re.IGNORECASE
@@ -1707,7 +1768,9 @@ def extract_gr_fields(ocr_text):
             if match:
                 vendor = match.group(1).strip()
                 if len(vendor) > 5:
-                    fields['vendor_name'] = clean_vendor_name(vendor)
+                    score, reason = score_vendor_context(line_clean)
+                    vendor_candidates.append(make_candidate(
+                        clean_vendor_name(vendor), line_clean, i, score, reason))
 
         # ── RECEIPT DATE — every date-labeled line becomes a candidate,
         # scored via score_date_context()/GR_DATE_LABEL_SCORES (see the
@@ -1799,6 +1862,23 @@ def extract_gr_fields(ocr_text):
         fields['gr_number'] = selected_gr_number['value']
     fields['_confidence']['gr_number'] = log_extraction_result(
         'GR', 'gr_number', gr_number_candidates, selected_gr_number)
+
+    selected_vendor = select_best(vendor_candidates)
+    if selected_vendor:
+        fields['vendor_name'] = selected_vendor['value']
+    fields['_confidence']['vendor_name'] = log_extraction_result(
+        'GR', 'vendor_name', vendor_candidates, selected_vendor)
+    _vendor_cand_str = ',\n'.join(
+        f'{{\n"name": {c["value"]!r},\n"score": {c["confidence_score"]},\n"reason": {c["reason"]!r}\n}}'
+        for c in vendor_candidates
+    ) or '(none found)'
+    print(f"VENDOR EXTRACTION DEBUG\n\nCandidates:\n\n[\n{_vendor_cand_str}\n]\n\nSelected:\n{fields['vendor_name']}")
+
+    selected_po_reference = select_best(po_reference_candidates)
+    if selected_po_reference:
+        fields['po_reference'] = selected_po_reference['value']
+    fields['_confidence']['po_reference'] = log_extraction_result(
+        'GR', 'po_reference', po_reference_candidates, selected_po_reference)
 
     # Fallback for GR number — this previously ran INSIDE the block above
     # by accident (bad indentation nested it under `if fields['gr_number']

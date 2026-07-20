@@ -522,6 +522,7 @@ def finance_report():
                 ef.invoice_date,
                 ef.total_amount,
                 ef.tax_amount,
+                ef.currency,
                 ef.ocr_confidence,
                 rm.match_score,
                 rm.overall_status,

@@ -48,8 +48,12 @@ def run_case_coilcraft_invoice():
     check('invoice_date == "2 March 2026"', fields['invoice_date'] == '2 March 2026', fields['invoice_date'])
     check('total_amount == 8020.00', fields['total_amount'] == 8020.00, fields['total_amount'])
     check('currency == USD', fields['currency'] == 'USD', fields['currency'])
-    check('total_amount confidence >= 90 (high priority label)',
-          fields['_confidence']['total_amount']['confidence'] >= 90,
+    # AP amount scoring: a bare "Total" (as in "TOTAL (US$)") scores at
+    # the +30 "Total Amount" tier — below "Grand Total"/"Total Payable"
+    # (+50) and "Amount Due"/"Invoice Total" (+40) — so not needs_review,
+    # but not the top confidence tier either.
+    check('total_amount not needing review',
+          fields['_confidence']['total_amount']['needs_review'] is False,
           fields['_confidence']['total_amount'])
 
 

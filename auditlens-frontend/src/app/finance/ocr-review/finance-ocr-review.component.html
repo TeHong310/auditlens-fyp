@@ -166,12 +166,12 @@
                  [class.field-missing]="!editFields.invoice_date" placeholder="Not detected"/>
         </div>
         <div class="field-item">
-          <label class="field-label">Total Amount (RM)</label>
+          <label class="field-label">{{ selectedDoc.currency ? 'Total Amount (' + selectedDoc.currency + ')' : 'Total Amount' }}</label>
           <input class="field-input" type="number" [(ngModel)]="editFields.total_amount"
                  [class.field-missing]="!editFields.total_amount" placeholder="Not detected"/>
         </div>
         <div class="field-item" *ngIf="showTaxAmount">
-          <label class="field-label">Tax Amount (RM)</label>
+          <label class="field-label">{{ selectedDoc.currency ? 'Tax Amount (' + selectedDoc.currency + ')' : 'Tax Amount' }}</label>
           <input class="field-input" type="number" [(ngModel)]="editFields.tax_amount" placeholder="0.00"/>
         </div>
         <button type="button" class="btn-add-tax" *ngIf="!showTaxAmount" (click)="addTaxAmount()">
@@ -230,7 +230,7 @@
               <td class="file-link">{{ po.file_name }}</td>
               <td class="invoice-no">{{ po.po_number || '-' }}</td>
               <td>{{ po.vendor_name || '-' }}</td>
-              <td>{{ po.total_amount ? 'RM ' + po.total_amount : '-' }}</td>
+              <td>{{ po.total_amount ? (po.currency || '') + ' ' + po.total_amount : '-' }}</td>
             </tr>
           </tbody>
         </table>
@@ -272,7 +272,7 @@
                  placeholder="Not detected"/>
         </div>
         <div class="field-item">
-          <label class="field-label">Total Amount (RM)</label>
+          <label class="field-label">{{ selectedPO.currency ? 'Total Amount (' + selectedPO.currency + ')' : 'Total Amount' }}</label>
           <input class="field-input" type="number" [(ngModel)]="editPOFields.total_amount"
                  [class.field-missing]="!editPOFields.total_amount" placeholder="Not detected"/>
         </div>

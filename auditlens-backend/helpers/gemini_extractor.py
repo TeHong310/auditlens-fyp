@@ -102,6 +102,22 @@ def _get_client():
         _client = genai.Client(api_key=Config.GEMINI_API_KEY)
     return _client
 
+AP_EXPERT_NOTE = """You are an AP (Accounts Payable) automation expert, not a generic OCR
+reader. Analyze the document's CONTEXT before extracting any value —
+do not extract the first company name, the first date, or the first
+amount you encounter; read the whole layout and understand:
+- which company is the SUPPLIER and which is the CUSTOMER/BUYER
+- whether this document is an invoice, a purchase order, or a goods
+  receipt, and what that implies about which fields even apply
+- which amount is the real TOTAL and which is a TAX/SUBTOTAL/line-item
+  figure that merely looks similar
+- which date is this document's OWN date and which belongs to a
+  different, merely-referenced document
+- which rows of a table are genuine line items vs. shipping/tax/footer
+  text
+If you are not confident in a value after this analysis, return null —
+never guess."""
+
 DOCUMENT_QUALITY_NOTE = """These documents may be:
 - Scanned (CamScanner watermark visible)
 - Handwritten annotations mixed with typed text
@@ -144,7 +160,11 @@ DOCUMENT_NUMBER_NOTE = """
 
 CURRENCY_NOTE = """
 - CURRENCY & MULTI-CURRENCY TOTALS: identify the currency of the primary total
-  (e.g. RM, MYR, USD, US$) and return it in the "currency" field.
+  and return it in the "currency" field. Recognize any of: RM/MYR (Ringgit),
+  USD/US$/U.S.$ (US Dollar), S$/SGD (Singapore Dollar), EUR/€ (Euro),
+  JPY/¥ (Japanese Yen), CNY/RMB/¥ (Chinese Yuan) — never assume MYR/RM as a
+  default when no currency marker is visible; if genuinely no currency symbol
+  or code appears anywhere near the total, return null for currency (not "MYR").
   Some documents show BOTH an original-currency total AND a converted
   local-currency total via an exchange rate, e.g. "TOTAL (US$) 8,020.00"
   together with "EXCHANGE RATE=1.2670 ... SUB TOTAL= 10,161.34 ... TOTAL=
@@ -192,7 +212,11 @@ LINE_ITEMS_NOTE = """
      the full cell text unchanged.
   3. quantity/unit_price/amount: null for any cell you cannot confidently read, never a guess.
   4. If there are more than 50 rows, return only the first 50.
-  5. If no line-item table can be found at all, return an empty array []."""
+  5. If no line-item table can be found at all, return an empty array [].
+  6. Do NOT include as a line item: a shipping/freight/delivery charge row, a tax/GST/SST row, a
+     subtotal/total/grand total row, or footer text (terms and conditions, bank details, signatures,
+     notes) — even if it visually appears as the last row(s) of the same table. Only genuine
+     goods/services rows belong in line_items."""
 
 AUTHENTICITY_SIGNALS_BLOCK = """=== PART 2: AUTHENTICITY SIGNALS ===
 Detect the following signals AND identify how this document was captured/uploaded.
@@ -259,7 +283,7 @@ business documents AND detecting authenticity signals on them. You are looking
 directly at the invoice IMAGE (not OCR text), so read the actual layout.
 
 === PART 1: FIELD EXTRACTION ===
-""" + DOCUMENT_QUALITY_NOTE + LABEL_NOT_VALUE_NOTE + """
+""" + AP_EXPERT_NOTE + "\n" + DOCUMENT_QUALITY_NOTE + LABEL_NOT_VALUE_NOTE + """
 
 IMPORTANT RULES:
 - The VENDOR is the entity ISSUING the invoice (the seller), typically shown as the company name in the document header at the top
@@ -282,7 +306,7 @@ IMPORTANT RULES:
   Do NOT use, even if no better candidate is found:
   - a "PO Date" / "Order Date" (that belongs to the referenced Purchase Order, a different document)
   - a "Delivery Date" (when goods are/were delivered, not when the invoice was issued)
-  - a "Due Date" / "Payment Due Date" (when payment is owed, not when the invoice was issued)
+  - a "Due Date" / "Payment Due Date" / "Payment Date" (when payment is owed/made, not when the invoice was issued)
   If none of the three invoice-date labels above can be found, return null rather than substituting a
   PO/delivery/due date.
 - TOTAL AMOUNT: invoices list several amount lines — Subtotal, SST/GST/Tax, the final Total, and often
@@ -344,7 +368,7 @@ business documents AND detecting authenticity signals on them. You are looking
 directly at the PURCHASE ORDER (PO) IMAGE (not OCR text), so read the actual layout.
 
 === PART 1: FIELD EXTRACTION ===
-""" + DOCUMENT_QUALITY_NOTE + LABEL_NOT_VALUE_NOTE + """
+""" + AP_EXPERT_NOTE + "\n" + DOCUMENT_QUALITY_NOTE + LABEL_NOT_VALUE_NOTE + """
 
 IMPORTANT RULES:
 - CRITICAL — VENDOR NAME is a COMMON MISTAKE, read carefully: the company
@@ -434,7 +458,7 @@ business documents AND detecting authenticity signals on them. You are looking
 directly at the GOODS RECEIPT (GR) IMAGE (not OCR text), so read the actual layout.
 
 === PART 1: FIELD EXTRACTION ===
-""" + DOCUMENT_QUALITY_NOTE + LABEL_NOT_VALUE_NOTE + """
+""" + AP_EXPERT_NOTE + "\n" + DOCUMENT_QUALITY_NOTE + LABEL_NOT_VALUE_NOTE + """
 
 IMPORTANT RULES:
 - CRITICAL — VENDOR NAME is a COMMON MISTAKE, read carefully: the company

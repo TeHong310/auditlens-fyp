@@ -16,6 +16,7 @@ from helpers.anomaly_detector import run_anomaly_detection
 from helpers.authenticity_check import run_authenticity_check
 from helpers.gemini_extractor import gemini_extract_invoice_full, gemini_extract_po_full, gemini_extract_gr_full
 from helpers.gemini_cache import compute_file_hash, get_cached_gemini_result, save_gemini_result_to_cache
+from helpers.confidence_engine import compute_field_confidence, log_field_confidence
 from helpers.extraction_validator import validate_extraction
 from config import Config
 
@@ -286,9 +287,15 @@ def upload_document():
         print(f"DEBUG INVOICE PIPELINE\nOCR fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 1/5)
         _debug_log_memory('5_after_ocr_processing')  # TEMP-DEBUG-MEM
 
+        _merge_keys = ('invoice_number', 'vendor_name', 'invoice_date', 'total_amount', 'tax_amount',
+                       'currency', 'po_reference', 'item_description', 'quantity')
+        # Snapshot OCR's own value per field BEFORE the merge below
+        # overwrites it — needed to compute Gemini-vs-OCR agreement
+        # confidence (see helpers/confidence_engine.py) after the merge.
+        _ocr_values = {key: fields.get(key) for key in _merge_keys}
+
         if gemini_result:
-            for key in ('invoice_number', 'vendor_name', 'invoice_date', 'total_amount', 'tax_amount',
-                        'currency', 'po_reference', 'item_description', 'quantity'):
+            for key in _merge_keys:
                 if gemini_result.get(key) is not None:
                     fields[key] = gemini_result[key]
             # line_items is list-shaped: an empty [] from Gemini means "no
@@ -296,6 +303,13 @@ def upload_document():
             # regex fallback's items when Gemini actually found some.
             if gemini_result.get('line_items'):
                 fields['line_items'] = gemini_result['line_items']
+
+        _field_confidence = {
+            key: compute_field_confidence(
+                (gemini_result or {}).get(key), _ocr_values[key], fields.get('_confidence', {}).get(key))
+            for key in _merge_keys
+        }
+        log_field_confidence('Invoice', _field_confidence)
 
         if fields['total_amount'] is not None:
             fields['total_amount'] = float(fields['total_amount'])
@@ -465,13 +479,23 @@ def upload_purchase_order(document_id):
         fields     = extract_po_fields(ocr_text)
         print(f"DEBUG PO PIPELINE\nOCR fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 1/5)
 
+        _merge_keys = ('po_number', 'vendor_name', 'po_date', 'total_amount',
+                       'currency', 'item_description', 'quantity')
+        _ocr_values = {key: fields.get(key) for key in _merge_keys}
+
         if gemini_result:
-            for key in ('po_number', 'vendor_name', 'po_date', 'total_amount',
-                        'currency', 'item_description', 'quantity'):
+            for key in _merge_keys:
                 if gemini_result.get(key) is not None:
                     fields[key] = gemini_result[key]
             if gemini_result.get('line_items'):
                 fields['line_items'] = gemini_result['line_items']
+
+        _field_confidence = {
+            key: compute_field_confidence(
+                (gemini_result or {}).get(key), _ocr_values[key], fields.get('_confidence', {}).get(key))
+            for key in _merge_keys
+        }
+        log_field_confidence('PO', _field_confidence)
 
         if fields['total_amount'] is not None:
             fields['total_amount'] = float(fields['total_amount'])
@@ -621,14 +645,24 @@ def upload_goods_receipt(document_id):
         fields     = extract_gr_fields(ocr_text)
         print(f"DEBUG GR PIPELINE\nOCR fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 1/5)
 
+        _merge_keys = ('gr_number', 'vendor_name', 'receipt_date',
+                       'po_reference', 'item_description', 'quantity',
+                       'total_amount', 'currency')
+        _ocr_values = {key: fields.get(key) for key in _merge_keys}
+
         if gemini_result:
-            for key in ('gr_number', 'vendor_name', 'receipt_date',
-                        'po_reference', 'item_description', 'quantity',
-                        'total_amount', 'currency'):
+            for key in _merge_keys:
                 if gemini_result.get(key) is not None:
                     fields[key] = gemini_result[key]
             if gemini_result.get('line_items'):
                 fields['line_items'] = gemini_result['line_items']
+
+        _field_confidence = {
+            key: compute_field_confidence(
+                (gemini_result or {}).get(key), _ocr_values[key], fields.get('_confidence', {}).get(key))
+            for key in _merge_keys
+        }
+        log_field_confidence('GR', _field_confidence)
 
         if fields['total_amount'] is not None:
             fields['total_amount'] = float(fields['total_amount'])
@@ -908,7 +942,7 @@ def get_documents():
         if user['role'] == 'finance_executive':
             cursor.execute(
                 '''SELECT d.*, ef.invoice_number, ef.vendor_name, ef.invoice_date,
-                          ef.total_amount, ef.tax_amount, ef.ocr_confidence
+                          ef.total_amount, ef.tax_amount, ef.ocr_confidence, ef.currency
                    FROM documents d
                    LEFT JOIN extracted_fields ef ON d.document_id = ef.document_id
                    WHERE d.uploaded_by = %s
@@ -918,7 +952,7 @@ def get_documents():
         else:
             cursor.execute(
                 '''SELECT d.*, ef.invoice_number, ef.vendor_name, ef.invoice_date,
-                          ef.total_amount, ef.tax_amount, ef.ocr_confidence
+                          ef.total_amount, ef.tax_amount, ef.ocr_confidence, ef.currency
                    FROM documents d
                    LEFT JOIN extracted_fields ef ON d.document_id = ef.document_id
                    ORDER BY d.uploaded_at DESC'''
