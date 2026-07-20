@@ -262,33 +262,54 @@ IMPORTANT RULES:
   NOT the invoice's own number.
 - ITEM DESCRIPTION and QUANTITY: from the FIRST line-item row of the goods/services table (columns like
   "Description"/"Qty"). If multiple rows exist, use the first row.""" + LINE_ITEMS_NOTE + """
+- INVOICE DATE: the date THIS invoice was issued.
+  Label priority (use the FIRST of these that appears on the document):
+  1. "Invoice Date"
+  2. "Date of Invoice"
+  3. "Invoice Issue Date"
+  Do NOT use, even if no better candidate is found:
+  - a "PO Date" / "Order Date" (that belongs to the referenced Purchase Order, a different document)
+  - a "Delivery Date" (when goods are/were delivered, not when the invoice was issued)
+  - a "Due Date" / "Payment Due Date" (when payment is owed, not when the invoice was issued)
+  If none of the three invoice-date labels above can be found, return null rather than substituting a
+  PO/delivery/due date.
 - TOTAL AMOUNT: invoices list several amount lines — Subtotal, SST/GST/Tax, the final Total, and often
   UNRELATED numbers nearby (bank/account numbers, handwritten notes, reference codes). Read the whole
   document layout and pick the correct FINAL payable amount; do not just grab the nearest number to the
-  word "Total".
-  Label priority (use the FIRST of these that appears on the document):
+  word "Total". Use this LAYERED priority — try Priority 1 first, then Priority 2, then Priority 3 only
+  if neither matched:
+  Priority 1 (highest — check these labels first):
   1. "TOTAL"
-  2. "TOTAL PAYABLE"
-  3. "AMOUNT DUE"
-  4. "Grand Total"
+  2. "GRAND TOTAL"
+  3. "TOTAL PAYABLE"
+  4. "AMOUNT DUE"
+  Priority 2 (check these if none of Priority 1 is present):
+  5. "TOTAL AMOUNT"
+  6. "NET AMOUNT"
+  7. "AMOUNT"
+  Priority 3 (only if NO exact label from Priority 1 or 2 exists anywhere on the document): select the
+  final payable monetary value from the document's summary/totals area (typically the bottom-most and/or
+  largest clearly-labeled monetary figure there) rather than returning null — a real invoice's payable
+  amount is usually identifiable from its position and formatting even when the exact wording doesn't
+  match a listed label. Only return null if the summary area itself cannot be confidently identified.
   This is the FINAL amount the customer must pay, after tax.
-  Do NOT confuse the total with:
-  - "Subtotal"/"Sub Total" — that is the pre-tax amount, not the total.
-  - the SST/GST/tax line itself — that is tax_amount, a separate field.
-  - an account number, bank account number, or invoice/reference number printed near the amount area —
-    these are identifiers, not monetary amounts, even if they happen to be numeric and nearby.
-  - a handwritten number or annotation — never treat handwriting as the official total.
-  The total is arithmetically the LARGEST of the genuine amount lines (Total = Subtotal + tax). If unsure
-  which printed line is which, the largest clearly-labeled AMOUNT line (not an account/reference number)
-  is the total. If no line matches any of the four labels above and you cannot confidently identify the
-  final payable amount, return null rather than guessing.""" + CURRENCY_NOTE + """
+  Regardless of which priority tier you matched on, do NOT select:
+  - a tax amount (SST/GST/VAT line) — that is tax_amount, a separate field, never the total.
+  - a subtotal ("Subtotal"/"Sub Total") — that is the pre-tax amount, not the total.
+  - an account number, bank account number, or invoice/reference number — these are identifiers, not
+    monetary amounts, even if they happen to be numeric and positioned near the amount area.
+  - a handwritten number or annotation — never treat handwriting as the official total.""" + CURRENCY_NOTE + """
 - TAX AMOUNT: the OFFICIAL SST/GST/VAT tax amount, printed on a line explicitly labeled with one of those
   terms (e.g. "SST 6%", "GST", "VAT") — not the percentage itself, and never a number extrapolated from
   elsewhere. Do NOT extract:
   - an account number or any part of one
   - a handwritten number or annotation
   - a number that merely looks tax-sized but has no SST/GST/VAT label attached
-  If no line is explicitly labeled as tax/SST/GST/VAT, return null.
+  If no line is explicitly labeled as tax/SST/GST/VAT, return null. A tax amount only means something
+  relative to the invoice's total_amount — if you cannot also identify a total_amount anywhere on this
+  document (per the TOTAL AMOUNT rule above, including its Priority 3 fallback), treat any tax-labeled
+  value you found with extra caution and double-check it is genuinely SST/GST/VAT-labeled before
+  returning it, since an unverifiable tax figure is a common source of extraction errors.
 - Return null for any field you cannot confidently extract
 - Amounts must be numbers only (no currency symbols, no commas, no "RM")
 - Dates in ISO format: YYYY-MM-DD
