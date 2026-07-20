@@ -26,6 +26,8 @@
               }
             ],
             "styles": [
+              "node_modules/@phosphor-icons/web/src/duotone/style.css",
+              "node_modules/@phosphor-icons/web/src/regular/style.css",
               "src/styles.css"
             ]
           },

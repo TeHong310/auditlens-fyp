@@ -5125,3 +5125,106 @@ Testing:
 
 Setup/config needed:
   1. Redeploy the Render FRONTEND only — no backend files were touched.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-20
+What was changed:
+  Frontend (auditlens-frontend/) — icon containers + icon set only, no
+  layout/spacing/logic changes:
+    - Fix 1 (icon container colour): the metric-card icon badges in
+      finance-home, finance-report, and finance-ocr-review used bright
+      pastel fills (e.g. background #EBF4FF with a dark-stroke icon) —
+      these read as glaring white/pastel blocks against the dark theme.
+      Replaced everywhere with the standard dark-UI treatment:
+      `background: color-mix(in srgb, <colour> 12%, transparent)`,
+      `border/box-shadow: 1px solid color-mix(in srgb, <colour> 25%,
+      transparent)`, `color: <colour>` for a bright icon. Mapped by card
+      meaning (primary -> --accent/--accent-soft, success -> --success,
+      warning -> --warning, danger -> --danger), status colours kept
+      strictly semantic. finance-home/finance-report drove their badge
+      colour via an inline `--card-color`/`--card-bg` custom property
+      pair set directly in the HTML template (hardcoded hex, missed by
+      the previous restyle's CSS-file-only sweep) — switched
+      `--card-color` to reference the design tokens and dropped the now
+      -unused `--card-bg`. Also applied the same badge treatment to
+      auditor-report's stat-icon (previously a semi-transparent white
+      overlay on a coloured card — the same "bright block" bug) and to
+      finance-ocr-review's/finance-upload's icon containers that had no
+      badge at all before, for consistency across every metric card in
+      the app.
+    - Fix 2 (icon set): added the Phosphor Icons web font
+      (@phosphor-icons/web, duotone weight primary, regular as fallback
+      for the couple of icons with no duotone glyph) via
+      node_modules-referenced entries in angular.json's global `styles`
+      array (self-contained, no CDN). Replaced every icon usage across
+      all 17 components — emoji glyphs (✅❌⚠️🚨📊🤖💡🛡️ etc.) and
+      hand-rolled inline `<svg>` line icons alike — with
+      `<i class="ph-duotone ph-{name}">` tags of matching size and
+      colour, keeping the same semantic meaning for each (e.g. ✅ ->
+      ph-check-circle, 🚨 -> ph-siren, the sidebar nav icons, form-field
+      icons, table status markers, empty-state illustrations). Icon
+      colour comes from the existing `color`/`currentColor` mechanism
+      already in place, or an explicit design-token colour matching the
+      icon's semantic role. TS helper methods that previously returned
+      an emoji string for a computed icon (severityIcon, typeIcon,
+      uploadSourceIcon, getBannerIcon, matchPillIcon, rowMatchIcon,
+      lineItemPillIcon, actionLabel/Icon, getPOStatusIcon/getGRStatusIcon,
+      etc.) now return a Phosphor class name instead, with the template
+      rendering `<i class="ph-duotone" [ngClass]="...">` — same
+      conditional logic, only the icon representation changed. Kept
+      plain typographic characters (→ ← em dashes) that are page
+      furniture rather than dedicated icon elements as-is.
+    - Card hover "border" treatment (from the previous restyle) already
+      used `box-shadow: 0 0 0 1px ...` instead of a literal `border` to
+      avoid a box-model size shift where `box-sizing: border-box` isn't
+      globally applied; applied the same discipline here — two files
+      (finance-ocr-review, finance-upload) don't have that global reset,
+      so their new icon-container "border" is a `box-shadow` ring
+      instead of a literal `border`, to avoid growing those fixed-size
+      icon boxes by 2px. Files that already have the reset (auditor-
+      report, finance-home, finance-report) use a literal `border`
+      safely.
+    - Left untouched, deliberately: plain colour dots with no glyph
+      (stat-dot, legend-swatch, feature-item dot — not icons), and a
+      handful of pre-existing raw-hex TEXT colours unrelated to any icon
+      (e.g. the "No GR"/"No PO" labels on the auditor dashboard, the
+      upload-queue message column) — out of scope for this icon-and-
+      container-colour-only pass.
+
+Why:
+  Two visual fixes requested for the dark theme: the metric-card icon
+  badges were still using the old light-theme's bright pastel fill
+  pattern (missed by the previous CSS-only restyle sweep because these
+  particular ones were driven by inline HTML style attributes, not CSS
+  files), and a request to move off ad-hoc emoji/hand-drawn SVG icons
+  onto a proper icon set (Phosphor, duotone weight) for a more
+  consistent, higher-fidelity look on dark backgrounds.
+
+Testing:
+  - `npx ng build --configuration=development` after each batch of
+    changes and once more as the final check — all passed cleanly.
+  - Grep sweep across every component .html/.ts file for the full emoji
+    Unicode ranges and for leftover `<svg>` tags — zero remaining after
+    the pass (confirmed the only em dashes left are prose punctuation,
+    not icons).
+  - Checked every new `border: 1px solid color-mix(...)` icon-container
+    addition against whether its file has a global
+    `box-sizing: border-box` reset, and used `box-shadow` instead of
+    `border` in the two files that don't, to avoid a layout-size
+    regression (same technique used for card hover borders previously).
+  - Live Playwright screenshots against the running dev server (all
+    backend calls intercepted/mocked): login, register, auditor
+    dashboard, auditor report (icon container fix visible), exceptions,
+    anomalies, record detail (heaviest icon usage on the site), finance
+    home (original bug's page), finance upload, OCR review, and finance
+    report — confirmed every icon container now shows a translucent
+    tinted badge with a bright icon instead of a pastel block, and all
+    duotone icons render with correct size, colour, and alignment next
+    to their labels.
+
+Setup/config needed:
+  1. Redeploy the Render FRONTEND only — no backend files were touched.
+  2. `npm install` picks up the new @phosphor-icons/web dependency
+     automatically from package.json/package-lock.json on the next
+     Render build — no manual step needed.

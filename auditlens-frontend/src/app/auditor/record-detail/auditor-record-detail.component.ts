@@ -125,11 +125,11 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
 
   authenticitySourceIcon(): string {
     const source = this.authenticity?.upload_source;
-    if (source === 'phone_photo') return '📱';
-    if (source === 'scanned') return '🖨️';
-    if (source === 'digital_native') return '💻';
-    if (source === 'webcam') return '📷';
-    return '❓';
+    if (source === 'phone_photo') return 'ph-device-mobile-camera';
+    if (source === 'scanned') return 'ph-printer';
+    if (source === 'digital_native') return 'ph-desktop';
+    if (source === 'webcam') return 'ph-webcam';
+    return 'ph-question';
   }
 
   authenticitySourceLabel(): string {
@@ -214,9 +214,9 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   }
 
   getBannerIcon(): string {
-    if (this.overallStatus === 'PASS') return '✅';
-    if (this.overallStatus === 'FAIL') return '❌';
-    return '⚠️';
+    if (this.overallStatus === 'PASS') return 'ph-check-circle';
+    if (this.overallStatus === 'FAIL') return 'ph-x-circle';
+    return 'ph-warning';
   }
 
   getBannerText(): string {
@@ -281,9 +281,9 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   }
 
   matchPillIcon(sym: 'eq' | 'neq' | 'na'): string {
-    if (sym === 'eq') return '✓';
-    if (sym === 'neq') return '✗';
-    return '—';
+    if (sym === 'eq') return 'ph-check';
+    if (sym === 'neq') return 'ph-x';
+    return 'ph-minus';
   }
 
   matchPillText(sym: 'eq' | 'neq' | 'na'): string {
@@ -309,9 +309,9 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   }
 
   rowMatchIcon(match: boolean | null): string {
-    if (match === true) return '✓';
-    if (match === false) return '⚠';
-    return '—';
+    if (match === true) return 'ph-check';
+    if (match === false) return 'ph-warning';
+    return 'ph-minus';
   }
 
   rowMatchText(match: boolean | null): string {
@@ -348,7 +348,7 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   }
 
   lineItemPillIcon(li: any, side: 'po' | 'gr'): string {
-    if (this.lineItemMissing(li, side)) return '⚠';
+    if (this.lineItemMissing(li, side)) return 'ph-warning';
     return this.rowMatchIcon(li.quantity_match);
   }
 

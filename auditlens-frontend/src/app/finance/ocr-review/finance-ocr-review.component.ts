@@ -462,7 +462,12 @@ export class FinanceOcrReviewComponent implements OnInit {
 
   getPOStatusLabel(doc: any): string {
     if (!doc || doc.po === undefined || doc.po === null) return 'Checking...';
-    return doc.po.uploaded ? '✅ PO Uploaded' : '⚠️ PO Missing';
+    return doc.po.uploaded ? 'PO Uploaded' : 'PO Missing';
+  }
+
+  getPOStatusIcon(doc: any): string {
+    if (!doc || doc.po === undefined || doc.po === null) return '';
+    return doc.po.uploaded ? 'ph-check-circle' : 'ph-warning';
   }
 
   getPOTooltip(doc: any): string {
@@ -477,7 +482,12 @@ export class FinanceOcrReviewComponent implements OnInit {
 
   getGRStatusLabel(doc: any): string {
     if (!doc || doc.gr === undefined || doc.gr === null) return 'Checking...';
-    return doc.gr.uploaded ? '✅ GR Uploaded' : '⚠️ GR Missing';
+    return doc.gr.uploaded ? 'GR Uploaded' : 'GR Missing';
+  }
+
+  getGRStatusIcon(doc: any): string {
+    if (!doc || doc.gr === undefined || doc.gr === null) return '';
+    return doc.gr.uploaded ? 'ph-check-circle' : 'ph-warning';
   }
 
   getGRTooltip(doc: any): string {

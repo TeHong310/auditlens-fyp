@@ -8,9 +8,7 @@
     </div>
     <div class="header-right">
       <button class="btn-export">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-          <path d="M2 12v2h12v-2M8 2v8M5 7l3 3 3-3" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
+        <i class="ph-duotone ph-download-simple" style="color:white; font-size:14px;"></i>
         Export
       </button>
     </div>
@@ -178,14 +176,12 @@
             <td>{{ doc.vendor_name || '-' }}</td>
             <td>{{ formatAmount(doc.total_amount) }}</td>
             <td>
-              <span [style.color]="doc.has_po ? '#10B981' : '#EF4444'">
-                {{ doc.has_po ? '✓' : '✗' }}
-              </span>
+              <i class="ph-duotone" [ngClass]="doc.has_po ? 'ph-check-circle' : 'ph-x-circle'"
+                 [style.color]="doc.has_po ? 'var(--success)' : 'var(--danger)'"></i>
             </td>
             <td>
-              <span [style.color]="doc.has_gr ? '#10B981' : '#EF4444'">
-                {{ doc.has_gr ? '✓' : '✗' }}
-              </span>
+              <i class="ph-duotone" [ngClass]="doc.has_gr ? 'ph-check-circle' : 'ph-x-circle'"
+                 [style.color]="doc.has_gr ? 'var(--success)' : 'var(--danger)'"></i>
             </td>
             <td>
               <span class="badge" [ngClass]="getStatusClass(doc.status)">

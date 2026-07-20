@@ -4,9 +4,7 @@
   <div class="header">
     <div class="header-left">
       <button class="btn-back" (click)="goBack()">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
+        <i class="ph-duotone ph-arrow-left" style="font-size:16px;"></i>
         Back
       </button>
       <div>
@@ -32,18 +30,18 @@
 
     <!-- Authenticity Warning Banner (Layer 6, advisory only) -->
     <div class="authenticity-warning-banner" *ngIf="showAuthenticityWarning">
-      <span class="banner-icon">⚠️</span>
+      <span class="banner-icon"><i class="ph-duotone ph-warning"></i></span>
       <div class="banner-text">
         <p class="banner-title">Authenticity Warning</p>
         <p class="banner-subtitle">{{ authenticityWarningReason() }}</p>
         <p class="banner-subtitle">Auditor may proceed with review but should verify with vendor.</p>
-        <p class="banner-meta">Upload source: {{ authenticitySourceIcon() }} {{ authenticitySourceLabel() }}</p>
+        <p class="banner-meta">Upload source: <i class="ph-duotone" [ngClass]="authenticitySourceIcon()"></i> {{ authenticitySourceLabel() }}</p>
       </div>
     </div>
 
     <!-- Overall Status Banner -->
     <div class="status-banner" [ngClass]="getBannerClass()">
-      <span class="banner-icon">{{ getBannerIcon() }}</span>
+      <span class="banner-icon"><i class="ph-duotone" [ngClass]="getBannerIcon()"></i></span>
       <div class="banner-text">
         <p class="banner-title">{{ getBannerText() }}</p>
         <p class="banner-subtitle">{{ getBannerSubtitle() }}</p>
@@ -55,8 +53,8 @@
     </div>
 
     <!-- Success / Error -->
-    <div class="success-box" *ngIf="successMessage">✓ {{ successMessage }}</div>
-    <div class="error-box" *ngIf="errorMessage">✗ {{ errorMessage }}</div>
+    <div class="success-box" *ngIf="successMessage"><i class="ph-duotone ph-check-circle"></i> {{ successMessage }}</div>
+    <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
 
     <!-- Main Content -->
     <div class="content-row">
@@ -67,7 +65,7 @@
         <!-- Comparison Card -->
         <div class="comparison-card">
           <div class="comparison-card-header">
-            <h2 class="comparison-title">⚖️ Field Comparison</h2>
+            <h2 class="comparison-title"><i class="ph-duotone ph-scales"></i> Field Comparison</h2>
             <p class="comparison-subtitle">Invoice vs PO vs GR</p>
           </div>
 
@@ -97,29 +95,29 @@
               <tbody>
                 <!-- Vendor -->
                 <tr [ngClass]="rowClass([vendorSymbol(comparison.invoice.vendor_name, comparison.po?.vendor_name), vendorSymbol(comparison.po?.vendor_name, comparison.gr?.vendor_name)])">
-                  <td class="field-name"><span class="field-icon">🏢</span> Vendor / Supplier</td>
+                  <td class="field-name"><span class="field-icon"><i class="ph-duotone ph-buildings"></i></span> Vendor / Supplier</td>
                   <td class="cell-value">{{ comparison.invoice.vendor_name || '-' }}</td>
                   <td class="cell-value" *ngIf="comparison.po">
                     <span class="match-pill" [ngClass]="matchPillClass(vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name))">
-                      {{ matchPillIcon(vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name)) }}
+                      <i class="ph-duotone" [ngClass]="matchPillIcon(vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name))"></i>
                       {{ matchPillText(vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name)) }}
                     </span>
                     <div class="cell-main-value">{{ comparison.po.vendor_name || '-' }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
                     <span class="not-uploaded-label">Not Uploaded</span>
                     <span class="upload-hint">+ Upload PO</span>
                   </td>
                   <td class="cell-value" *ngIf="comparison.gr">
                     <span class="match-pill" [ngClass]="matchPillClass(vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name))">
-                      {{ matchPillIcon(vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name)) }}
+                      <i class="ph-duotone" [ngClass]="matchPillIcon(vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name))"></i>
                       {{ matchPillText(vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name)) }}
                     </span>
                     <div class="cell-main-value">{{ comparison.gr.vendor_name || '-' }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
                     <span class="not-uploaded-label">Not Uploaded</span>
                     <span class="upload-hint">+ Upload GR</span>
                   </td>
@@ -131,9 +129,9 @@
                      computed in match_result), not per-cell pairwise pills. -->
                 <tr [ngClass]="rowMatchClass(comparison.match_result.po_reference_match)">
                   <td class="field-name">
-                    <span class="field-icon">🔗</span> PO Ref
+                    <span class="field-icon"><i class="ph-duotone ph-link"></i></span> PO Ref
                     <span class="match-pill" [ngClass]="rowMatchPillClass(comparison.match_result.po_reference_match)">
-                      {{ rowMatchIcon(comparison.match_result.po_reference_match) }}
+                      <i class="ph-duotone" [ngClass]="rowMatchIcon(comparison.match_result.po_reference_match)"></i>
                       {{ rowMatchText(comparison.match_result.po_reference_match) }}
                     </span>
                   </td>
@@ -142,7 +140,7 @@
                     <div class="cell-main-value">{{ comparison.po.po_no || '-' }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
                     <span class="not-uploaded-label">Not Uploaded</span>
                     <span class="upload-hint">+ Upload PO</span>
                   </td>
@@ -150,7 +148,7 @@
                     <div class="cell-main-value">{{ comparison.gr.po_reference || '-' }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
                     <span class="not-uploaded-label">Not Uploaded</span>
                     <span class="upload-hint">+ Upload GR</span>
                   </td>
@@ -164,7 +162,7 @@
                      Quantity row used to have. -->
                 <tr class="line-items-section-row">
                   <td colspan="4" class="field-name line-items-section-label">
-                    <span class="field-icon">📦</span> Line Items
+                    <span class="field-icon"><i class="ph-duotone ph-package"></i></span> Line Items
                     <span class="line-items-count" *ngIf="comparison.line_items?.length">({{ comparison.line_items.length }})</span>
                   </td>
                 </tr>
@@ -172,7 +170,7 @@
                   <td class="field-name">
                     <div class="li-desc">{{ li.description || '-' }}</div>
                     <div class="li-code" *ngIf="li.item_code">{{ li.item_code }}</div>
-                    <div class="li-amount-note" *ngIf="li.amount_match === false">💲 Amount/unit price differs</div>
+                    <div class="li-amount-note" *ngIf="li.amount_match === false"><i class="ph-duotone ph-currency-circle-dollar"></i> Amount/unit price differs</div>
                   </td>
                   <td class="cell-value cell-quantity">
                     <span class="not-uploaded-label li-missing-label" *ngIf="li.missing_on_invoice">Missing on Invoice</span>
@@ -180,23 +178,23 @@
                   </td>
                   <td class="cell-value" *ngIf="comparison.po">
                     <span class="match-pill" [ngClass]="lineItemPillClass(li, 'po')">
-                      {{ lineItemPillIcon(li, 'po') }} {{ lineItemPillText(li, 'po') }}
+                      <i class="ph-duotone" [ngClass]="lineItemPillIcon(li, 'po')"></i> {{ lineItemPillText(li, 'po') }}
                     </span>
                     <div class="cell-main-value cell-quantity" *ngIf="!li.missing_on_po">{{ formatQuantity(li.po_quantity) }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
                     <span class="not-uploaded-label">Not Uploaded</span>
                     <span class="upload-hint">+ Upload PO</span>
                   </td>
                   <td class="cell-value" *ngIf="comparison.gr">
                     <span class="match-pill" [ngClass]="lineItemPillClass(li, 'gr')">
-                      {{ lineItemPillIcon(li, 'gr') }} {{ lineItemPillText(li, 'gr') }}
+                      <i class="ph-duotone" [ngClass]="lineItemPillIcon(li, 'gr')"></i> {{ lineItemPillText(li, 'gr') }}
                     </span>
                     <div class="cell-main-value cell-quantity" *ngIf="!li.missing_on_gr">{{ formatQuantity(li.gr_quantity) }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
                     <span class="not-uploaded-label">Not Uploaded</span>
                     <span class="upload-hint">+ Upload GR</span>
                   </td>
@@ -210,26 +208,26 @@
                      stays Invoice-vs-PO only — unchanged from before, just
                      repositioned after Quantity. -->
                 <tr [ngClass]="rowClass([amountSymbol(comparison.invoice.total_amount, comparison.po?.total_amount, comparison.invoice.currency, comparison.po?.currency)])">
-                  <td class="field-name"><span class="field-icon">💰</span> Amount</td>
+                  <td class="field-name"><span class="field-icon"><i class="ph-duotone ph-currency-circle-dollar"></i></span> Amount</td>
                   <td class="cell-value cell-amount">{{ formatAmount(comparison.invoice.total_amount, comparison.invoice.currency) }}</td>
                   <td class="cell-value" *ngIf="comparison.po">
                     <span class="match-pill" [ngClass]="matchPillClass(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount, comparison.invoice.currency, comparison.po.currency))">
-                      {{ matchPillIcon(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount, comparison.invoice.currency, comparison.po.currency)) }}
+                      <i class="ph-duotone" [ngClass]="matchPillIcon(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount, comparison.invoice.currency, comparison.po.currency))"></i>
                       {{ matchPillText(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount, comparison.invoice.currency, comparison.po.currency)) }}
                     </span>
                     <div class="cell-main-value cell-amount">{{ formatAmount(comparison.po.total_amount, comparison.po.currency) }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
                     <span class="not-uploaded-label">Not Uploaded</span>
                     <span class="upload-hint">+ Upload PO</span>
                   </td>
                   <td class="cell-value" *ngIf="comparison.gr">
-                    <span class="match-pill pill-na">— N/A</span>
+                    <span class="match-pill pill-na"><i class="ph-duotone ph-minus"></i> N/A</span>
                     <div class="cell-main-value cell-muted">No amount on GR</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
                     <span class="not-uploaded-label">Not Uploaded</span>
                     <span class="upload-hint">+ Upload GR</span>
                   </td>
@@ -237,13 +235,13 @@
 
                 <!-- Doc No -->
                 <tr>
-                  <td class="field-name"><span class="field-icon">📄</span> Doc No</td>
+                  <td class="field-name"><span class="field-icon"><i class="ph-duotone ph-file-text"></i></span> Doc No</td>
                   <td class="cell-value cell-docno">{{ comparison.invoice.invoice_no || '-' }}</td>
                   <td class="cell-value" *ngIf="comparison.po">
                     <div class="cell-main-value cell-docno">{{ comparison.po.po_no || '-' }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
                     <span class="not-uploaded-label">Not Uploaded</span>
                     <span class="upload-hint">+ Upload PO</span>
                   </td>
@@ -251,7 +249,7 @@
                     <div class="cell-main-value cell-docno">{{ comparison.gr.gr_no || '-' }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon">⬆</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
                     <span class="not-uploaded-label">Not Uploaded</span>
                     <span class="upload-hint">+ Upload GR</span>
                   </td>
@@ -262,10 +260,10 @@
 
           <!-- Source Documents -->
           <div class="source-docs-section">
-            <h3 class="source-docs-title">📄 Source Documents</h3>
+            <h3 class="source-docs-title"><i class="ph-duotone ph-file-text"></i> Source Documents</h3>
             <div class="source-docs-buttons">
               <button class="btn-view-doc" (click)="openDocModal('invoice')">
-                <span class="btn-view-doc-icon">👁</span>
+                <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
                 <span class="btn-view-doc-text">
                   <span class="btn-view-doc-label">View Invoice</span>
                   <span class="btn-view-doc-filename">{{ comparison.invoice.filename }}</span>
@@ -274,7 +272,7 @@
               <button class="btn-view-doc" [disabled]="!isDocAvailable('po')"
                       [title]="!isDocAvailable('po') ? 'Not uploaded' : ''"
                       (click)="openDocModal('po')">
-                <span class="btn-view-doc-icon">👁</span>
+                <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
                 <span class="btn-view-doc-text">
                   <span class="btn-view-doc-label">View PO</span>
                   <span class="btn-view-doc-filename">{{ comparison.po?.filename || 'Not uploaded' }}</span>
@@ -283,7 +281,7 @@
               <button class="btn-view-doc" [disabled]="!isDocAvailable('gr')"
                       [title]="!isDocAvailable('gr') ? 'Not uploaded' : ''"
                       (click)="openDocModal('gr')">
-                <span class="btn-view-doc-icon">👁</span>
+                <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
                 <span class="btn-view-doc-text">
                   <span class="btn-view-doc-label">View GR</span>
                   <span class="btn-view-doc-filename">{{ comparison.gr?.filename || 'Not uploaded' }}</span>
@@ -296,7 +294,7 @@
 
       <!-- Right: Audit Decision -->
       <div class="decision-card">
-        <h2 class="section-title">💬 Audit Decision</h2>
+        <h2 class="section-title"><i class="ph-duotone ph-chat-circle-dots"></i> Audit Decision</h2>
         <p class="section-subtitle">Add remarks, assign follow-up, or send back to Finance</p>
 
         <!-- Document Info -->
@@ -329,13 +327,14 @@
         <!-- Action Buttons -->
         <div class="action-buttons">
           <button class="btn-need-review" [disabled]="isSubmitting">
-            ⚠️ Need Review
+            <i class="ph-duotone ph-warning"></i> Need Review
           </button>
           <button class="btn-return" (click)="returnDocument()" [disabled]="isSubmitting">
-            ↩️ Send Back
+            <i class="ph-duotone ph-arrow-u-up-left"></i> Send Back
           </button>
           <button class="btn-approve" (click)="approveDocument()" [disabled]="isSubmitting">
-            {{ isSubmitting ? 'Processing...' : '✅ Approve' }}
+            <ng-container *ngIf="!isSubmitting"><i class="ph-duotone ph-check-circle"></i> Approve</ng-container>
+            <ng-container *ngIf="isSubmitting">Processing...</ng-container>
           </button>
         </div>
 
@@ -356,7 +355,7 @@
           <span class="modal-filename">{{ modalFileName }}</span>
           <span class="modal-doctype-badge">{{ docTypeLabel(modalDocType) }}</span>
         </div>
-        <button class="modal-close-btn" (click)="closeModal()">✕</button>
+        <button class="modal-close-btn" (click)="closeModal()"><i class="ph-duotone ph-x"></i></button>
       </div>
       <div class="modal-body">
         <div class="modal-spinner-wrap" *ngIf="modalLoading">

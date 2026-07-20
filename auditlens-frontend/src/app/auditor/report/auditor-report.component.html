@@ -2,7 +2,7 @@
 
   <!-- Header -->
   <div class="header">
-    <h1 class="page-title">📊 Auditor Report</h1>
+    <h1 class="page-title"><i class="ph-duotone ph-chart-bar"></i> Auditor Report</h1>
   </div>
 
   <!-- Period Selector -->
@@ -13,33 +13,33 @@
     </button>
   </div>
 
-  <div class="error-box" *ngIf="summaryError">✗ {{ summaryError }}</div>
+  <div class="error-box" *ngIf="summaryError"><i class="ph-duotone ph-x-circle"></i> {{ summaryError }}</div>
 
   <!-- Stat Cards -->
   <div class="stats-grid">
     <div class="stat-card stat-approved">
-      <span class="stat-icon">✅</span>
+      <span class="stat-icon"><i class="ph-duotone ph-check-circle"></i></span>
       <div>
         <p class="stat-value">{{ isLoadingSummary ? '…' : stats.approved }}</p>
         <p class="stat-label">Approved</p>
       </div>
     </div>
     <div class="stat-card stat-sent-back">
-      <span class="stat-icon">↩️</span>
+      <span class="stat-icon"><i class="ph-duotone ph-arrow-u-up-left"></i></span>
       <div>
         <p class="stat-value">{{ isLoadingSummary ? '…' : stats.sent_back }}</p>
         <p class="stat-label">Sent Back</p>
       </div>
     </div>
     <div class="stat-card stat-pending">
-      <span class="stat-icon">⏳</span>
+      <span class="stat-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
       <div>
         <p class="stat-value">{{ isLoadingSummary ? '…' : stats.pending }}</p>
         <p class="stat-label">Pending</p>
       </div>
     </div>
     <div class="stat-card stat-exceptions">
-      <span class="stat-icon">🚨</span>
+      <span class="stat-icon"><i class="ph-duotone ph-siren"></i></span>
       <div>
         <p class="stat-value">{{ isLoadingSummary ? '…' : stats.exceptions }}</p>
         <p class="stat-label">Exceptions</p>
@@ -49,7 +49,7 @@
 
   <!-- Chart -->
   <div class="chart-card">
-    <h2 class="section-title">📈 Records Processed (last 30 days)</h2>
+    <h2 class="section-title"><i class="ph-duotone ph-chart-line"></i> Records Processed (last 30 days)</h2>
     <div class="chart-wrap">
       <canvas #timelineChart></canvas>
     </div>
@@ -59,10 +59,10 @@
   <div class="trail-card">
     <div class="trail-header">
       <div>
-        <h2 class="section-title">📜 Audit Trail</h2>
+        <h2 class="section-title"><i class="ph-duotone ph-scroll"></i> Audit Trail</h2>
         <p class="section-subtitle">{{ totalEntries }} total entries</p>
       </div>
-      <button class="btn-export" (click)="exportCsv()">⬇ Export CSV</button>
+      <button class="btn-export" (click)="exportCsv()"><i class="ph-duotone ph-download-simple"></i> Export CSV</button>
     </div>
 
     <div class="trail-filters">
@@ -84,7 +84,7 @@
         <div class="skeleton-row" *ngFor="let i of [1,2,3]"></div>
       </div>
 
-      <div class="error-box" *ngIf="trailError">✗ {{ trailError }}</div>
+      <div class="error-box" *ngIf="trailError"><i class="ph-duotone ph-x-circle"></i> {{ trailError }}</div>
 
       <div class="empty-state" *ngIf="!isLoadingTrail && !trailError && entries.length === 0">
         <p>No audit trail entries yet.</p>
@@ -94,7 +94,9 @@
         <div class="trail-main">
           <span class="trail-timestamp">{{ formatTimestamp(entry.timestamp) }}</span>
           <span class="trail-auditor">{{ entry.auditor_name }}</span>
-          <span class="action-pill" [ngClass]="actionPillClass(entry.action)">{{ actionLabel(entry.action) }}</span>
+          <span class="action-pill" [ngClass]="actionPillClass(entry.action)">
+            <i class="ph-duotone" [ngClass]="actionIcon(entry.action)"></i> {{ actionLabel(entry.action) }}
+          </span>
           <span class="trail-invoice" (click)="viewInvoice(entry)">{{ entry.invoice_no || '-' }}</span>
         </div>
         <p class="trail-remarks" *ngIf="entry.remarks">"{{ entry.remarks }}"</p>

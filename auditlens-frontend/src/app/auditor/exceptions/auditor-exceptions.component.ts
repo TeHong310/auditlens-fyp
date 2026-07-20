@@ -88,9 +88,11 @@ export class AuditorExceptionsComponent implements OnInit {
   }
 
   severityIcon(sev: string): string {
-    if (sev === 'high') return '🔴';
-    if (sev === 'medium') return '🟡';
-    return '🟠';
+    return 'ph-circle';
+  }
+
+  severityColor(sev: string): string {
+    return sev === 'high' ? 'var(--danger)' : 'var(--warning)';
   }
 
   severityLabel(sev: string): string {

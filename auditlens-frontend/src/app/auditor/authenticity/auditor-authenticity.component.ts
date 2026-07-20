@@ -112,11 +112,11 @@ export class AuditorAuthenticityComponent implements OnInit {
   }
 
   uploadSourceIcon(source: string): string {
-    if (source === 'phone_photo') return '📱';
-    if (source === 'scanned') return '🖨️';
-    if (source === 'digital_native') return '💻';
-    if (source === 'webcam') return '📷';
-    return '❓';
+    if (source === 'phone_photo') return 'ph-device-mobile-camera';
+    if (source === 'scanned') return 'ph-printer';
+    if (source === 'digital_native') return 'ph-desktop';
+    if (source === 'webcam') return 'ph-webcam';
+    return 'ph-question';
   }
 
   uploadSourceLabel(source: string): string {

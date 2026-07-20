@@ -3,10 +3,10 @@
   <!-- Header -->
   <div class="header">
     <button class="btn-back" (click)="goBack()">← Back to Authenticity</button>
-    <h1 class="page-title">🛡️ Authenticity Detail</h1>
+    <h1 class="page-title"><i class="ph-duotone ph-shield-check"></i> Authenticity Detail</h1>
   </div>
 
-  <div class="error-box" *ngIf="errorMessage">✗ {{ errorMessage }}</div>
+  <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
 
   <!-- Loading -->
   <div class="loading-wrap" *ngIf="isLoading">
@@ -29,7 +29,7 @@
       </div>
 
       <div class="image-hint" *ngIf="imageLoadState === 'image' && !hasAnyBoxes">
-        ℹ️ No location data for this document yet — Re-check to locate signals on the image.
+        <i class="ph-duotone ph-info"></i> No location data for this document yet — Re-check to locate signals on the image.
       </div>
 
       <div class="image-fallback" *ngIf="imageLoadState === 'loading'">
@@ -38,7 +38,7 @@
       </div>
 
       <div class="image-fallback" *ngIf="imageLoadState === 'error'">
-        <p class="fallback-icon">✗</p>
+        <p class="fallback-icon"><i class="ph-duotone ph-x-circle"></i></p>
         <p>Could not load the document file.</p>
       </div>
 
@@ -52,7 +52,10 @@
     <div class="side-panel">
 
       <div class="verdict-banner" [ngClass]="check.authenticity_status === 'warning' ? 'verdict-warning' : 'verdict-passed'">
-        <span class="verdict-icon">{{ check.authenticity_status === 'warning' ? '⚠️' : '✅' }}</span>
+        <span class="verdict-icon">
+          <i class="ph-duotone" [ngClass]="check.authenticity_status === 'warning' ? 'ph-warning' : 'ph-check-circle'"
+             [style.color]="check.authenticity_status === 'warning' ? 'var(--warning)' : 'var(--success)'"></i>
+        </span>
         <div>
           <p class="verdict-title">{{ check.authenticity_status === 'warning' ? 'Warning' : 'Passed' }}</p>
           <p class="verdict-doc">{{ check.document_number || 'Unknown Document' }} · {{ docTypeLabel(check.document_type) }}</p>
@@ -64,23 +67,26 @@
       <div class="checklist-box">
         <p class="section-label">Signals Checklist</p>
         <div class="checklist-row" *ngFor="let key of signalKeys">
-          <span class="checklist-icon" [ngClass]="check[key] ? 'icon-yes' : 'icon-no'">{{ check[key] ? '✓' : '✗' }}</span>
+          <span class="checklist-icon" [ngClass]="check[key] ? 'icon-yes' : 'icon-no'">
+            <i class="ph-duotone" [ngClass]="check[key] ? 'ph-check' : 'ph-x'"></i>
+          </span>
           <span class="checklist-label">{{ signalLabels[key] }}</span>
-          <span class="checklist-located" *ngIf="check[key] && hasBox(key)">📍 located</span>
+          <span class="checklist-located" *ngIf="check[key] && hasBox(key)"><i class="ph-duotone ph-map-pin"></i> located</span>
         </div>
       </div>
 
       <div class="meta-box">
-        <p class="meta-row">Upload Source: {{ uploadSourceIcon(check.upload_source) }} {{ uploadSourceLabel(check.upload_source) }}</p>
+        <p class="meta-row">Upload Source: <i class="ph-duotone" [ngClass]="uploadSourceIcon(check.upload_source)"></i> {{ uploadSourceLabel(check.upload_source) }}</p>
       </div>
 
       <div class="ai-box" *ngIf="check.ai_notes">
-        <p class="section-label">🤖 AI Notes</p>
+        <p class="section-label"><i class="ph-duotone ph-robot"></i> AI Notes</p>
         <p class="ai-text">"{{ check.ai_notes }}"</p>
       </div>
 
       <button class="btn-recheck" (click)="recheck()" [disabled]="isRechecking">
-        {{ isRechecking ? '⏳ Re-checking…' : '🔄 Re-check' }}
+        <i class="ph-duotone" [ngClass]="isRechecking ? 'ph-hourglass-medium' : 'ph-arrow-clockwise'"></i>
+        {{ isRechecking ? 'Re-checking…' : 'Re-check' }}
       </button>
 
     </div>

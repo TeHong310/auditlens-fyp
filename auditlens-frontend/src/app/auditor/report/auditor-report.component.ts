@@ -243,9 +243,15 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
   }
 
   actionLabel(action: string): string {
-    if (action === 'approved') return '✅ Approved';
-    if (action === 'sent_back') return '↩️ Sent Back';
-    return '⚠️ Need Review';
+    if (action === 'approved') return 'Approved';
+    if (action === 'sent_back') return 'Sent Back';
+    return 'Need Review';
+  }
+
+  actionIcon(action: string): string {
+    if (action === 'approved') return 'ph-check-circle';
+    if (action === 'sent_back') return 'ph-arrow-u-up-left';
+    return 'ph-warning';
   }
 
   formatTimestamp(ts: string): string {

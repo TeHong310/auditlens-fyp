@@ -8,10 +8,7 @@
     </div>
     <div class="header-right">
       <button class="btn-refresh" (click)="loadDocuments(); loadPOList(); loadGRList()">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M14 8A6 6 0 112 8" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
-          <path d="M14 4v4h-4" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
+        <i class="ph-duotone ph-arrow-clockwise" style="font-size:16px; color:white;"></i>
         Refresh
       </button>
     </div>
@@ -20,30 +17,27 @@
   <!-- Stats -->
   <div class="stats-row">
     <div class="stat-card red">
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-        <circle cx="10" cy="10" r="8" stroke="#EF4444" stroke-width="1.5"/>
-        <line x1="10" y1="6" x2="10" y2="11" stroke="#EF4444" stroke-width="1.5" stroke-linecap="round"/>
-        <circle cx="10" cy="13.5" r="0.75" fill="#EF4444"/>
-      </svg>
+      <div class="stat-icon-wrap">
+        <i class="ph-duotone ph-warning-circle" style="font-size:20px;"></i>
+      </div>
       <div>
         <p class="stat-label">Need Correction</p>
         <p class="stat-value red">{{ documents.filter(d => getErrorType(d) !== 'Ready').length }}</p>
       </div>
     </div>
     <div class="stat-card yellow">
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-        <path d="M3 5h14M3 10h10M3 15h7" stroke="#F59E0B" stroke-width="1.5" stroke-linecap="round"/>
-      </svg>
+      <div class="stat-icon-wrap">
+        <i class="ph-duotone ph-list-bullets" style="font-size:20px;"></i>
+      </div>
       <div>
         <p class="stat-label">Waiting Review</p>
         <p class="stat-value yellow">{{ documents.length }}</p>
       </div>
     </div>
     <div class="stat-card green">
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-        <circle cx="10" cy="10" r="8" stroke="#10B981" stroke-width="1.5"/>
-        <path d="M6 10l3 3 5-5" stroke="#10B981" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
+      <div class="stat-icon-wrap">
+        <i class="ph-duotone ph-check-circle" style="font-size:20px;"></i>
+      </div>
       <div>
         <p class="stat-label">Ready to Submit</p>
         <p class="stat-value green">{{ documents.filter(d => getErrorType(d) === 'Ready').length }}</p>
@@ -54,15 +48,15 @@
   <!-- Tabs -->
   <div class="tabs-row">
     <button class="tab-btn" [class.active]="activeTab === 'invoice'" (click)="setTab('invoice')">
-      📄 Invoice
+      <i class="ph-duotone ph-file-text"></i> Invoice
       <span class="tab-count">{{ documents.length }}</span>
     </button>
     <button class="tab-btn" [class.active]="activeTab === 'po'" (click)="setTab('po')">
-      📋 Purchase Order
+      <i class="ph-duotone ph-clipboard-text"></i> Purchase Order
       <span class="tab-count">{{ poList.length }}</span>
     </button>
     <button class="tab-btn" [class.active]="activeTab === 'gr'" (click)="setTab('gr')">
-      📦 Goods Receipt
+      <i class="ph-duotone ph-package"></i> Goods Receipt
       <span class="tab-count">{{ grList.length }}</span>
     </button>
   </div>
@@ -73,10 +67,7 @@
       <h2 class="section-title">Invoices Requiring Review</h2>
       <p class="section-subtitle">Click to view and edit OCR extracted fields</p>
       <div class="search-bar">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-          <circle cx="7" cy="7" r="5" stroke="#9CA3AF" stroke-width="1.5"/>
-          <path d="M11 11l3 3" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
+<i class="ph-duotone ph-magnifying-glass" style="font-size:15px; color:var(--text-muted);"></i>
         <input type="text" placeholder="Search invoice file or invoice number..."
                class="search-input" [(ngModel)]="searchText"/>
       </div>
@@ -112,12 +103,12 @@
               <td class="invoice-no">{{ doc.invoice_number || '-' }}</td>
               <td>
                 <span class="badge" [ngClass]="getPOStatusClass(doc)" [title]="getPOTooltip(doc)">
-                  {{ getPOStatusLabel(doc) }}
+                  <i *ngIf="getPOStatusIcon(doc)" class="ph-duotone" [ngClass]="getPOStatusIcon(doc)"></i> {{ getPOStatusLabel(doc) }}
                 </span>
               </td>
               <td>
                 <span class="badge" [ngClass]="getGRStatusClass(doc)" [title]="getGRTooltip(doc)">
-                  {{ getGRStatusLabel(doc) }}
+                  <i *ngIf="getGRStatusIcon(doc)" class="ph-duotone" [ngClass]="getGRStatusIcon(doc)"></i> {{ getGRStatusLabel(doc) }}
                 </span>
               </td>
               <td><span class="badge" [ngClass]="getErrorClass(doc)">{{ getErrorType(doc) }}</span></td>
@@ -138,10 +129,10 @@
       <p class="section-subtitle">{{ selectedDoc.file_name }}</p>
       <div class="related-docs-row">
         <span class="badge" [ngClass]="getPOStatusClass(selectedDoc)" [title]="getPOTooltip(selectedDoc)">
-          {{ getPOStatusLabel(selectedDoc) }}
+          <i *ngIf="getPOStatusIcon(selectedDoc)" class="ph-duotone" [ngClass]="getPOStatusIcon(selectedDoc)"></i> {{ getPOStatusLabel(selectedDoc) }}
         </span>
         <span class="badge" [ngClass]="getGRStatusClass(selectedDoc)" [title]="getGRTooltip(selectedDoc)">
-          {{ getGRStatusLabel(selectedDoc) }}
+          <i *ngIf="getGRStatusIcon(selectedDoc)" class="ph-duotone" [ngClass]="getGRStatusIcon(selectedDoc)"></i> {{ getGRStatusLabel(selectedDoc) }}
         </span>
       </div>
       <div class="confidence-bar-wrapper">
@@ -156,8 +147,8 @@
                [ngClass]="getConfidenceClass(selectedDoc.ocr_confidence)"></div>
         </div>
       </div>
-      <div class="success-box" *ngIf="successMessage">✓ {{ successMessage }}</div>
-      <div class="error-box" *ngIf="errorMessage">✗ {{ errorMessage }}</div>
+      <div class="success-box" *ngIf="successMessage"><i class="ph-duotone ph-check-circle"></i> {{ successMessage }}</div>
+      <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
       <div class="fields-list">
         <div class="field-item">
           <label class="field-label">Invoice Number</label>
@@ -196,16 +187,13 @@
           {{ isSubmitting ? 'Submitting...' : selectedDoc?.status === 'returned' ? 'Resubmit to Auditor' : 'Submit to Auditor' }}
         </button>
         <p class="submit-note" *ngIf="!canSubmit()">
-          ⚠ Fill in Invoice Number, Vendor, Date and Amount before submitting.
+          <i class="ph-duotone ph-warning"></i> Fill in Invoice Number, Vendor, Date and Amount before submitting.
         </p>
       </div>
     </div>
 
     <div class="detail-card empty-detail" *ngIf="!selectedDoc">
-      <svg width="60" height="60" viewBox="0 0 60 60" fill="none">
-        <circle cx="30" cy="30" r="28" stroke="#E5E7EB" stroke-width="2"/>
-        <path d="M20 30h20M30 20v20" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round"/>
-      </svg>
+<i class="ph-duotone ph-file-magnifying-glass" style="font-size:60px; color:var(--text-muted);"></i>
       <p class="empty-title">Select an invoice to review</p>
       <p class="empty-desc">Click any invoice from the list on the left to view and edit OCR extracted fields</p>
     </div>
@@ -217,10 +205,7 @@
       <h2 class="section-title">Purchase Orders</h2>
       <p class="section-subtitle">Review and correct OCR extracted PO data</p>
       <div class="search-bar">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-          <circle cx="7" cy="7" r="5" stroke="#9CA3AF" stroke-width="1.5"/>
-          <path d="M11 11l3 3" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
+<i class="ph-duotone ph-magnifying-glass" style="font-size:15px; color:var(--text-muted);"></i>
         <input type="text" placeholder="Search PO file or PO number..."
                class="search-input" [(ngModel)]="searchPO"/>
       </div>
@@ -268,8 +253,8 @@
                [ngClass]="getConfidenceClass(selectedPO.ocr_confidence)"></div>
         </div>
       </div>
-      <div class="success-box" *ngIf="successPO">✓ {{ successPO }}</div>
-      <div class="error-box" *ngIf="errorPO">✗ {{ errorPO }}</div>
+      <div class="success-box" *ngIf="successPO"><i class="ph-duotone ph-check-circle"></i> {{ successPO }}</div>
+      <div class="error-box" *ngIf="errorPO"><i class="ph-duotone ph-x-circle"></i> {{ errorPO }}</div>
       <div class="fields-list">
         <div class="field-item">
           <label class="field-label">PO Number</label>
@@ -300,10 +285,7 @@
     </div>
 
     <div class="detail-card empty-detail" *ngIf="!selectedPO">
-      <svg width="60" height="60" viewBox="0 0 60 60" fill="none">
-        <circle cx="30" cy="30" r="28" stroke="#E5E7EB" stroke-width="2"/>
-        <path d="M20 30h20M30 20v20" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round"/>
-      </svg>
+<i class="ph-duotone ph-file-magnifying-glass" style="font-size:60px; color:var(--text-muted);"></i>
       <p class="empty-title">Select a PO to review</p>
       <p class="empty-desc">Click any PO from the list on the left to view and edit OCR extracted fields</p>
     </div>
@@ -315,10 +297,7 @@
       <h2 class="section-title">Goods Receipts</h2>
       <p class="section-subtitle">Review and correct OCR extracted GR data</p>
       <div class="search-bar">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-          <circle cx="7" cy="7" r="5" stroke="#9CA3AF" stroke-width="1.5"/>
-          <path d="M11 11l3 3" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
+<i class="ph-duotone ph-magnifying-glass" style="font-size:15px; color:var(--text-muted);"></i>
         <input type="text" placeholder="Search GR file or GR number..."
                class="search-input" [(ngModel)]="searchGR"/>
       </div>
@@ -366,8 +345,8 @@
                [ngClass]="getConfidenceClass(selectedGR.ocr_confidence)"></div>
         </div>
       </div>
-      <div class="success-box" *ngIf="successGR">✓ {{ successGR }}</div>
-      <div class="error-box" *ngIf="errorGR">✗ {{ errorGR }}</div>
+      <div class="success-box" *ngIf="successGR"><i class="ph-duotone ph-check-circle"></i> {{ successGR }}</div>
+      <div class="error-box" *ngIf="errorGR"><i class="ph-duotone ph-x-circle"></i> {{ errorGR }}</div>
       <div class="fields-list">
         <div class="field-item">
           <label class="field-label">GR Number</label>
@@ -393,10 +372,7 @@
     </div>
 
     <div class="detail-card empty-detail" *ngIf="!selectedGR">
-      <svg width="60" height="60" viewBox="0 0 60 60" fill="none">
-        <circle cx="30" cy="30" r="28" stroke="#E5E7EB" stroke-width="2"/>
-        <path d="M20 30h20M30 20v20" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round"/>
-      </svg>
+<i class="ph-duotone ph-file-magnifying-glass" style="font-size:60px; color:var(--text-muted);"></i>
       <p class="empty-title">Select a GR to review</p>
       <p class="empty-desc">Click any GR from the list on the left to view and edit OCR extracted fields</p>
     </div>

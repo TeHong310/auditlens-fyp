@@ -2,7 +2,7 @@
 
   <!-- Header -->
   <div class="header">
-    <h1 class="page-title">🛡️ Authenticity Lens</h1>
+    <h1 class="page-title"><i class="ph-duotone ph-shield-check"></i> Authenticity Lens</h1>
     <p class="page-subtitle">AI-powered visual signal detection • {{ filteredChecks.length }} documents checked</p>
   </div>
 
@@ -12,10 +12,10 @@
       All <span class="chip-count">{{ checks.length }}</span>
     </button>
     <button class="filter-chip" [class.active]="activeFilter === 'passed'" (click)="setFilter('passed')">
-      🟢 Passed <span class="chip-count">{{ passedCount }}</span>
+      <i class="ph-duotone ph-check-circle" style="color:var(--success)"></i> Passed <span class="chip-count">{{ passedCount }}</span>
     </button>
     <button class="filter-chip" [class.active]="activeFilter === 'warning'" (click)="setFilter('warning')">
-      ⚠️ Warning <span class="chip-count">{{ warningCount }}</span>
+      <i class="ph-duotone ph-warning" style="color:var(--warning)"></i> Warning <span class="chip-count">{{ warningCount }}</span>
     </button>
   </div>
 
@@ -35,7 +35,7 @@
     </button>
   </div>
 
-  <div class="error-box" *ngIf="errorMessage">✗ {{ errorMessage }}</div>
+  <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
 
   <!-- Loading skeleton -->
   <div class="skeleton-wrap" *ngIf="isLoading">
@@ -44,7 +44,7 @@
 
   <!-- Empty state -->
   <div class="empty-state" *ngIf="!isLoading && !errorMessage && filteredChecks.length === 0">
-    <p class="empty-icon">🛡️</p>
+    <p class="empty-icon"><i class="ph-duotone ph-shield-check"></i></p>
     <p class="empty-text">No authenticity checks to show.</p>
   </div>
 
@@ -53,7 +53,10 @@
     <div class="check-card" [ngClass]="c.authenticity_status === 'warning' ? 'card-warning' : 'card-passed'" *ngFor="let c of filteredChecks" (click)="viewDocument(c)">
 
       <div class="card-top">
-        <span class="card-icon">{{ c.authenticity_status === 'warning' ? '⚠️' : '🛡️' }}</span>
+        <span class="card-icon">
+          <i class="ph-duotone" [ngClass]="c.authenticity_status === 'warning' ? 'ph-warning' : 'ph-shield-check'"
+             [style.color]="c.authenticity_status === 'warning' ? 'var(--warning)' : 'var(--success)'"></i>
+        </span>
         <span class="card-doc-no">{{ c.document_number || 'Unknown Document' }}</span>
         <span class="card-time">{{ relativeTime(c.created_at) }}</span>
       </div>
@@ -62,33 +65,33 @@
 
       <div class="meta-row">
         <span class="meta-item">Document Type: <strong>{{ docTypeLabel(c.document_type) }}</strong></span>
-        <span class="meta-item">Upload Source: {{ uploadSourceIcon(c.upload_source) }} {{ uploadSourceLabel(c.upload_source) }}</span>
+        <span class="meta-item">Upload Source: <i class="ph-duotone" [ngClass]="uploadSourceIcon(c.upload_source)"></i> {{ uploadSourceLabel(c.upload_source) }}</span>
       </div>
 
       <div class="signals-box">
         <p class="section-label">Signals Detected:</p>
         <div class="badge-row">
           <span class="badge" [ngClass]="c.has_company_name ? 'badge-yes' : 'badge-no'">
-            {{ c.has_company_name ? '✓' : '✗' }} Company Name
+            <i class="ph-duotone" [ngClass]="c.has_company_name ? 'ph-check' : 'ph-x'"></i> Company Name
           </span>
           <span class="badge" [ngClass]="c.has_company_chop ? 'badge-yes' : 'badge-no'">
-            {{ c.has_company_chop ? '✓' : '✗' }} Company Chop
+            <i class="ph-duotone" [ngClass]="c.has_company_chop ? 'ph-check' : 'ph-x'"></i> Company Chop
           </span>
           <span class="badge" [ngClass]="c.has_signature ? 'badge-yes' : 'badge-no'">
-            {{ c.has_signature ? '✓' : '✗' }} Signature
+            <i class="ph-duotone" [ngClass]="c.has_signature ? 'ph-check' : 'ph-x'"></i> Signature
           </span>
           <span class="badge" [ngClass]="c.has_company_logo ? 'badge-yes' : 'badge-no'">
-            {{ c.has_company_logo ? '✓' : '✗' }} Company Logo
+            <i class="ph-duotone" [ngClass]="c.has_company_logo ? 'ph-check' : 'ph-x'"></i> Company Logo
           </span>
         </div>
       </div>
 
       <div class="warning-box" *ngIf="c.authenticity_status === 'warning'">
-        ⚠️ Warning: {{ warningReason(c) }}
+        <i class="ph-duotone ph-warning"></i> Warning: {{ warningReason(c) }}
       </div>
 
       <div class="ai-box" *ngIf="c.ai_notes">
-        <p class="section-label">🤖 AI Notes</p>
+        <p class="section-label"><i class="ph-duotone ph-robot"></i> AI Notes</p>
         <p class="ai-text">"{{ c.ai_notes }}"</p>
       </div>
 

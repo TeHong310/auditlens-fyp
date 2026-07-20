@@ -8,10 +8,7 @@
     </div>
     <div class="header-right">
       <div class="search-bar">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <circle cx="7" cy="7" r="5" stroke="#9CA3AF" stroke-width="1.5" />
-          <path d="M11 11l3 3" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round" />
-        </svg>
+        <i class="ph-duotone ph-magnifying-glass" style="font-size:16px; color:var(--text-muted);"></i>
         <input type="text" placeholder="Search upload history..." class="search-input" />
       </div>
       <div class="avatar-btn">F</div>
@@ -25,19 +22,12 @@
       <p class="section-subtitle">Upload new files for finance review and OCR extraction</p>
 
       <div class="success-box" *ngIf="successMessage">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <circle cx="8" cy="8" r="7" stroke="#16a34a" stroke-width="1.5" />
-          <polyline points="4.5,8 7,10.5 11.5,5.5" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round" />
-        </svg>
+        <i class="ph-duotone ph-check-circle" style="font-size:16px;"></i>
         {{ successMessage }}
       </div>
 
       <div class="error-box" *ngIf="errorMessage">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <circle cx="8" cy="8" r="7" stroke="#e53e3e" stroke-width="1.5" />
-          <line x1="8" y1="5" x2="8" y2="9" stroke="#e53e3e" stroke-width="1.5" stroke-linecap="round" />
-          <circle cx="8" cy="11.5" r="0.75" fill="#e53e3e" />
-        </svg>
+        <i class="ph-duotone ph-x-circle" style="font-size:16px;"></i>
         {{ errorMessage }}
       </div>
 
@@ -45,10 +35,7 @@
         (dragover)="onDragOver($event)" (dragleave)="onDragLeave($event)" (drop)="onDrop($event)"
         (click)="!isUploading && onBrowseFiles()">
         <div *ngIf="!isUploading">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <path d="M24 8v24M16 16l8-8 8 8" stroke="#4A90D9" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
-            <path d="M8 36v6h32v-6" stroke="#4A90D9" stroke-width="2.5" stroke-linecap="round" />
-          </svg>
+          <i class="ph-duotone ph-tray-arrow-up" style="font-size:48px; color:var(--accent);"></i>
           <p class="dropzone-title">Drop files here to upload</p>
           <p class="dropzone-subtitle">Supports multiple files — PDF, JPG, JPEG, PNG</p>
         </div>
@@ -64,10 +51,7 @@
 
       <div class="upload-actions">
         <button class="btn-browse" (click)="onBrowseFiles()" [disabled]="isUploading">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M8 2v8M5 5l3-3 3 3" stroke="white" stroke-width="1.5" stroke-linecap="round" />
-            <path d="M2 12v2h12v-2" stroke="white" stroke-width="1.5" stroke-linecap="round" />
-          </svg>
+          <i class="ph-duotone ph-upload-simple" style="font-size:16px; color:white;"></i>
           Browse Files
         </button>
       </div>
@@ -124,7 +108,7 @@
       </div>
       <div style="display:flex; gap:8px;">
         <button class="btn-browse" (click)="retryFailed()" [disabled]="isUploading || !hasRetryableErrors()"
-          style="font-size:13px; padding: 6px 14px;">🔄 Retry Failed</button>
+          style="font-size:13px; padding: 6px 14px;"><i class="ph-duotone ph-arrow-clockwise"></i> Retry Failed</button>
         <button class="btn-filter" (click)="clearDoneItems()" [disabled]="isUploading">Clear Done</button>
         <button class="btn-filter" (click)="clearQueue()" [disabled]="isUploading">Clear All</button>
       </div>
@@ -145,10 +129,7 @@
               <div class="doc-name-wrapper">
                 <img *ngIf="item.previewUrl" [src]="item.previewUrl" class="doc-thumbnail" alt="" />
                 <div class="doc-icon" *ngIf="!item.previewUrl">
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <rect x="2" y="1" width="10" height="12" rx="1.5" stroke="#4A90D9" stroke-width="1.2" />
-                    <path d="M4 4h6M4 6.5h6M4 9h4" stroke="#4A90D9" stroke-width="1.2" stroke-linecap="round" />
-                  </svg>
+                  <i class="ph-duotone ph-file-text" style="font-size:14px;"></i>
                 </div>
                 {{ item.file.name }}
               </div>
@@ -161,9 +142,12 @@
                 'badge-processed': item.status === 'done',
                 'badge-returned':  item.status === 'error'
               }">
-                {{ item.status === 'pending' ? 'Pending' :
-                   item.status === 'uploading' ? 'Uploading...' :
-                   item.status === 'done' ? 'Done ✓' : 'Failed ✗' }}
+                <ng-container [ngSwitch]="item.status">
+                  <ng-container *ngSwitchCase="'pending'">Pending</ng-container>
+                  <ng-container *ngSwitchCase="'uploading'">Uploading...</ng-container>
+                  <ng-container *ngSwitchCase="'done'"><i class="ph-duotone ph-check"></i> Done</ng-container>
+                  <ng-container *ngSwitchDefault><i class="ph-duotone ph-x"></i> Failed</ng-container>
+                </ng-container>
               </span>
             </td>
             <td [style.color]="item.status === 'error' ? '#EF4444' : item.status === 'done' ? '#10B981' : '#6B7280'"
@@ -211,10 +195,7 @@
             <td class="doc-name">
               <div class="doc-name-wrapper">
                 <div class="doc-icon">
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <rect x="2" y="1" width="10" height="12" rx="1.5" stroke="#4A90D9" stroke-width="1.2" />
-                    <path d="M4 4h6M4 6.5h6M4 9h4" stroke="#4A90D9" stroke-width="1.2" stroke-linecap="round" />
-                  </svg>
+                  <i class="ph-duotone ph-file-text" style="font-size:14px;"></i>
                 </div>
                 {{ doc.file_name }}
               </div>
@@ -254,7 +235,7 @@
         <h2 class="section-title">Supporting Documents</h2>
         <p class="section-subtitle">Attach PO and GR for: <strong>{{ selectedDocumentName }}</strong></p>
       </div>
-      <button class="btn-filter" (click)="selectedDocumentId = null">✕ Close</button>
+      <button class="btn-filter" (click)="selectedDocumentId = null"><i class="ph-duotone ph-x"></i> Close</button>
     </div>
 
     <div class="supporting-grid">
@@ -263,10 +244,7 @@
       <div class="supporting-card">
         <div class="supporting-header">
           <div class="supporting-icon po">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <rect x="3" y="2" width="14" height="16" rx="2" stroke="#1A5FAB" stroke-width="1.5"/>
-              <path d="M6 6h8M6 9h8M6 12h5" stroke="#1A5FAB" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
+            <i class="ph-duotone ph-file-text" style="font-size:20px;"></i>
           </div>
           <div>
             <p class="supporting-title">Purchase Order (PO)</p>
@@ -281,8 +259,8 @@
           (change)="onPOFileSelected($event)" />
 
         <button class="btn-supporting" (click)="poInput.click()" [disabled]="isUploadingPO">
-          <span *ngIf="!isUploadingPO">📄 Upload PO</span>
-          <span *ngIf="isUploadingPO">⏳ Processing OCR...</span>
+          <span *ngIf="!isUploadingPO"><i class="ph-duotone ph-file-text"></i> Upload PO</span>
+          <span *ngIf="isUploadingPO"><i class="ph-duotone ph-hourglass-medium"></i> Processing OCR...</span>
         </button>
       </div>
 
@@ -290,10 +268,7 @@
       <div class="supporting-card">
         <div class="supporting-header">
           <div class="supporting-icon gr">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <rect x="3" y="2" width="14" height="16" rx="2" stroke="#059669" stroke-width="1.5"/>
-              <path d="M7 10l2 2 4-4" stroke="#059669" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
+            <i class="ph-duotone ph-package" style="font-size:20px;"></i>
           </div>
           <div>
             <p class="supporting-title">Goods Receipt (GR)</p>
@@ -308,8 +283,8 @@
           (change)="onGRFileSelected($event)" />
 
         <button class="btn-supporting btn-gr" (click)="grInput.click()" [disabled]="isUploadingGR">
-          <span *ngIf="!isUploadingGR">📦 Upload GR</span>
-          <span *ngIf="isUploadingGR">⏳ Processing OCR...</span>
+          <span *ngIf="!isUploadingGR"><i class="ph-duotone ph-package"></i> Upload GR</span>
+          <span *ngIf="isUploadingGR"><i class="ph-duotone ph-hourglass-medium"></i> Processing OCR...</span>
         </button>
       </div>
 

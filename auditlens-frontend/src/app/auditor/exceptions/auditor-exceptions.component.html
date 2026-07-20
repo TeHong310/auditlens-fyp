@@ -2,7 +2,7 @@
 
   <!-- Header -->
   <div class="header">
-    <h1 class="page-title">🚨 Exceptions</h1>
+    <h1 class="page-title"><i class="ph-duotone ph-siren"></i> Exceptions</h1>
     <p class="page-subtitle">Records requiring attention • {{ exceptions.length }} total</p>
   </div>
 
@@ -23,18 +23,18 @@
     </div>
 
     <!-- Error -->
-    <div class="error-box" *ngIf="errorMessage && !isLoading">✗ {{ errorMessage }}</div>
+    <div class="error-box" *ngIf="errorMessage && !isLoading"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
 
     <!-- Empty state -->
     <div class="empty-state" *ngIf="!isLoading && !errorMessage && filteredExceptions.length === 0">
-      <p class="empty-icon">🎉</p>
+      <p class="empty-icon"><i class="ph-duotone ph-confetti"></i></p>
       <p class="empty-text">No exceptions — all records clean!</p>
     </div>
 
     <!-- Exception rows -->
     <div class="exception-row" *ngFor="let exc of filteredExceptions" [ngClass]="'sev-' + exc.severity">
       <div class="exception-severity">
-        <span class="sev-icon">{{ severityIcon(exc.severity) }}</span>
+        <span class="sev-icon"><i class="ph-duotone" [ngClass]="severityIcon(exc.severity)" [style.color]="severityColor(exc.severity)"></i></span>
         <span class="sev-label">{{ severityLabel(exc.severity) }}</span>
       </div>
       <div class="exception-body">

@@ -65,6 +65,32 @@
 .stat-card.yellow { border-left-color: var(--warning); }
 .stat-card.green { border-left-color: var(--success); }
 
+.stat-icon-wrap {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.stat-card.red .stat-icon-wrap {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 25%, transparent);
+  color: var(--danger);
+}
+.stat-card.yellow .stat-icon-wrap {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--warning) 25%, transparent);
+  color: var(--warning);
+}
+.stat-card.green .stat-icon-wrap {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--success) 25%, transparent);
+  color: var(--success);
+}
+
 .stat-label {
   font-size: 12px;
   color: var(--text-secondary);

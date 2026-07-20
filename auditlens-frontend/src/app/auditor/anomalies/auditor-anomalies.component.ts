@@ -28,19 +28,19 @@ export class AuditorAnomaliesComponent implements OnInit {
   activeType: AnomalyType = 'all';
   activeStatus: Status = 'pending';
 
-  severityFilters: { key: Severity; label: string; icon: string }[] = [
-    { key: 'all', label: 'All', icon: '' },
-    { key: 'high', label: 'High', icon: '🔴' },
-    { key: 'medium', label: 'Med', icon: '🟡' },
-    { key: 'low', label: 'Low', icon: '🟠' },
+  severityFilters: { key: Severity; label: string; icon: string; color: string }[] = [
+    { key: 'all', label: 'All', icon: '', color: '' },
+    { key: 'high', label: 'High', icon: 'ph-circle', color: 'var(--danger)' },
+    { key: 'medium', label: 'Med', icon: 'ph-circle', color: 'var(--warning)' },
+    { key: 'low', label: 'Low', icon: 'ph-circle', color: 'var(--warning)' },
   ];
 
-  typeFilters: { key: AnomalyType; label: string; icon: string }[] = [
-    { key: 'all', label: 'All', icon: '' },
-    { key: 'amount', label: 'Amount', icon: '💰' },
-    { key: 'round', label: 'Round', icon: '🎯' },
-    { key: 'weekend', label: 'Weekend', icon: '📅' },
-    { key: 'duplicate', label: 'Dup', icon: '🔁' },
+  typeFilters: { key: AnomalyType; label: string; icon: string; color: string }[] = [
+    { key: 'all', label: 'All', icon: '', color: '' },
+    { key: 'amount', label: 'Amount', icon: 'ph-currency-circle-dollar', color: '' },
+    { key: 'round', label: 'Round', icon: 'ph-target', color: '' },
+    { key: 'weekend', label: 'Weekend', icon: 'ph-calendar-blank', color: '' },
+    { key: 'duplicate', label: 'Dup', icon: 'ph-repeat', color: '' },
   ];
 
   statusFilters: { key: Status; label: string }[] = [
@@ -136,17 +136,19 @@ export class AuditorAnomaliesComponent implements OnInit {
   }
 
   severityIcon(sev: string): string {
-    if (sev === 'high') return '🔴';
-    if (sev === 'medium') return '🟡';
-    return '🟠';
+    return 'ph-circle';
+  }
+
+  severityColor(sev: string): string {
+    return sev === 'high' ? 'var(--danger)' : 'var(--warning)';
   }
 
   typeIcon(type: string): string {
-    if (type === 'amount') return '💰';
-    if (type === 'round') return '🎯';
-    if (type === 'weekend') return '📅';
-    if (type === 'duplicate') return '🔁';
-    return '❓';
+    if (type === 'amount') return 'ph-currency-circle-dollar';
+    if (type === 'round') return 'ph-target';
+    if (type === 'weekend') return 'ph-calendar-blank';
+    if (type === 'duplicate') return 'ph-repeat';
+    return 'ph-question';
   }
 
   typeLabel(type: string): string {

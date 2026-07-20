@@ -8,18 +8,12 @@
     </div>
     <div class="header-right">
       <div class="search-bar">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-          <circle cx="7" cy="7" r="5" stroke="#9CA3AF" stroke-width="1.5"/>
-          <path d="M11 11l3 3" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
+        <i class="ph-duotone ph-magnifying-glass" style="font-size:14px; color:var(--text-muted);"></i>
         <input type="text" placeholder="Search documents..." class="search-input"
                [(ngModel)]="searchText" [ngModelOptions]="{standalone: true}"/>
       </div>
       <button class="btn-export" (click)="exportReport()">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-          <path d="M8 2v8M5 7l3 3 3-3" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M2 12v2h12v-2" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
+        <i class="ph-duotone ph-download-simple" style="font-size:14px; color:white;"></i>
         Export CSV
       </button>
     </div>
@@ -27,70 +21,57 @@
 
   <!-- Stats Cards -->
   <div class="stats-row">
-    <div class="stat-card" style="--card-color:#4A90D9; --card-bg:#EBF4FF;">
+    <div class="stat-card" style="--card-color:var(--accent);">
       <div class="stat-icon-wrap">
-        <svg width="20" height="20" viewBox="0 0 22 22" fill="none">
-          <rect x="3" y="3" width="16" height="16" rx="2" stroke="#4A90D9" stroke-width="1.5"/>
-          <path d="M7 8h8M7 11h8M7 14h5" stroke="#4A90D9" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
+        <i class="ph-duotone ph-file-text" style="font-size:20px;"></i>
       </div>
       <div class="stat-info">
         <p class="stat-label">Total Documents</p>
-        <p class="stat-value" style="color:#4A90D9">{{ totalDocuments }}</p>
+        <p class="stat-value" style="color:var(--accent)">{{ totalDocuments }}</p>
         <p class="stat-sub">All time</p>
       </div>
     </div>
 
-    <div class="stat-card" style="--card-color:#10B981; --card-bg:#ECFDF5;">
+    <div class="stat-card" style="--card-color:var(--success);">
       <div class="stat-icon-wrap">
-        <svg width="20" height="20" viewBox="0 0 22 22" fill="none">
-          <circle cx="11" cy="11" r="9" stroke="#10B981" stroke-width="1.5"/>
-          <path d="M7 11l3 3 5-5" stroke="#10B981" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
+        <i class="ph-duotone ph-check-circle" style="font-size:20px;"></i>
       </div>
       <div class="stat-info">
         <p class="stat-label">Approved</p>
-        <p class="stat-value" style="color:#10B981">{{ totalApproved }}</p>
+        <p class="stat-value" style="color:var(--success)">{{ totalApproved }}</p>
         <p class="stat-sub">Verified by Auditor</p>
       </div>
     </div>
 
-    <div class="stat-card" style="--card-color:#EF4444; --card-bg:#FEF2F2;">
+    <div class="stat-card" style="--card-color:var(--danger);">
       <div class="stat-icon-wrap">
-        <svg width="20" height="20" viewBox="0 0 22 22" fill="none">
-          <circle cx="11" cy="11" r="9" stroke="#EF4444" stroke-width="1.5"/>
-          <path d="M8 8l6 6M14 8l-6 6" stroke="#EF4444" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
+        <i class="ph-duotone ph-x-circle" style="font-size:20px;"></i>
       </div>
       <div class="stat-info">
         <p class="stat-label">Returned</p>
-        <p class="stat-value" style="color:#EF4444">{{ totalReturned }}</p>
+        <p class="stat-value" style="color:var(--danger)">{{ totalReturned }}</p>
         <p class="stat-sub">Needs correction</p>
       </div>
     </div>
 
-    <div class="stat-card" style="--card-color:#F59E0B; --card-bg:#FFFBEB;">
+    <div class="stat-card" style="--card-color:var(--warning);">
       <div class="stat-icon-wrap">
-        <svg width="20" height="20" viewBox="0 0 22 22" fill="none">
-          <path d="M3 6h16M3 11h11M3 16h8" stroke="#F59E0B" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
+        <i class="ph-duotone ph-list-bullets" style="font-size:20px;"></i>
       </div>
       <div class="stat-info">
         <p class="stat-label">Under Review</p>
-        <p class="stat-value" style="color:#F59E0B">{{ totalUnderReview }}</p>
+        <p class="stat-value" style="color:var(--warning)">{{ totalUnderReview }}</p>
         <p class="stat-sub">Pending auditor</p>
       </div>
     </div>
 
-    <div class="stat-card" style="--card-color:#6366F1; --card-bg:#EEF2FF;">
+    <div class="stat-card" style="--card-color:var(--accent-soft);">
       <div class="stat-icon-wrap">
-        <svg width="20" height="20" viewBox="0 0 22 22" fill="none">
-          <path d="M3 17l4-4 4 4 6-8" stroke="#6366F1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
+        <i class="ph-duotone ph-trend-up" style="font-size:20px;"></i>
       </div>
       <div class="stat-info">
         <p class="stat-label">Avg Match Score</p>
-        <p class="stat-value" style="color:#6366F1">{{ avgMatchScore || '-' }}{{ avgMatchScore ? '%' : '' }}</p>
+        <p class="stat-value" style="color:var(--accent-soft)">{{ avgMatchScore || '-' }}{{ avgMatchScore ? '%' : '' }}</p>
         <p class="stat-sub">OCR accuracy</p>
       </div>
     </div>

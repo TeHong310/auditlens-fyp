@@ -70,7 +70,6 @@
   align-items: center;
   justify-content: center;
   border-radius: 10px;
-  background: rgba(255,255,255,0.6);
 }
 
 .stat-value {
@@ -88,15 +87,35 @@
 
 .stat-approved  { background: linear-gradient(135deg, var(--success-bg), var(--success-bg)); }
 .stat-approved .stat-value { color: var(--success); }
+.stat-approved .stat-icon {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 25%, transparent);
+  color: var(--success);
+}
 
 .stat-sent-back { background: linear-gradient(135deg, var(--danger-bg), var(--danger-bg)); }
 .stat-sent-back .stat-value { color: var(--danger); }
+.stat-sent-back .stat-icon {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+  color: var(--danger);
+}
 
 .stat-pending   { background: linear-gradient(135deg, var(--warning-bg), var(--warning-bg)); }
 .stat-pending .stat-value { color: var(--warning); }
+.stat-pending .stat-icon {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 25%, transparent);
+  color: var(--warning);
+}
 
 .stat-exceptions { background: linear-gradient(135deg, var(--accent-bg), var(--accent-bg)); }
 .stat-exceptions .stat-value { color: var(--accent-soft); }
+.stat-exceptions .stat-icon {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--accent-soft);
+}
 
 /* Chart Card */
 .chart-card {
