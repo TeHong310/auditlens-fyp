@@ -797,6 +797,21 @@ def extract_fields(ocr_text):
                 if val and val > 1:
                     usd_total_candidates.append(val)
 
+            # Bare-word form (no parentheses): "Total amount: USD 8,020.00",
+            # "Grand Total USD 8,020.00" — as common on real invoices as the
+            # parenthesized "TOTAL (US$)" form above; previously unmatched
+            # by any pattern, so a document using this layout silently
+            # produced no total_amount at all despite the value being
+            # clearly printed and labeled.
+            bare_usd_total_match = re.search(
+                r'\b(?:total\s*(?:amount)?|grand\s*total|amount\s*due)\s*[:\-]?\s*(us\$|usd)\s*([\d,]+\.?\d*)',
+                line_clean, re.IGNORECASE
+            )
+            if bare_usd_total_match:
+                val = extract_amount(bare_usd_total_match.group(2))
+                if val and val > 1:
+                    usd_total_candidates.append(val)
+
         # ── TOTAL AMOUNT ──────────────────────────────────
         # Collect every "total"-labeled amount on the invoice (skipping
         # Subtotal/Sub Total lines) instead of stopping at the first match —
@@ -1004,6 +1019,32 @@ def extract_po_fields(ocr_text):
     if item_qty is not None:
         fields['quantity'] = item_qty
 
+    # ── PO NUMBER: "Document No."/"Doc No." gets DOCUMENT-WIDE priority
+    # over the generic "PO ..." pattern in the per-line loop below,
+    # checked in its own pass over every line (not gated to whichever
+    # line the main loop happens to reach first). Real POs often also
+    # carry a DIFFERENT field like "PO Ref No: 400-C008" (a buyer-side
+    # reference/cost-center code, not the PO's own document number) —
+    # if that line appears earlier in the document than "Document No:
+    # PO3006000", the per-line loop would already have set po_number
+    # from the wrong field by the time it reached the right one. Doing
+    # this as a separate, first, whole-document pass means the correct
+    # label wins regardless of line order.
+    for _line in lines:
+        _doc_no_match = re.search(
+            r'\b(?:document|doc)\.?\s*(?:no\.?|number|#)\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
+            _line.strip(), re.IGNORECASE
+        )
+        if _doc_no_match:
+            _val = _doc_no_match.group(1).strip()
+            # Reject a bare label word being echoed back as the value
+            # (e.g. matching into an adjacent "...No: Ref..." fragment) —
+            # same class of bug the Gemini-side prompt and the validator
+            # both already guard against.
+            if len(_val) > 2 and _val.lower() not in ('ref', 'no', 'number'):
+                fields['po_number'] = _val
+                break
+
     for i, line in enumerate(lines):
         line_clean = line.strip()
         next_line  = lines[i + 1].strip() if i + 1 < len(lines) else ''
@@ -1058,7 +1099,14 @@ def extract_po_fields(ocr_text):
         # total below) — real POs may show "Total Payable Incl. Tax
         # (RM) 32,946.16" alongside a reference "USD 8,020" original-
         # currency amount; the real transaction amount is the USD one.
-        usd_match = re.search(r'\b(?:usd|us\$)\s*[:\-]?\s*([\d,]+\.?\d*)', line_clean, re.IGNORECASE)
+        # Checks both currency-then-number ("USD 8,020.00") and
+        # number-then-currency ("8,020.00 USD") — real documents use
+        # either order, and only the first form was previously matched,
+        # silently dropping the total on documents using the second.
+        usd_match = (
+            re.search(r'\b(?:usd|us\$)\s*[:\-]?\s*([\d,]+\.?\d*)', line_clean, re.IGNORECASE)
+            or re.search(r'([\d,]+\.?\d*)\s*(?:usd|us\$)\b', line_clean, re.IGNORECASE)
+        )
         if usd_match:
             val = extract_amount(usd_match.group(1))
             if val and val > 1:
@@ -1077,13 +1125,20 @@ def extract_po_fields(ocr_text):
             )
             if match:
                 val = match.group(1).strip()
-                if len(val) > 2:
+                # Reject a bare label word (e.g. "PO Ref No: 400-C008" —
+                # a DIFFERENT field, a buyer-side reference code, not this
+                # PO's own number — matches "PO" + whitespace and would
+                # otherwise capture "Ref" as if it were the value).
+                if len(val) > 2 and val.lower() not in ('ref', 'no', 'number'):
                     fields['po_number'] = val
 
             # Real POs sometimes label the document number bare "Doc No."
             # rather than "PO No." — checked only when the PO-specific
             # pattern above didn't match, so a genuine "PO No:" line is
-            # never overridden by this looser fallback.
+            # never overridden by this looser fallback. (In practice the
+            # document-wide "Document No."/"Doc No." pass earlier in this
+            # function already catches most of these first; this stays as
+            # a same-line safety net for phrasing that pass doesn't.)
             if fields['po_number'] is None:
                 doc_match = re.search(
                     r'doc\.?\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
@@ -1091,7 +1146,7 @@ def extract_po_fields(ocr_text):
                 )
                 if doc_match:
                     val = doc_match.group(1).strip()
-                    if len(val) > 2:
+                    if len(val) > 2 and val.lower() not in ('ref', 'no', 'number'):
                         fields['po_number'] = val
 
         # ── VENDOR NAME (the SUPPLIER, never the letterhead/buyer) ──
@@ -1289,13 +1344,23 @@ def extract_gr_fields(ocr_text):
             if re.search(r'\bfrom\s+doc', line_clean, re.IGNORECASE):
                 match = None
             else:
+                # "document\.?" must precede the shorter "doc\.?" for the
+                # same reason "doc\.?" precedes "gr"/"do" per the comment
+                # above: alternation tries alternatives left-to-right and
+                # stops at the first one that lets the match succeed, not
+                # necessarily the longest — without this, "doc\.?" alone
+                # would already succeed by matching just "Doc" inside
+                # "Document" (no word boundary required, since "Doc No."
+                # must also match), then greedily capture the rest of that
+                # SAME word ("ument") as the value, e.g. "Document No:
+                # PD6011823" wrongly producing gr_number="ument".
                 match = re.search(
-                    r'(?:goods\s*receipt|delivery\s*order|doc\.?|asn|gr|do)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
+                    r'(?:goods\s*receipt|delivery\s*order|document\.?|doc\.?|asn|gr|do)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
                     line_clean, re.IGNORECASE
                 )
             if match:
                 val = match.group(1).strip()
-                if len(val) > 2:
+                if len(val) > 2 and val.lower() not in ('ument', 'no', 'number'):
                     fields['gr_number'] = val
 
                 if fields['gr_number'] is None:

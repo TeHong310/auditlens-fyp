@@ -249,6 +249,7 @@ def upload_document():
         print(f"DEBUG OCR INVOICE FIELDS | invoice_number={fields.get('invoice_number')} | "
               f"invoice_date={fields.get('invoice_date')} | vendor_name={fields.get('vendor_name')} | "
               f"total_amount={fields.get('total_amount')} | tax_amount={fields.get('tax_amount')}")
+        print(f"DEBUG INVOICE PIPELINE\nOCR fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 1/5)
         _debug_log_memory('5_after_ocr_processing')  # TEMP-DEBUG-MEM (NOTE: OCR runs BEFORE Gemini in this endpoint, not after — see report)
 
         # Single merged Gemini vision call: fields + authenticity signals
@@ -258,6 +259,7 @@ def upload_document():
         # Falls back to the regex fields above and the OCR-text
         # authenticity heuristic (below) if this call fails.
         gemini_result = gemini_extract_invoice_full(file_bytes_data, safe_name)
+        print(f"DEBUG INVOICE PIPELINE\nGemini parsed:\n{gemini_result}")  # TEMP-DEBUG (pipeline trace, step 3/5 — "Gemini raw" text is logged inside gemini_extract_invoice_full itself)
         _debug_log_memory('4_after_gemini_api_response')  # TEMP-DEBUG-MEM
         _debug_log_extraction_trace('gemini_raw', safe_name, 'invoice', gemini_result)  # TEMP-DEBUG
         if gemini_result:
@@ -275,6 +277,8 @@ def upload_document():
             fields['total_amount'] = float(fields['total_amount'])
         if fields['tax_amount'] is not None:
             fields['tax_amount'] = float(fields['tax_amount'])
+
+        print(f"DEBUG INVOICE PIPELINE\nMerged fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 4/5)
 
         # FIX (invoice field-loss bug): validate_extraction()'s date check
         # only recognizes ISO 'YYYY-MM-DD' strings. Gemini already returns
@@ -296,6 +300,7 @@ def upload_document():
         # fields — no additional Gemini call. See helpers/extraction_validator.py.
         fields, validation_result = validate_extraction('invoice', fields, fields.get('line_items'))
         _debug_log_extraction_trace('final_fields', safe_name, 'invoice', fields)  # TEMP-DEBUG
+        print(f"DEBUG INVOICE PIPELINE\nValidated fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 5/5)
 
         invoice_date = parse_date(fields['invoice_date'])
 
@@ -412,7 +417,10 @@ def upload_purchase_order(document_id):
         # Single merged Gemini vision call: fields + authenticity signals
         # in one request, so a PO upload never spends more than one
         # Gemini call — mirrors upload_document()'s invoice pattern.
+        print(f"DEBUG PO PIPELINE\nOCR fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 1/5)
+
         gemini_result = gemini_extract_po_full(file_bytes_data, safe_name)
+        print(f"DEBUG PO PIPELINE\nGemini parsed:\n{gemini_result}")  # TEMP-DEBUG (pipeline trace, step 3/5 — "Gemini raw" text is logged inside gemini_extract_po_full itself)
         _debug_log_extraction_trace('gemini_raw', safe_name, 'po', gemini_result)  # TEMP-DEBUG
         if gemini_result:
             for key in ('po_number', 'vendor_name', 'po_date', 'total_amount',
@@ -425,10 +433,26 @@ def upload_purchase_order(document_id):
         if fields['total_amount'] is not None:
             fields['total_amount'] = float(fields['total_amount'])
 
+        print(f"DEBUG PO PIPELINE\nMerged fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 4/5)
+
+        # FIX (PO date-loss bug — same class as the invoice_date fix):
+        # validate_extraction()'s date check only recognizes ISO
+        # 'YYYY-MM-DD' strings. The regex OCR fallback can produce
+        # "17/12/2025" (DD/MM/YYYY), which parse_date() understands fine
+        # but which only got normalized to ISO AFTER validation ran,
+        # causing a valid OCR/Gemini-agreed date to be rejected as "not
+        # plausible" and silently nulled. Normalizing here, before
+        # validate_extraction(), fixes it — extraction_validator.py
+        # itself is untouched.
+        _pre_validation_po_date = parse_date(fields['po_date'])
+        if _pre_validation_po_date is not None:
+            fields['po_date'] = str(_pre_validation_po_date)
+
         # Lightweight post-processing validation of the already-extracted
         # fields — no additional Gemini call. See helpers/extraction_validator.py.
         fields, validation_result = validate_extraction('po', fields, fields.get('line_items'))
         _debug_log_extraction_trace('final_fields', safe_name, 'po', fields)  # TEMP-DEBUG
+        print(f"DEBUG PO PIPELINE\nValidated fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 5/5)
 
         po_date = parse_date(fields['po_date'])
 
@@ -526,11 +550,13 @@ def upload_goods_receipt(document_id):
         ocr_results, ocr_text, confidence = run_ocr(file_path, file_ext)
         confidence = float(confidence)
         fields     = extract_gr_fields(ocr_text)
+        print(f"DEBUG GR PIPELINE\nOCR fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 1/5)
 
         # Single merged Gemini vision call: fields + authenticity signals
         # in one request, so a GR upload never spends more than one
         # Gemini call — mirrors upload_document()'s invoice pattern.
         gemini_result = gemini_extract_gr_full(file_bytes_data, safe_name)
+        print(f"DEBUG GR PIPELINE\nGemini parsed:\n{gemini_result}")  # TEMP-DEBUG (pipeline trace, step 3/5 — "Gemini raw" text is logged inside gemini_extract_gr_full itself)
         _debug_log_extraction_trace('gemini_raw', safe_name, 'gr', gemini_result)  # TEMP-DEBUG
         if gemini_result:
             for key in ('gr_number', 'vendor_name', 'receipt_date',
@@ -544,10 +570,26 @@ def upload_goods_receipt(document_id):
         if fields['total_amount'] is not None:
             fields['total_amount'] = float(fields['total_amount'])
 
+        print(f"DEBUG GR PIPELINE\nMerged fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 4/5)
+
+        # FIX (GR date-loss bug — same class as the invoice_date fix):
+        # validate_extraction()'s date check only recognizes ISO
+        # 'YYYY-MM-DD' strings. The regex OCR fallback can produce
+        # "04/03/2026" (DD/MM/YYYY), which parse_date() understands fine
+        # but which only got normalized to ISO AFTER validation ran,
+        # causing a valid extracted date to be rejected as "not
+        # plausible" and silently nulled. Normalizing here, before
+        # validate_extraction(), fixes it — extraction_validator.py
+        # itself is untouched.
+        _pre_validation_receipt_date = parse_date(fields['receipt_date'])
+        if _pre_validation_receipt_date is not None:
+            fields['receipt_date'] = str(_pre_validation_receipt_date)
+
         # Lightweight post-processing validation of the already-extracted
         # fields — no additional Gemini call. See helpers/extraction_validator.py.
         fields, validation_result = validate_extraction('gr', fields, fields.get('line_items'))
         _debug_log_extraction_trace('final_fields', safe_name, 'gr', fields)  # TEMP-DEBUG
+        print(f"DEBUG GR PIPELINE\nValidated fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 5/5)
 
         receipt_date = parse_date(fields['receipt_date'])
 

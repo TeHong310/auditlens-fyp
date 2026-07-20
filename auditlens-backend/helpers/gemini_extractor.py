@@ -771,6 +771,9 @@ def gemini_extract_po_full(file_bytes, file_name):
         )
         if text is None:
             return None
+        # TEMP-DEBUG: see the matching comment in gemini_extract_invoice_full.
+        _raw_preview = text if len(text) <= 3000 else text[:3000] + '...<truncated>'
+        print(f"DEBUG GEMINI RAW RESPONSE | type=po | text={_raw_preview!r}")
         result = json.loads(_strip_markdown_fences(text))
         # TEMP-DEBUG: see the matching comment in gemini_extract_invoice_full.
         print(f"DEBUG GEMINI RESULT | type=po | po_number={result.get('po_number')} | "
@@ -802,6 +805,9 @@ def gemini_extract_gr_full(file_bytes, file_name):
         )
         if text is None:
             return None
+        # TEMP-DEBUG: see the matching comment in gemini_extract_invoice_full.
+        _raw_preview = text if len(text) <= 3000 else text[:3000] + '...<truncated>'
+        print(f"DEBUG GEMINI RAW RESPONSE | type=gr | text={_raw_preview!r}")
         result = json.loads(_strip_markdown_fences(text))
         # TEMP-DEBUG: see the matching comment in gemini_extract_invoice_full.
         print(f"DEBUG GEMINI RESULT | type=gr | gr_number={result.get('gr_number')} | "
