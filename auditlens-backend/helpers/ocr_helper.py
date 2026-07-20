@@ -1427,6 +1427,76 @@ def extract_po_fields(ocr_text):
     return fields
 
 
+# GR header table value shapes — a bare document-number-like token (a
+# handful of letters then digits, e.g. "PD6011823") and a bare date
+# (numeric or "04 MAR 2026" month-name form). Anchored (whole line) since
+# these are only ever checked against lines already narrowed down to a
+# small window right after a "Doc No."/"Date" header.
+_GR_HEADER_NUMBER_RE = re.compile(r'^[A-Za-z]{0,4}\d{4,}(?:[-\/][A-Za-z0-9]+)*$')
+_GR_HEADER_DATE_RE = re.compile(
+    r'^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$|^\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4}$'
+)
+# Same-line combined form: "PD6011823 04/03/2026".
+_GR_HEADER_COMBINED_RE = re.compile(
+    r'^([A-Za-z]{0,4}\d{4,}(?:[-\/][A-Za-z0-9]+)*)\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4})$'
+)
+
+
+def _find_gr_header_pair(lines, window=5):
+    """Google Vision often reads the Coilcraft-style compact GR header
+    table ("Doc No.  Date" / "PD6011823  04/03/2026") as a flattened,
+    reordered sequence of lines instead of one row per field — labels
+    and values can land in any of several orders:
+
+        Doc No.          Doc No.          Doc No. Date         PD6011823
+        Date             PD6011823        PD6011823 04/03/2026 04/03/2026
+        PD6011823        Date
+        04/03/2026       04/03/2026
+
+    Anchors on a "Doc No."/"Document No." label line, confirms a "Date"
+    label appears somewhere in the next few lines too (otherwise this is
+    just an ordinary standalone Doc No. line, already handled elsewhere),
+    then takes the first document-number-shaped value and the first
+    date-shaped value found in that window — regardless of which order
+    they appear in relative to each other or to the labels themselves.
+
+    Returns (gr_number, gr_number_index, date_text, date_index) or None.
+    """
+    for i, line in enumerate(lines):
+        line_clean = line.strip()
+        if not re.search(r'\b(?:document|doc)\.?\s*no\.?\b', line_clean, re.IGNORECASE):
+            continue
+
+        header_window = lines[i:i + window]
+        window_text = ' '.join(w.strip() for w in header_window).lower()
+        if 'date' not in window_text:
+            continue  # a bare "Doc No." mention, not this compact header table
+
+        found_number = None
+        found_date = None
+        for offset, w_line in enumerate(header_window):
+            w_clean = w_line.strip()
+            idx = i + offset
+
+            combined = _GR_HEADER_COMBINED_RE.match(w_clean)
+            if combined:
+                if found_number is None:
+                    found_number = (combined.group(1), idx)
+                if found_date is None:
+                    found_date = (combined.group(2), idx)
+                continue
+
+            if found_number is None and _GR_HEADER_NUMBER_RE.match(w_clean):
+                found_number = (w_clean, idx)
+            if found_date is None and _GR_HEADER_DATE_RE.match(w_clean):
+                found_date = (w_clean, idx)
+
+        if found_number and found_date:
+            return found_number[0], found_number[1], found_date[0], found_date[1]
+
+    return None
+
+
 def extract_gr_fields(ocr_text):
     fields = {
         'gr_number':        None,
@@ -1495,6 +1565,24 @@ def extract_gr_fields(ocr_text):
         fields['item_description'] = item_desc
     if item_qty is not None:
         fields['quantity'] = item_qty
+
+    # ── COMPACT HEADER TABLE ("Doc No. / Date") ────────────────────
+    # Tried once, up front, over the whole document — a flattened/
+    # reordered "Doc No. Date" header table (see _find_gr_header_pair())
+    # produces a very high-confidence gr_number + receipt_date PAIR that
+    # a normal per-line label:value scan can miss entirely when the label
+    # and value don't land on the same or adjacent line. Scored above
+    # every other date label (even "Receipt Date") since this is a
+    # structurally-confirmed header pairing, not just a keyword match.
+    _header_pair = _find_gr_header_pair(lines)
+    if _header_pair:
+        _hdr_number, _hdr_number_idx, _hdr_date, _hdr_date_idx = _header_pair
+        gr_number_candidates.append(make_candidate(
+            _hdr_number, 'Doc No. / Date header table', _hdr_number_idx, 100,
+            'GR header table document number'))
+        receipt_date_candidates.append(make_candidate(
+            _hdr_date, 'Doc No. / Date header table', _hdr_date_idx, 120,
+            'GR header table date (paired with Doc No., outranks every label-based date)'))
 
     for i, line in enumerate(lines):
         line_clean = line.strip()

@@ -109,11 +109,50 @@ def run_case_gr_only_from_doc_date_present():
           fields['_confidence']['receipt_date'])
 
 
+def run_case_coilcraft_header_table_all_flattened_forms():
+    """The real Coilcraft GR header is a compact two-column table
+    ("Doc No.  Date" / "PD6011823  04/03/2026") that Google Vision can
+    flatten into several different line orderings. All four supported
+    forms must resolve to the same gr_number/receipt_date pair, and none
+    of them may pick up the earlier "From Doc Date: 17/12/2025" line."""
+    print('Case: Coilcraft compact "Doc No. / Date" header table — all flattened forms')
+    preamble = (
+        "RECEIVING CO SDN BHD\n"
+        "From Doc No.\n"
+        "PO3006000\n"
+        "From Doc Date: 17/12/2025\n"
+        "Supplier: Coilcraft Inc\n"
+    )
+    forms = {
+        'labels then values (Doc No. / Date / PD6011823 / 04/03/2026)':
+            preamble + "Doc No.\nDate\nPD6011823\n04/03/2026\n",
+        'label value label value (Doc No. / PD6011823 / Date / 04/03/2026)':
+            preamble + "Doc No.\nPD6011823\nDate\n04/03/2026\n",
+        'same-line labels and values (Doc No. Date / PD6011823 04/03/2026)':
+            preamble + "Doc No. Date\nPD6011823 04/03/2026\n",
+        'month-name date (Doc No. / Date / PD6011823 / 04 MAR 2026)':
+            preamble + "Doc No.\nDate\nPD6011823\n04 MAR 2026\n",
+    }
+    for label, ocr_text in forms.items():
+        fields = extract_gr_fields(ocr_text)
+        check(f'[{label}] gr_number == PD6011823', fields['gr_number'] == 'PD6011823', fields['gr_number'])
+        # normalize_date_string() title-cases OCR month abbreviations
+        # ("MAR" -> "Mar") — a cosmetic fix, not ISO conversion (that
+        # happens downstream in routes/documents.py).
+        expected_date = '04 Mar 2026' if 'MAR' in ocr_text else '04/03/2026'
+        check(f'[{label}] receipt_date == {expected_date!r} (not From Doc Date)',
+              fields['receipt_date'] == expected_date, fields['receipt_date'])
+        check(f'[{label}] receipt_date confidence == 120 (header-pair, highest priority)',
+              fields['_confidence']['receipt_date']['confidence'] == 120,
+              fields['_confidence']['receipt_date'])
+
+
 if __name__ == '__main__':
     run_case_gr_with_from_doc_date()
     run_case_gr_with_document_date_label()
     run_case_coilcraft_gr_real_production()
     run_case_gr_only_from_doc_date_present()
+    run_case_coilcraft_header_table_all_flattened_forms()
 
     print()
     if FAILURES:

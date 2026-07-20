@@ -225,24 +225,27 @@ PO_DATE_LABEL_SCORES = (
     ('document date',  90, 'Document Date'),
     ('date',           60, 'bare Date label'),
 )
-# Highest priority (+100): this IS the GR's own receipt date. Negative
-# (-50, checked before the medium/low bare-"date" catch-all): a date that
-# belongs to a DIFFERENT referenced document (the PO, the supplier's own
-# doc) — never selected while any valid receipt/document date candidate
-# exists, per select_best()'s "usable > 5" floor, but still returned as
-# an absolute last resort so a document with ONLY a From Doc Date still
-# gets a value instead of None. Medium (+70): a generic document date,
-# plausible but less certain than an explicit receipt-date label.
+# Highest priority (+100): this IS the GR's own receipt date — a
+# structurally-paired header-table date (see _find_gr_header_pair() in
+# ocr_helper.py) scores even higher, +120, applied directly at that call
+# site rather than through this table. Negative (-100, checked before the
+# medium/low bare-"date" catch-all): a date that belongs to a DIFFERENT
+# referenced document (the PO, the supplier's own doc) — never selected
+# while any valid receipt/document/header-pair date candidate exists, per
+# select_best()'s "usable > 5" floor, but still returned as an absolute
+# last resort so a document with ONLY a From Doc Date still gets a value
+# instead of None. Medium (+70): a generic document date, plausible but
+# less certain than an explicit receipt-date label.
 GR_DATE_LABEL_SCORES = (
     ('goods receipt date', 100, 'Goods Receipt Date'),
     ('receipt date',       100, 'Receipt Date'),
     ('gr date',            100, 'GR Date'),
     ('received date',      100, 'Received Date'),
     ('posting date',       100, 'Posting Date'),
-    ('from doc date',      -50, 'From Doc Date (the referenced PO\'s date, not this GR\'s own date)'),
-    ('po date',            -50, 'PO Date (the referenced PO\'s date, not this GR\'s own date)'),
-    ('supplier date',      -50, 'Supplier Date (not this GR\'s own date)'),
-    ('supplier',           -50, 'Supplier document date (not this GR\'s own date)'),
+    ('from doc date',     -100, 'From Doc Date (the referenced PO\'s date, not this GR\'s own date)'),
+    ('po date',           -100, 'PO Date (the referenced PO\'s date, not this GR\'s own date)'),
+    ('supplier date',     -100, 'Supplier Date (not this GR\'s own date)'),
+    ('supplier',          -100, 'Supplier document date (not this GR\'s own date)'),
     ('document dt',         70, 'Document Dt'),
     ('document date',       70, 'Document Date'),
     ('date',                70, 'bare Date label'),
