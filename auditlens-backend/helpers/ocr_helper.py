@@ -880,9 +880,15 @@ def extract_fields(ocr_text):
     if usd_total_candidates:
         fields['total_amount'] = max(usd_total_candidates)
         fields['currency'] = 'USD'
+        _total_reason = 'largest USD-tagged candidate (priority over any MYR/RM candidate)'
     elif total_candidates:
         fields['total_amount'] = max(total_candidates)
         fields['currency'] = 'MYR'
+        _total_reason = 'largest "total"-labeled candidate found (no USD-tagged candidate present)'
+    else:
+        _total_reason = 'no candidate found'
+    print(f"DEBUG Invoice total_amount candidates: usd={usd_total_candidates} rm/other={total_candidates}\n"
+          f"Selected: {fields['total_amount']} ({_total_reason})")  # TEMP-DEBUG
 
     # ══════════════════════════════════════════════════════
     # FALLBACKS — Generic, works for any invoice
@@ -1002,6 +1008,11 @@ def extract_po_fields(ocr_text):
     lines = ocr_text.split('\n')
     total_candidates = []
     usd_total_candidates = []
+    # (value, source_label, accepted) — every po_number attempt across all
+    # four extraction passes below, for debug visibility into what was
+    # tried vs. what actually got selected (and why a candidate was
+    # rejected, e.g. a label word echoed back as the value).
+    po_number_candidates = []
     # On a PO the letterhead at the top is the BUYER (the company issuing
     # the order), never the vendor — the actual supplier is named under a
     # "Supplier"/"Vendor"/"To" heading further down. Vendor extraction
@@ -1030,10 +1041,11 @@ def extract_po_fields(ocr_text):
     # from the wrong field by the time it reached the right one. Doing
     # this as a separate, first, whole-document pass means the correct
     # label wins regardless of line order.
-    for _line in lines:
+    for _i, _line in enumerate(lines):
+        _line_clean = _line.strip()
         _doc_no_match = re.search(
             r'\b(?:document|doc)\.?\s*(?:no\.?|number|#)\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
-            _line.strip(), re.IGNORECASE
+            _line_clean, re.IGNORECASE
         )
         if _doc_no_match:
             _val = _doc_no_match.group(1).strip()
@@ -1042,8 +1054,26 @@ def extract_po_fields(ocr_text):
             # same class of bug the Gemini-side prompt and the validator
             # both already guard against.
             if len(_val) > 2 and _val.lower() not in ('ref', 'no', 'number'):
+                po_number_candidates.append((_val, 'Document No. (same line)', True))
                 fields['po_number'] = _val
                 break
+            po_number_candidates.append((_val, 'Document No. (same line, rejected label-echo)', False))
+            continue
+
+        # Two-line form: Google Vision OCR commonly puts the label and its
+        # value on SEPARATE lines for table/box-style layouts (same
+        # pattern already relied on elsewhere in this codebase, e.g. the
+        # invoice's "TOTAL (US$)" / value-on-next-line handling) — a bare
+        # "Document No." / "Doc No." label line, with "PO3006000" as the
+        # very next line and nothing else on the label line to capture.
+        if re.search(r'^(?:document|doc)\.?\s*(?:no\.?|number|#)\s*$', _line_clean, re.IGNORECASE):
+            _next = lines[_i + 1].strip() if _i + 1 < len(lines) else ''
+            if len(_next) > 2 and re.match(r'^[A-Za-z0-9\-\/]+$', _next) and _next.lower() not in ('ref', 'no', 'number'):
+                po_number_candidates.append((_next, 'Document No. (two-line, value on next line)', True))
+                fields['po_number'] = _next
+                break
+            elif _next:
+                po_number_candidates.append((_next, 'Document No. (two-line, rejected)', False))
 
     for i, line in enumerate(lines):
         line_clean = line.strip()
@@ -1130,7 +1160,10 @@ def extract_po_fields(ocr_text):
                 # PO's own number — matches "PO" + whitespace and would
                 # otherwise capture "Ref" as if it were the value).
                 if len(val) > 2 and val.lower() not in ('ref', 'no', 'number'):
+                    po_number_candidates.append((val, 'PO No. (same-line fallback)', True))
                     fields['po_number'] = val
+                else:
+                    po_number_candidates.append((val, 'PO No. (same-line fallback, rejected label-echo)', False))
 
             # Real POs sometimes label the document number bare "Doc No."
             # rather than "PO No." — checked only when the PO-specific
@@ -1140,14 +1173,23 @@ def extract_po_fields(ocr_text):
             # function already catches most of these first; this stays as
             # a same-line safety net for phrasing that pass doesn't.)
             if fields['po_number'] is None:
+                # "document\.?" must precede the shorter "doc\.?" — same
+                # fix as extract_gr_fields()'s gr_number pattern: without
+                # it, "doc\.?" alone matches just "Doc" inside "Document"
+                # (no word boundary needed, since "No." is optional here
+                # too), then greedily captures the rest of that SAME word
+                # ("ument") as the value.
                 doc_match = re.search(
-                    r'doc\.?\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
+                    r'(?:document\.?|doc\.?)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9\-\/]+)',
                     line_clean, re.IGNORECASE
                 )
                 if doc_match:
                     val = doc_match.group(1).strip()
-                    if len(val) > 2 and val.lower() not in ('ref', 'no', 'number'):
+                    if len(val) > 2 and val.lower() not in ('ref', 'no', 'number', 'ument'):
+                        po_number_candidates.append((val, 'Doc No. (bare same-line fallback)', True))
                         fields['po_number'] = val
+                    else:
+                        po_number_candidates.append((val, 'Doc No. (bare same-line fallback, rejected)', False))
 
         # ── VENDOR NAME (the SUPPLIER, never the letterhead/buyer) ──
         # Unlike invoice's vendor extraction (which takes the FIRST
@@ -1186,6 +1228,24 @@ def extract_po_fields(ocr_text):
         # finishes, same fix as extract_fields(): Total = Subtotal + tax,
         # so it's always the largest labeled amount, and this is immune to
         # a Subtotal/SST line matching before the real Total line does.
+        #
+        # Two-line form: Google Vision OCR commonly puts a "Total Payable
+        # Incl. Tax (RM)" / "Total Excl. Tax (RM)" / "Total" label on its
+        # own line with nothing else, and the amount as the next line —
+        # same pattern as the label-only "Document No." handling above.
+        # Priority order (Payable-Incl-Tax > Excl-Tax > bare Total)
+        # mirrors the priority the PO_FULL_PROMPT already gives Gemini
+        # for this same field.
+        _label_only_total_patterns = [
+            r'^total\s*payable\s*(?:incl\.?(?:uding)?\s*(?:tax|sst|gst)?)?\s*\(?\s*(?:rm|myr|usd|us\$)?\s*\)?\s*$',
+            r'^total\s*(?:excl\.?(?:uding)?\s*(?:tax|sst|gst)?)\s*\(?\s*(?:rm|myr)?\s*\)?\s*$',
+            r'^total\s*\(?\s*(?:rm|myr)?\s*\)?\s*$',
+        ]
+        if any(re.search(p, line_clean, re.IGNORECASE) for p in _label_only_total_patterns):
+            val = extract_amount(next_line)
+            if val and val > 1:
+                total_candidates.append(val)
+
         if not re.search(r'\bsub[\s\-]?total\b', line_clean, re.IGNORECASE) and \
            not re.search(r'\b(?:sst|gst|tax)\b', line_clean, re.IGNORECASE):
             match = re.search(
@@ -1200,13 +1260,25 @@ def extract_po_fields(ocr_text):
     if usd_total_candidates:
         fields['total_amount'] = max(usd_total_candidates)
         fields['currency'] = 'USD'
+        _total_reason = f'largest USD-tagged candidate (priority over any MYR/RM candidate)'
     elif total_candidates:
         fields['total_amount'] = max(total_candidates)
+        _total_reason = 'largest "total"-labeled candidate found (no USD-tagged candidate present)'
+    else:
+        _total_reason = 'no candidate found'
+    print(f"DEBUG PO total_amount candidates: usd={usd_total_candidates} rm/other={total_candidates}\n"
+          f"Selected: {fields['total_amount']} ({_total_reason})")  # TEMP-DEBUG
 
+    _po_num_candidates_str = ',\n'.join(
+        f' "{v}" from "{lbl}"' + ('' if acc else ' (rejected)')
+        for v, lbl, acc in po_number_candidates
+    )
+    print(f"PO number candidates:\n[\n{_po_num_candidates_str}\n]\nSelected:\n{fields['po_number']}")  # TEMP-DEBUG
     if fields['po_number'] is None:
         match = re.search(r'PO[-\s]?(\d+)', ocr_text, re.IGNORECASE)
         if match:
             fields['po_number'] = match.group(0).strip()
+            print(f"DEBUG PO po_number: found via final bare 'PO<digits>' document-wide fallback: {fields['po_number']!r}")  # TEMP-DEBUG
 
     if fields['po_date'] is None:
         match = re.search(r'(\d{1,2}\/\d{1,2}\/\d{4})', ocr_text)
@@ -1254,6 +1326,25 @@ def extract_gr_fields(ocr_text):
     # "Supplier"/"Delivered By" heading further down. Same gating pattern
     # as extract_po_fields()'s vendor extraction.
     seen_supplier_heading = False
+
+    # ── RECEIPT DATE candidates — (raw_value, source_label, excluded) ──
+    # Every date-labeled line found is recorded here (even ones excluded
+    # below) purely for debug visibility into what was found vs. selected.
+    # Patterns are tried most-specific-label first per line (same
+    # alternation-order reasoning as elsewhere in this file: regex
+    # alternation/ordered-list matching stops at the first success, not
+    # the longest) so a line like "From Doc Date" is labeled that instead
+    # of falling through to the bare trailing "date" pattern.
+    receipt_date_candidates = []
+    _DATE_LABEL_PATTERNS = [
+        (r'from\s+doc\s*date',    'From Doc Date',          True),
+        (r'po\s*date',            'PO Date',                True),
+        (r'supplier[\w\s]*date',  'Supplier document date', True),
+        (r'receipt\s*date',       'Receipt Date',           False),
+        (r'delivery\s*date',      'Delivery Date',          False),
+        (r'date\s*received',      'Date Received',          False),
+        (r'date',                 'Date',                   False),
+    ]
 
     fields['line_items'] = _extract_all_line_items(lines)
 
@@ -1390,13 +1481,18 @@ def extract_gr_fields(ocr_text):
                 if len(vendor) > 5:
                     fields['vendor_name'] = clean_vendor_name(vendor)
 
-        if fields['receipt_date'] is None:
-            match = re.search(
-                r'(?:receipt\s*date|delivery\s*date|date\s*received|date)\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{1,2}\s+\w+\s+\d{4})',
+        # ── RECEIPT DATE — collect every date-labeled candidate on this
+        # line (see receipt_date_candidates / _DATE_LABEL_PATTERNS above
+        # for why "From Doc Date"/"PO Date"/"Supplier ... Date" are
+        # recorded but marked excluded rather than silently skipped). ──
+        for _label_pat, _label_name, _excluded in _DATE_LABEL_PATTERNS:
+            _date_match = re.search(
+                _label_pat + r'\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{1,2}\s+\w+\s+\d{4})',
                 line_clean, re.IGNORECASE
             )
-            if match:
-                fields['receipt_date'] = normalize_date_string(match.group(1).strip())
+            if _date_match:
+                receipt_date_candidates.append((_date_match.group(1).strip(), _label_name, _excluded))
+                break
 
         # Most GRNs carry no monetary total, but a few reference one — same
         # original-currency preference as extract_fields()/extract_po_fields().
@@ -1426,6 +1522,15 @@ def extract_gr_fields(ocr_text):
         fields['currency'] = 'USD'
     elif total_candidates:
         fields['total_amount'] = max(total_candidates)
+
+    # First non-excluded candidate, in document order, wins — same
+    # semantics as the previous first-match-wins loop, now with every
+    # candidate (including excluded ones) visible in the debug log below.
+    _selected_date = next((c for c in receipt_date_candidates if not c[2]), None)
+    if _selected_date:
+        fields['receipt_date'] = normalize_date_string(_selected_date[0])
+    _date_candidates_str = ',\n'.join(f' "{v}" from "{lbl}"' for v, lbl, _ in receipt_date_candidates)
+    print(f"GR date candidates:\n[\n{_date_candidates_str}\n]\nSelected:\n{fields['receipt_date']}")  # TEMP-DEBUG
 
     # Fallback for GR number — this previously ran INSIDE the block above
     # by accident (bad indentation nested it under `if fields['gr_number']
