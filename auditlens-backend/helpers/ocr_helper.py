@@ -787,15 +787,19 @@ def extract_fields(ocr_text):
 
             # Two-line form: Google Vision OCR commonly puts the label and
             # its value on SEPARATE lines (confirmed elsewhere in this app
-            # for table headers) — a bare "TOTAL (US$)" label line, value
-            # on the next line. Checked regardless of seen_exchange_rate:
-            # the original-currency total legitimately appears anywhere,
-            # including before the exchange-rate block.
-            usd_label_only = re.search(r'^total\s*\(\s*(us\$|usd)\s*\)\s*$', line_clean, re.IGNORECASE)
-            if usd_label_only:
+            # for table headers) — a bare "TOTAL (US$)"/"TOTAL (RM)" label
+            # line, value on the next line. Checked regardless of
+            # seen_exchange_rate: the original-currency total legitimately
+            # appears anywhere, including before the exchange-rate block.
+            currency_label_only = re.search(r'^total\s*\(\s*(us\$|usd|rm|myr)\s*\)\s*$', line_clean, re.IGNORECASE)
+            if currency_label_only:
+                tag = currency_label_only.group(1).upper().replace('$', '')
                 val = extract_amount(next_line)
                 if val and val > 1:
-                    usd_total_candidates.append(val)
+                    if tag in ('US', 'USD'):
+                        usd_total_candidates.append(val)
+                    else:
+                        total_candidates.append(val)
 
             # Bare-word form (no parentheses): "Total amount: USD 8,020.00",
             # "Grand Total USD 8,020.00" — as common on real invoices as the
@@ -809,6 +813,18 @@ def extract_fields(ocr_text):
             )
             if bare_usd_total_match:
                 val = extract_amount(bare_usd_total_match.group(2))
+                if val and val > 1:
+                    usd_total_candidates.append(val)
+
+            # Amount BEFORE the currency tag, e.g. "8,020.00 USD" — no
+            # "total"/"amount due" label required on the line itself (some
+            # invoices print just the tagged amount). Mirrors the same
+            # currency-order fix already applied to extract_po_fields().
+            amount_then_usd_match = re.search(
+                r'([\d,]+\.?\d*)\s*(us\$|usd)\b', line_clean, re.IGNORECASE
+            )
+            if amount_then_usd_match:
+                val = extract_amount(amount_then_usd_match.group(1))
                 if val and val > 1:
                     usd_total_candidates.append(val)
 
