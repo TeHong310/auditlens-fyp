@@ -1,5 +1,7 @@
 import io
 import contextlib
+import os
+import psutil
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 import psycopg2.extras
@@ -8,6 +10,8 @@ from db import get_db_connection, get_user_by_id
 from helpers.audit_log import log_audit
 from helpers.anomaly_detector import run_anomaly_detection
 from config import Config
+
+MEMORY_LIMIT_MB = 512
 
 admin_bp = Blueprint('admin', __name__)
 
@@ -456,6 +460,36 @@ def get_statistics():
             'documents':  dict(doc_stats),
             'matching':   dict(match_stats),
             'exceptions': dict(exception_stats)
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# PROCESS MEMORY USAGE
+# GET /admin/debug/memory
+# Admin only — Render's free tier caps the backend at 512MB RAM, this
+# lets an admin check current usage without shell access to the dyno.
+# ------------------------------------------------------------
+@admin_bp.route('/debug/memory', methods=['GET'])
+@jwt_required()
+def get_memory_usage():
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    if user['role'] != 'admin':
+        return jsonify({'error': 'Access denied. Admin only.'}), 403
+
+    try:
+        process = psutil.Process(os.getpid())
+        process_memory_mb = round(process.memory_info().rss / (1024 * 1024), 2)
+        usage_percentage = round((process_memory_mb / MEMORY_LIMIT_MB) * 100, 2)
+
+        return jsonify({
+            'process_memory_mb': process_memory_mb,
+            'memory_limit_mb':   MEMORY_LIMIT_MB,
+            'usage_percentage':  usage_percentage
         }), 200
 
     except Exception as e:
