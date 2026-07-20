@@ -230,6 +230,42 @@ def _ensure_document_line_items_table():
         print(f'WARNING: could not create document_line_items table: {type(e).__name__}: {e}')
 
 
+def _ensure_gemini_cache_table():
+    """Gemini-first extraction architecture: caches a Gemini extraction
+    result by (file content hash, document type) so re-processing the
+    exact same file bytes never calls Gemini a second time (see helpers/
+    gemini_cache.py) — enforced at the DB level rather than in memory,
+    since Gunicorn worker processes don't share memory and Render's free
+    tier wipes process memory on every redeploy/restart anyway. Same
+    auto-create-on-startup pattern as the other _ensure_ functions above,
+    for the same reason (no migration runner in this repo)."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS gemini_extraction_cache (
+                id SERIAL PRIMARY KEY,
+                file_hash VARCHAR(64) NOT NULL,
+                document_type VARCHAR(10) NOT NULL,
+                gemini_result JSONB NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        ''')
+        cursor.execute('''
+            SELECT 1 FROM pg_constraint WHERE conname = 'gemini_extraction_cache_hash_type_key'
+        ''')
+        if not cursor.fetchone():
+            cursor.execute('''
+                ALTER TABLE gemini_extraction_cache
+                ADD CONSTRAINT gemini_extraction_cache_hash_type_key UNIQUE (file_hash, document_type)
+            ''')
+        conn.commit()
+        conn.close()
+        print('gemini_extraction_cache table ready')
+    except Exception as e:
+        print(f'WARNING: could not create gemini_extraction_cache table: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -255,6 +291,7 @@ _ensure_file_bytes_columns()
 _ensure_3way_comparison_columns()
 _ensure_invoice_currency_column()
 _ensure_document_line_items_table()
+_ensure_gemini_cache_table()
 
 @app.route('/')
 def hello_world():

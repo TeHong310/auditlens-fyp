@@ -15,6 +15,7 @@ from helpers.ocr_helper import (
 from helpers.anomaly_detector import run_anomaly_detection
 from helpers.authenticity_check import run_authenticity_check
 from helpers.gemini_extractor import gemini_extract_invoice_full, gemini_extract_po_full, gemini_extract_gr_full
+from helpers.gemini_cache import compute_file_hash, get_cached_gemini_result, save_gemini_result_to_cache
 from helpers.extraction_validator import validate_extraction
 from config import Config
 
@@ -238,7 +239,40 @@ def upload_document():
         document_id = cursor.fetchone()[0]
         conn.commit()
 
-        # ← 改这里
+        # ══════════════════════════════════════════════════════
+        # GEMINI-FIRST EXTRACTION ARCHITECTURE
+        # Gemini Vision is the PRIMARY extractor; the OCR regex engine
+        # below (extract_fields()) is fallback/validation only, filling
+        # in whatever Gemini didn't return. Cached by file-content hash
+        # so the exact same file bytes never trigger a second Gemini
+        # call, including across retries and Gunicorn worker processes
+        # (see helpers/gemini_cache.py) — at most one Gemini extraction
+        # call per document.
+        # ══════════════════════════════════════════════════════
+        file_hash = compute_file_hash(file_bytes_data)
+        gemini_result = get_cached_gemini_result(file_hash, 'invoice')
+        if gemini_result is not None:
+            print(f"GEMINI CACHE HIT (invoice, hash={file_hash[:12]}...) — Gemini not called")
+        else:
+            # Single merged Gemini vision call: fields + authenticity
+            # signals in one request, so an invoice upload never spends
+            # more than one Gemini call (avoids the free-tier per-minute
+            # limit that two separate calls — field extraction +
+            # authenticity — used to hit). Falls back to the regex OCR
+            # fields below and the OCR-text authenticity heuristic if
+            # this call fails.
+            gemini_result = gemini_extract_invoice_full(file_bytes_data, safe_name)
+            if gemini_result:
+                save_gemini_result_to_cache(file_hash, 'invoice', gemini_result)
+        print(f"DEBUG INVOICE PIPELINE\nGemini parsed:\n{gemini_result}")  # TEMP-DEBUG (pipeline trace, step 3/5 — "Gemini raw" text is logged inside gemini_extract_invoice_full itself)
+        _debug_log_memory('4_after_gemini_api_response')  # TEMP-DEBUG-MEM
+        _debug_log_extraction_trace('gemini_raw', safe_name, 'invoice', gemini_result)  # TEMP-DEBUG
+
+        # OCR fallback/verification — still runs unconditionally (its
+        # ocr_text/confidence are independently needed for raw_ocr_text
+        # storage and the authenticity heuristic below), but its field
+        # values are only used where Gemini returned null, per the merge
+        # loop directly below.
         ocr_results, ocr_text, confidence = run_ocr(file_path, file_ext)
         confidence = float(confidence)
         fields     = extract_fields(ocr_text)
@@ -250,18 +284,8 @@ def upload_document():
               f"invoice_date={fields.get('invoice_date')} | vendor_name={fields.get('vendor_name')} | "
               f"total_amount={fields.get('total_amount')} | tax_amount={fields.get('tax_amount')}")
         print(f"DEBUG INVOICE PIPELINE\nOCR fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 1/5)
-        _debug_log_memory('5_after_ocr_processing')  # TEMP-DEBUG-MEM (NOTE: OCR runs BEFORE Gemini in this endpoint, not after — see report)
+        _debug_log_memory('5_after_ocr_processing')  # TEMP-DEBUG-MEM
 
-        # Single merged Gemini vision call: fields + authenticity signals
-        # in one request, so an invoice upload never spends more than one
-        # Gemini call (avoids the free-tier per-minute limit that two
-        # separate calls — field extraction + authenticity — used to hit).
-        # Falls back to the regex fields above and the OCR-text
-        # authenticity heuristic (below) if this call fails.
-        gemini_result = gemini_extract_invoice_full(file_bytes_data, safe_name)
-        print(f"DEBUG INVOICE PIPELINE\nGemini parsed:\n{gemini_result}")  # TEMP-DEBUG (pipeline trace, step 3/5 — "Gemini raw" text is logged inside gemini_extract_invoice_full itself)
-        _debug_log_memory('4_after_gemini_api_response')  # TEMP-DEBUG-MEM
-        _debug_log_extraction_trace('gemini_raw', safe_name, 'invoice', gemini_result)  # TEMP-DEBUG
         if gemini_result:
             for key in ('invoice_number', 'vendor_name', 'invoice_date', 'total_amount', 'tax_amount',
                         'currency', 'po_reference', 'item_description', 'quantity'):
@@ -409,19 +433,38 @@ def upload_purchase_order(document_id):
             print(f"DEBUG PO upload: {safe_name} is {len(file_bytes_data)} bytes, "
                   f"over MAX_DB_FILE_BYTES ({Config.MAX_DB_FILE_BYTES}) — not persisted to DB")
 
-        # ← 改这里
+        # ══════════════════════════════════════════════════════
+        # GEMINI-FIRST EXTRACTION ARCHITECTURE — see upload_document()'s
+        # invoice endpoint above for the full rationale. Gemini Vision is
+        # the PRIMARY extractor; extract_po_fields() below is fallback/
+        # validation only. Cached by file-content hash so the exact same
+        # file bytes never trigger a second Gemini call.
+        # ══════════════════════════════════════════════════════
+        file_hash = compute_file_hash(file_bytes_data)
+        gemini_result = get_cached_gemini_result(file_hash, 'po')
+        if gemini_result is not None:
+            print(f"GEMINI CACHE HIT (po, hash={file_hash[:12]}...) — Gemini not called")
+        else:
+            # Single merged Gemini vision call: fields + authenticity
+            # signals in one request, so a PO upload never spends more
+            # than one Gemini call — mirrors upload_document()'s invoice
+            # pattern.
+            gemini_result = gemini_extract_po_full(file_bytes_data, safe_name)
+            if gemini_result:
+                save_gemini_result_to_cache(file_hash, 'po', gemini_result)
+        print(f"DEBUG PO PIPELINE\nGemini parsed:\n{gemini_result}")  # TEMP-DEBUG (pipeline trace, step 3/5 — "Gemini raw" text is logged inside gemini_extract_po_full itself)
+        _debug_log_extraction_trace('gemini_raw', safe_name, 'po', gemini_result)  # TEMP-DEBUG
+
+        # OCR fallback/verification — still runs unconditionally (its
+        # ocr_text/confidence are independently needed for raw_ocr_text
+        # storage and the authenticity heuristic below), but its field
+        # values are only used where Gemini returned null, per the merge
+        # loop directly below.
         ocr_results, ocr_text, confidence = run_ocr(file_path, file_ext)
         confidence = float(confidence)
         fields     = extract_po_fields(ocr_text)
-
-        # Single merged Gemini vision call: fields + authenticity signals
-        # in one request, so a PO upload never spends more than one
-        # Gemini call — mirrors upload_document()'s invoice pattern.
         print(f"DEBUG PO PIPELINE\nOCR fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 1/5)
 
-        gemini_result = gemini_extract_po_full(file_bytes_data, safe_name)
-        print(f"DEBUG PO PIPELINE\nGemini parsed:\n{gemini_result}")  # TEMP-DEBUG (pipeline trace, step 3/5 — "Gemini raw" text is logged inside gemini_extract_po_full itself)
-        _debug_log_extraction_trace('gemini_raw', safe_name, 'po', gemini_result)  # TEMP-DEBUG
         if gemini_result:
             for key in ('po_number', 'vendor_name', 'po_date', 'total_amount',
                         'currency', 'item_description', 'quantity'):
@@ -546,18 +589,38 @@ def upload_goods_receipt(document_id):
             print(f"DEBUG GR upload: {safe_name} is {len(file_bytes_data)} bytes, "
                   f"over MAX_DB_FILE_BYTES ({Config.MAX_DB_FILE_BYTES}) — not persisted to DB")
 
-        # ← 改这里
+        # ══════════════════════════════════════════════════════
+        # GEMINI-FIRST EXTRACTION ARCHITECTURE — see upload_document()'s
+        # invoice endpoint above for the full rationale. Gemini Vision is
+        # the PRIMARY extractor; extract_gr_fields() below is fallback/
+        # validation only. Cached by file-content hash so the exact same
+        # file bytes never trigger a second Gemini call.
+        # ══════════════════════════════════════════════════════
+        file_hash = compute_file_hash(file_bytes_data)
+        gemini_result = get_cached_gemini_result(file_hash, 'gr')
+        if gemini_result is not None:
+            print(f"GEMINI CACHE HIT (gr, hash={file_hash[:12]}...) — Gemini not called")
+        else:
+            # Single merged Gemini vision call: fields + authenticity
+            # signals in one request, so a GR upload never spends more
+            # than one Gemini call — mirrors upload_document()'s invoice
+            # pattern.
+            gemini_result = gemini_extract_gr_full(file_bytes_data, safe_name)
+            if gemini_result:
+                save_gemini_result_to_cache(file_hash, 'gr', gemini_result)
+        print(f"DEBUG GR PIPELINE\nGemini parsed:\n{gemini_result}")  # TEMP-DEBUG (pipeline trace, step 3/5 — "Gemini raw" text is logged inside gemini_extract_gr_full itself)
+        _debug_log_extraction_trace('gemini_raw', safe_name, 'gr', gemini_result)  # TEMP-DEBUG
+
+        # OCR fallback/verification — still runs unconditionally (its
+        # ocr_text/confidence are independently needed for raw_ocr_text
+        # storage and the authenticity heuristic below), but its field
+        # values are only used where Gemini returned null, per the merge
+        # loop directly below.
         ocr_results, ocr_text, confidence = run_ocr(file_path, file_ext)
         confidence = float(confidence)
         fields     = extract_gr_fields(ocr_text)
         print(f"DEBUG GR PIPELINE\nOCR fields:\n{fields}")  # TEMP-DEBUG (pipeline trace, step 1/5)
 
-        # Single merged Gemini vision call: fields + authenticity signals
-        # in one request, so a GR upload never spends more than one
-        # Gemini call — mirrors upload_document()'s invoice pattern.
-        gemini_result = gemini_extract_gr_full(file_bytes_data, safe_name)
-        print(f"DEBUG GR PIPELINE\nGemini parsed:\n{gemini_result}")  # TEMP-DEBUG (pipeline trace, step 3/5 — "Gemini raw" text is logged inside gemini_extract_gr_full itself)
-        _debug_log_extraction_trace('gemini_raw', safe_name, 'gr', gemini_result)  # TEMP-DEBUG
         if gemini_result:
             for key in ('gr_number', 'vendor_name', 'receipt_date',
                         'po_reference', 'item_description', 'quantity',
