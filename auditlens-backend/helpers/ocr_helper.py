@@ -924,6 +924,21 @@ def extract_fields(ocr_text):
     fields['_confidence']['total_amount'] = log_extraction_result(
         'Invoice', 'total_amount', amount_candidates, selected_total)
 
+    # TEMP-DEBUG: invoice total debugging — distinguishes "Vision never
+    # read TOTAL" (OCR text itself has no "total") from "the engine had
+    # candidates but picked wrong/none". Remove once root-caused.
+    _amt_cand_str = ',\n'.join(
+        f'{{\nvalue: {c["value"]!r},\ncontext: {c["context"]!r},\nscore: {c["confidence_score"]}\n}}'
+        for c in amount_candidates
+    ) or '(none found)'
+    print(
+        f"INVOICE TOTAL DEBUG\n\n"
+        f"Full OCR text:\n{ocr_text}\n\n"
+        f"OCR contains TOTAL:\n{'yes' if 'total' in ocr_text.lower() else 'no'}\n\n"
+        f"Amount candidates:\n\n[\n{_amt_cand_str}\n]\n\n"
+        f"Selected:\n{selected_total['value'] if selected_total else None}"
+    )  # TEMP-DEBUG
+
     selected_invoice_number = select_best(invoice_number_candidates)
     if selected_invoice_number:
         fields['invoice_number'] = selected_invoice_number['value']
