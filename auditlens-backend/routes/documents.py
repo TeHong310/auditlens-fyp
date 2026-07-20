@@ -14,6 +14,7 @@ from helpers.ocr_helper import (
 from helpers.anomaly_detector import run_anomaly_detection
 from helpers.authenticity_check import run_authenticity_check
 from helpers.gemini_extractor import gemini_extract_invoice_full, gemini_extract_po_full, gemini_extract_gr_full
+from helpers.extraction_validator import validate_extraction
 from config import Config
 
 documents_bp = Blueprint('documents', __name__)
@@ -207,6 +208,10 @@ def upload_document():
         if fields['tax_amount'] is not None:
             fields['tax_amount'] = float(fields['tax_amount'])
 
+        # Lightweight post-processing validation of the already-extracted
+        # fields — no additional Gemini call. See helpers/extraction_validator.py.
+        fields, validation_result = validate_extraction('invoice', fields, fields.get('line_items'))
+
         invoice_date = parse_date(fields['invoice_date'])
 
         cursor.execute(
@@ -253,6 +258,9 @@ def upload_document():
             'document_id':    document_id,
             'extraction_id':  extraction_id,
             'ocr_confidence': confidence,
+            'extraction_confidence': validation_result['extraction_confidence'],
+            'validation_status':     validation_result['validation_status'],
+            'validation_warnings':   validation_result['warnings'],
             'extracted_fields': {
                 'invoice_number': fields['invoice_number'],
                 'vendor_name':    fields['vendor_name'],
@@ -328,6 +336,10 @@ def upload_purchase_order(document_id):
         if fields['total_amount'] is not None:
             fields['total_amount'] = float(fields['total_amount'])
 
+        # Lightweight post-processing validation of the already-extracted
+        # fields — no additional Gemini call. See helpers/extraction_validator.py.
+        fields, validation_result = validate_extraction('po', fields, fields.get('line_items'))
+
         po_date = parse_date(fields['po_date'])
 
         conn   = get_db_connection()
@@ -367,6 +379,9 @@ def upload_purchase_order(document_id):
             'message':        'Purchase Order uploaded and OCR processed successfully',
             'po_id':          po_id,
             'ocr_confidence': confidence,
+            'extraction_confidence': validation_result['extraction_confidence'],
+            'validation_status':     validation_result['validation_status'],
+            'validation_warnings':   validation_result['warnings'],
             'extracted_fields': {
                 'po_number':    fields['po_number'],
                 'vendor_name':  fields['vendor_name'],
@@ -438,6 +453,10 @@ def upload_goods_receipt(document_id):
         if fields['total_amount'] is not None:
             fields['total_amount'] = float(fields['total_amount'])
 
+        # Lightweight post-processing validation of the already-extracted
+        # fields — no additional Gemini call. See helpers/extraction_validator.py.
+        fields, validation_result = validate_extraction('gr', fields, fields.get('line_items'))
+
         receipt_date = parse_date(fields['receipt_date'])
 
         conn   = get_db_connection()
@@ -477,6 +496,9 @@ def upload_goods_receipt(document_id):
             'message':        'Goods Receipt uploaded and OCR processed successfully',
             'gr_id':          gr_id,
             'ocr_confidence': confidence,
+            'extraction_confidence': validation_result['extraction_confidence'],
+            'validation_status':     validation_result['validation_status'],
+            'validation_warnings':   validation_result['warnings'],
             'extracted_fields': {
                 'gr_number':    fields['gr_number'],
                 'vendor_name':  fields['vendor_name'],

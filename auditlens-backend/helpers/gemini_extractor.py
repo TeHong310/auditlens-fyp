@@ -67,6 +67,23 @@ Guidelines:
 - Prefer LABELED values over positional guessing
 - For amounts, always return numeric (float), never string with commas"""
 
+LABEL_NOT_VALUE_NOTE = """
+- NEVER return a field's own label/placeholder text as its value. If the
+  text you're about to return for a field is itself one of the generic
+  words "Ref", "No", "Number", "Date", "Amount" (with or without a colon,
+  in any capitalization) — that is the LABEL, not the value beside/below
+  it. Keep reading past the label to find the actual printed value; if no
+  actual value is visible next to that label, return null instead of the
+  label word.
+- If uncertain which of two nearby pieces of text is the label and which
+  is the value, return null rather than guessing.
+- Ignore handwritten annotations, margin notes, and pen marks when
+  extracting field values — only use them if a field is unmistakably
+  ONLY present as a handwritten official entry (e.g. a hand-filled date
+  field on an otherwise printed form). Do not let a handwritten note,
+  scribble, or unrelated jotted number substitute for a document's
+  official printed amount, tax, or reference number."""
+
 DOCUMENT_NUMBER_NOTE = """
 - Document numbers are not always under a formal label like "Invoice No.": real
   documents often use a bare label immediately followed by the value, e.g.
@@ -195,7 +212,7 @@ business documents AND detecting authenticity signals on them. You are looking
 directly at the invoice IMAGE (not OCR text), so read the actual layout.
 
 === PART 1: FIELD EXTRACTION ===
-""" + DOCUMENT_QUALITY_NOTE + """
+""" + DOCUMENT_QUALITY_NOTE + LABEL_NOT_VALUE_NOTE + """
 
 IMPORTANT RULES:
 - The VENDOR is the entity ISSUING the invoice (the seller), typically shown as the company name in the document header at the top
@@ -210,14 +227,33 @@ IMPORTANT RULES:
   NOT the invoice's own number.
 - ITEM DESCRIPTION and QUANTITY: from the FIRST line-item row of the goods/services table (columns like
   "Description"/"Qty"). If multiple rows exist, use the first row.""" + LINE_ITEMS_NOTE + """
-- TOTAL AMOUNT: invoices list several amount lines — Subtotal, SST/GST/Tax, and the final Total.
-  1. Return the amount on the line labeled "Total", "Grand Total", "Amount Due", or "Total (incl ...)" —
-     this is the FINAL amount the customer must pay, after tax.
-  2. NEVER return the "Subtotal"/"Sub Total" line — that is the pre-tax amount, not the total.
-  3. NEVER return the SST/GST/tax line itself as the total — that is tax_amount, a separate field.
-  4. The total is arithmetically the LARGEST of the amount lines (Total = Subtotal + tax). If unsure
-     which line is which, the largest clearly-labeled amount is the total.""" + CURRENCY_NOTE + """
-- TAX AMOUNT: the SST/GST/service tax amount (e.g. the "SST 6%" or "SST 8%" line), not the percentage itself.
+- TOTAL AMOUNT: invoices list several amount lines — Subtotal, SST/GST/Tax, the final Total, and often
+  UNRELATED numbers nearby (bank/account numbers, handwritten notes, reference codes). Read the whole
+  document layout and pick the correct FINAL payable amount; do not just grab the nearest number to the
+  word "Total".
+  Label priority (use the FIRST of these that appears on the document):
+  1. "TOTAL"
+  2. "TOTAL PAYABLE"
+  3. "AMOUNT DUE"
+  4. "Grand Total"
+  This is the FINAL amount the customer must pay, after tax.
+  Do NOT confuse the total with:
+  - "Subtotal"/"Sub Total" — that is the pre-tax amount, not the total.
+  - the SST/GST/tax line itself — that is tax_amount, a separate field.
+  - an account number, bank account number, or invoice/reference number printed near the amount area —
+    these are identifiers, not monetary amounts, even if they happen to be numeric and nearby.
+  - a handwritten number or annotation — never treat handwriting as the official total.
+  The total is arithmetically the LARGEST of the genuine amount lines (Total = Subtotal + tax). If unsure
+  which printed line is which, the largest clearly-labeled AMOUNT line (not an account/reference number)
+  is the total. If no line matches any of the four labels above and you cannot confidently identify the
+  final payable amount, return null rather than guessing.""" + CURRENCY_NOTE + """
+- TAX AMOUNT: the OFFICIAL SST/GST/VAT tax amount, printed on a line explicitly labeled with one of those
+  terms (e.g. "SST 6%", "GST", "VAT") — not the percentage itself, and never a number extrapolated from
+  elsewhere. Do NOT extract:
+  - an account number or any part of one
+  - a handwritten number or annotation
+  - a number that merely looks tax-sized but has no SST/GST/VAT label attached
+  If no line is explicitly labeled as tax/SST/GST/VAT, return null.
 - Return null for any field you cannot confidently extract
 - Amounts must be numbers only (no currency symbols, no commas, no "RM")
 - Dates in ISO format: YYYY-MM-DD
@@ -240,7 +276,7 @@ business documents AND detecting authenticity signals on them. You are looking
 directly at the PURCHASE ORDER (PO) IMAGE (not OCR text), so read the actual layout.
 
 === PART 1: FIELD EXTRACTION ===
-""" + DOCUMENT_QUALITY_NOTE + """
+""" + DOCUMENT_QUALITY_NOTE + LABEL_NOT_VALUE_NOTE + """
 
 IMPORTANT RULES:
 - CRITICAL — VENDOR NAME is a COMMON MISTAKE, read carefully: the company
@@ -259,11 +295,18 @@ IMPORTANT RULES:
 - CRITICAL: PO Number rules:
   1. PO Number is found in a LABELED field, never inferred from other text.
   2. Look for these exact labels: "Doc No.", "PO No.", "P.O. No.", "Purchase Order No.", "Order No.", "PO Number", "Reference No."
-  3. The value must be adjacent to (right of or below) the label.
+  3. The value must be adjacent to (right of or below) the label — read PAST the label to the actual
+     printed value. NEVER return the label word/abbreviation itself as the value. Specifically, the
+     bare words "Ref", "No", "Number" (with or without ":", any case) are LABELS, not valid PO numbers
+     — if that is all you can find next to the label, the real value is missing/illegible: return null.
+     Example of what NOT to do:
+       Wrong:   {"po_number": "Ref"}
+       Correct: {"po_number": "PO3006000"}
   4. Do NOT extract any substring from company names, product descriptions, or address fields.
   5. Common Malaysian SME PO number formats: PONNNNNNN (e.g. PO3005713), PO-YYYY-NNNN, or numeric-only.
   6. If no clearly labeled PO number field exists, return null. Do NOT guess or extract from unrelated text.
-  7. Length is typically 6-12 characters. Reject candidates shorter than 5.""" + DOCUMENT_NUMBER_NOTE + """
+  7. Length is typically 6-12 characters. Reject candidates shorter than 5 — a short generic word like
+     "Ref" or "No" must never be returned even if it's the only text near the label.""" + DOCUMENT_NUMBER_NOTE + """
 - ITEM DESCRIPTION and QUANTITY: from the FIRST line-item row of the goods table. If multiple rows exist, use the first row.""" + LINE_ITEMS_NOTE + """
 - Total Amount priority (return the FIRST match found):
   1. "Total Payable Incl. Tax (RM)" — highest priority (this is the final amount)
@@ -298,7 +341,7 @@ business documents AND detecting authenticity signals on them. You are looking
 directly at the GOODS RECEIPT (GR) IMAGE (not OCR text), so read the actual layout.
 
 === PART 1: FIELD EXTRACTION ===
-""" + DOCUMENT_QUALITY_NOTE + """
+""" + DOCUMENT_QUALITY_NOTE + LABEL_NOT_VALUE_NOTE + """
 
 IMPORTANT RULES:
 - CRITICAL — VENDOR NAME is a COMMON MISTAKE, read carefully: the company
@@ -324,6 +367,20 @@ IMPORTANT RULES:
   - Item Code / Part Number""" + DOCUMENT_NUMBER_NOTE + """
 - PO REFERENCE: the PO number this GR was received against (often labeled "PO Ref", "From Doc No.") — this is
   NOT the GR's own number.
+- RECEIPT DATE: Goods Receipt documents commonly show MULTIPLE dates (the PO's own date, the date goods
+  were actually received, a general document/print date). receipt_date must be the date OF THIS GR
+  DOCUMENT, not a date belonging to the referenced PO. Priority order:
+  1. The Goods Receipt's own document date — a date printed next to the SAME label/section as the GR's
+     own document number (gr_number above), e.g. next to "Doc No." on the GR itself, or a "GR Date"/
+     "Receipt Date" label.
+  2. A receipt/transaction date — labeled "Received Date", "Date Received", "Receipt Date", or similar,
+     describing when the goods physically arrived.
+  3. A general delivery date — labeled "Delivery Date" or "Date Delivered".
+  Do NOT use a date that is explicitly attached to the referenced Purchase Order (e.g. appearing next to
+  or under a "PO Date", "Order Date", or the same "From Doc No." block that gave you po_reference above)
+  — that date belongs to a different document and must never be returned as receipt_date, UNLESS none of
+  the three GR-specific date types above exist anywhere on the document, in which case return null rather
+  than substituting the PO's date.
 - ITEM DESCRIPTION and QUANTITY: from the FIRST line-item row of the goods table. If multiple rows exist, use the first row.""" + LINE_ITEMS_NOTE + """
 - TOTAL AMOUNT / CURRENCY: most GRNs carry no monetary total (they record quantity received, not money) — leave
   total_amount and currency null in that case. If the GR DOES show a monetary value, apply the same original-
