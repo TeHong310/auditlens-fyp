@@ -8,11 +8,34 @@ from db import get_db_connection, get_user_by_id
 from helpers.authenticity_check import (
     run_authenticity_check, save_rendered_authenticity_image, AUTHENTICITY_IMAGE_DIR
 )
+from helpers.auth_rules import compute_authentication
 
 authenticity_bp = Blueprint('authenticity', __name__)
 
 VALID_STATUSES = ('passed', 'warning')
 VALID_DOC_TYPES = ('invoice', 'po', 'gr')
+
+
+def _with_authentication_score(row):
+    """
+    Enriches an authenticity_checks row (already fetched via
+    _SELECT_WITH_JOINS, which includes document_number from the joined
+    extracted_fields/purchase_orders/goods_receipts table) with the new
+    document-type-aware authentication_score/status/summary/signal_details
+    fields — computed on the fly from data already in `row`, no new
+    query and no new DB column. Mutates and returns `row` so every
+    existing field (authenticity_status, has_company_chop, etc.) stays
+    exactly as-is for the existing frontend, which reads those directly.
+    """
+    detected_signals = {
+        'company_name': bool(row.get('has_company_name')),
+        'company_logo': bool(row.get('has_company_logo')),
+        'company_chop': bool(row.get('has_company_chop')),
+        'signature':    bool(row.get('has_signature')),
+        'doc_number':   bool(row.get('document_number')),
+    }
+    row.update(compute_authentication(row.get('document_type'), detected_signals))
+    return row
 
 # Reused by both GET endpoints: joins to whichever source table actually has
 # the reference number + vendor name + file identifiers for this row's
@@ -131,7 +154,7 @@ def get_authenticity_check(document_id):
         if not row:
             return jsonify({'error': 'No authenticity check for this document'}), 404
 
-        return jsonify(row), 200
+        return jsonify(_with_authentication_score(row)), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -228,7 +251,7 @@ def get_authenticity_checks():
         rows = cursor.fetchall()
         conn.close()
 
-        return jsonify(rows), 200
+        return jsonify([_with_authentication_score(row) for row in rows]), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -275,7 +298,7 @@ def recheck_authenticity(document_id):
         row = cursor.fetchone()
         conn.close()
 
-        return jsonify(row), 200
+        return jsonify(_with_authentication_score(row)), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
