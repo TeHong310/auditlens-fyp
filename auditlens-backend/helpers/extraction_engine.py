@@ -225,15 +225,27 @@ PO_DATE_LABEL_SCORES = (
     ('document date',  90, 'Document Date'),
     ('date',           60, 'bare Date label'),
 )
+# Highest priority (+100): this IS the GR's own receipt date. Negative
+# (-50, checked before the medium/low bare-"date" catch-all): a date that
+# belongs to a DIFFERENT referenced document (the PO, the supplier's own
+# doc) — never selected while any valid receipt/document date candidate
+# exists, per select_best()'s "usable > 5" floor, but still returned as
+# an absolute last resort so a document with ONLY a From Doc Date still
+# gets a value instead of None. Medium (+70): a generic document date,
+# plausible but less certain than an explicit receipt-date label.
 GR_DATE_LABEL_SCORES = (
-    ('from doc date',  20, 'From Doc Date (the referenced PO\'s date, not this GR\'s own date)'),
-    ('po date',        20, 'PO Date (the referenced PO\'s date, not this GR\'s own date)'),
-    ('supplier',       20, 'Supplier document date (not this GR\'s own date)'),
-    ('receipt date',   95, 'Receipt Date'),
-    ('delivery date',  95, 'Delivery Date'),
-    ('date received',  95, 'Date Received'),
-    ('document date',  90, 'Document Date'),
-    ('date',           90, 'bare Date label'),
+    ('goods receipt date', 100, 'Goods Receipt Date'),
+    ('receipt date',       100, 'Receipt Date'),
+    ('gr date',            100, 'GR Date'),
+    ('received date',      100, 'Received Date'),
+    ('posting date',       100, 'Posting Date'),
+    ('from doc date',      -50, 'From Doc Date (the referenced PO\'s date, not this GR\'s own date)'),
+    ('po date',            -50, 'PO Date (the referenced PO\'s date, not this GR\'s own date)'),
+    ('supplier date',      -50, 'Supplier Date (not this GR\'s own date)'),
+    ('supplier',           -50, 'Supplier document date (not this GR\'s own date)'),
+    ('document dt',         70, 'Document Dt'),
+    ('document date',       70, 'Document Date'),
+    ('date',                70, 'bare Date label'),
 )
 
 
@@ -243,3 +255,70 @@ def score_date_context(context_text, label_scores):
         if kw in text:
             return score, label
     return 30, 'no recognized date label'
+
+
+# ============================================================
+# CURRENCY scoring — reusable across invoice/PO/GR total_amount
+# ============================================================
+# Currency must be DERIVED from the OCR context around the selected
+# amount, never defaulted — a document with no visible currency marker
+# anywhere near its total returns None, not a guessed "MYR". Patterns
+# are word-boundary-aware so short tokens like "RM" don't false-positive
+# inside unrelated words (e.g. "term", "confirm").
+_CURRENCY_PATTERNS = (
+    ('USD', (r'u\.s\.\$', r'\bus\$', r'\busd\b', r'\bdollar')),
+    ('SGD', (r's\$', r'\bsgd\b')),
+    ('EUR', (r'\beur\b', r'€')),
+    ('MYR', (r'\brm\b', r'\bmyr\b', r'\bringgit')),
+)
+
+
+def detect_currency_candidates(text):
+    """Every currency keyword found in `text` becomes a (currency,
+    context, score) candidate — context is always the full input text
+    (not just the matched keyword), since that's what's useful in a
+    debug log. Score is nudged by matched-keyword length so a more
+    specific match (e.g. "US$", 3 chars) outranks a shorter one that
+    happens to be a substring of it (e.g. SGD's "S$", 2 chars, which
+    "US$" also contains). Returns [] if nothing found — callers must
+    NOT substitute a default currency when this is empty.
+    """
+    text_lower = (text or '').lower()
+    candidates = []
+    for currency, patterns in _CURRENCY_PATTERNS:
+        for pat in patterns:
+            m = re.search(pat, text_lower)
+            if m:
+                candidates.append((currency, text, 90 + len(m.group(0))))
+                break
+    return candidates
+
+
+def select_currency(candidates):
+    if not candidates:
+        return None
+    return max(candidates, key=lambda c: c[2])[0]
+
+
+def log_currency_result(document_type, candidates, selected_currency):
+    """Structured production log:
+
+    CURRENCY CANDIDATES:
+    [
+    {
+    "currency": "USD",
+    "context": "TOTAL (US$)",
+    "score": 93
+    }
+    ]
+    Selected:
+    USD
+    """
+    candidates_str = ',\n'.join(
+        f'{{\n"currency": {cur!r},\n"context": {ctx!r},\n"score": {score}\n}}'
+        for cur, ctx, score in candidates
+    ) or '(none found)'
+    print(
+        f"CURRENCY CANDIDATES ({document_type}):\n\n[\n{candidates_str}\n]\n\n"
+        f"Selected:\n{selected_currency}"
+    )

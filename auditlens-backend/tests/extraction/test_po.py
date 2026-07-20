@@ -82,6 +82,8 @@ def run_case_po_without_total_label():
     check('needs_review is True (medium-confidence subtotal fallback)',
           fields['_confidence']['total_amount']['needs_review'] is True,
           fields['_confidence']['total_amount'])
+    check('currency is None (no currency keyword anywhere in this document)',
+          fields['currency'] is None, fields['currency'])
 
 
 if __name__ == '__main__':

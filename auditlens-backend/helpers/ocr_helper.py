@@ -10,6 +10,7 @@ from helpers.extraction_engine import (
     make_candidate, select_best, select_best_amount, log_extraction_result,
     score_amount_context, score_docnumber_context, score_date_context,
     is_rejected_docnumber_value, find_reverse_proximity_amount,
+    detect_currency_candidates, select_currency, log_currency_result,
     INVOICE_NUMBER_LABELS, PO_NUMBER_LABELS, GR_NUMBER_LABELS,
     INVOICE_DATE_LABEL_SCORES, PO_DATE_LABEL_SCORES, GR_DATE_LABEL_SCORES,
 )
@@ -899,14 +900,16 @@ def extract_fields(ocr_text):
                     val = extract_amount(match.group(1))
                     if val and val > 1:
                         score, reason = score_amount_context(line_clean)
-                        amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency='MYR'))
+                        cur = select_currency(detect_currency_candidates(line_clean))
+                        amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency=cur))
                     break
 
             if re.search(r'^total\s*$', line_clean, re.IGNORECASE):
                 val = extract_amount(next_line)
                 if val and val > 1:
                     score, reason = score_amount_context(line_clean)
-                    amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency='MYR'))
+                    cur = select_currency(detect_currency_candidates(next_line))
+                    amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency=cur))
                 else:
                     # Reverse layout — same reasoning as the currency_label_
                     # only case above, for a bare "TOTAL" label with no
@@ -918,7 +921,7 @@ def extract_fields(ocr_text):
                         raw_line, _ = _reverse
                         rev_val = extract_amount(raw_line)
                         if rev_val and rev_val > 1:
-                            cur = 'USD' if re.search(r'us\$|usd', raw_line, re.IGNORECASE) else 'MYR'
+                            cur = select_currency(detect_currency_candidates(raw_line))
                             score, reason = score_amount_context(line_clean)
                             amount_candidates.append(make_candidate(
                                 rev_val, f'{line_clean} reverse proximity', i, score, reason, currency=cur))
@@ -949,7 +952,12 @@ def extract_fields(ocr_text):
     selected_total = select_best_amount(amount_candidates, preferred_currency='USD')
     if selected_total:
         fields['total_amount'] = selected_total['value']
-        fields['currency'] = selected_total.get('currency') or 'MYR'
+        # Currency is derived from OCR context only — never a hardcoded
+        # default. A candidate whose own context had no detectable
+        # currency keyword (score_amount_context() still ran fine, this
+        # is a separate signal) legitimately leaves fields['currency']
+        # as None rather than guessing MYR.
+        fields['currency'] = selected_total.get('currency')
     fields['_confidence']['total_amount'] = log_extraction_result(
         'Invoice', 'total_amount', amount_candidates, selected_total)
 
@@ -964,6 +972,11 @@ def extract_fields(ocr_text):
         f"INVOICE TOTAL CANDIDATES:\n\n[\n{_amt_cand_str}\n]\n\n"
         f"Selected:\n\n{selected_total['value'] if selected_total else None}"
     )
+
+    log_currency_result(
+        'Invoice',
+        detect_currency_candidates(selected_total['context']) if selected_total else [],
+        fields['currency'])
 
     selected_invoice_number = select_best(invoice_number_candidates)
     if selected_invoice_number:
@@ -1028,6 +1041,7 @@ def extract_fields(ocr_text):
                 val = extract_amount(match.group(1))
                 if val and val > 1:
                     fields['total_amount'] = val
+                    fields['currency'] = select_currency(detect_currency_candidates(match.group(0)))
                     break
 
     # Invoice Date fallback
@@ -1083,7 +1097,10 @@ def extract_po_fields(ocr_text):
         'vendor_name':      None,
         'po_date':          None,
         'total_amount':     None,
-        'currency':         'MYR',
+        # Derived from OCR context only (see detect_currency_candidates())
+        # — never defaulted to MYR; stays None if no currency keyword is
+        # found anywhere near the selected total.
+        'currency':         None,
         # 3-way audit comparison fields — po_number above IS the PO's
         # own anchor reference, so no separate po_reference field here.
         'item_description': None,
@@ -1325,7 +1342,8 @@ def extract_po_fields(ocr_text):
             val = extract_amount(next_line)
             if val and val > 1:
                 score, reason = score_amount_context(line_clean)
-                amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency='MYR'))
+                cur = select_currency(detect_currency_candidates(line_clean))
+                amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency=cur))
 
         # A bare "amount"/"total" mid-word match inside an actual tax
         # breakdown line (e.g. "Total Tax Amount: 145.60") is excluded
@@ -1342,7 +1360,8 @@ def extract_po_fields(ocr_text):
                 val = extract_amount(match.group(1))
                 if val and val > 1:
                     score, reason = score_amount_context(line_clean)
-                    amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency='MYR'))
+                    cur = select_currency(detect_currency_candidates(line_clean))
+                    amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency=cur))
 
         # Subtotal as its own, separate, lower-priority candidate — a PO
         # that never prints a real "Total"/"Grand Total"/"Amount Due"
@@ -1357,14 +1376,19 @@ def extract_po_fields(ocr_text):
             val = extract_amount(sub_match.group(1))
             if val and val > 1:
                 score, reason = score_amount_context(line_clean)
-                amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency='MYR'))
+                cur = select_currency(detect_currency_candidates(line_clean))
+                amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency=cur))
 
     selected_total = select_best_amount(amount_candidates, preferred_currency='USD')
     if selected_total:
         fields['total_amount'] = selected_total['value']
-        fields['currency'] = selected_total.get('currency') or 'MYR'
+        fields['currency'] = selected_total.get('currency')
     fields['_confidence']['total_amount'] = log_extraction_result(
         'PO', 'total_amount', amount_candidates, selected_total)
+    log_currency_result(
+        'PO',
+        detect_currency_candidates(selected_total['context']) if selected_total else [],
+        fields['currency'])
 
     selected_po_number = select_best(po_number_candidates)
     if selected_po_number:
@@ -1392,6 +1416,7 @@ def extract_po_fields(ocr_text):
             val = extract_amount(match.group(1))
             if val:
                 fields['total_amount'] = val
+                fields['currency'] = 'MYR'
 
     # No Gemini call here — extract_po_fields() is regex-only, used as the
     # FALLBACK. The single merged Gemini vision call (fields + authenticity
@@ -1408,7 +1433,10 @@ def extract_gr_fields(ocr_text):
         'vendor_name':      None,
         'receipt_date':     None,
         'total_amount':     None,
-        'currency':         'MYR',
+        # Derived from OCR context only (see detect_currency_candidates())
+        # — never defaulted to MYR; stays None if no currency keyword is
+        # found anywhere near the selected total.
+        'currency':         None,
         # 3-way audit comparison fields — po_reference is the PO number
         # THIS GR was received against (GR's own number is gr_number
         # above).
@@ -1446,9 +1474,15 @@ def extract_gr_fields(ocr_text):
         r'from\s+doc\s*date',
         r'po\s*date',
         r'supplier[\w\s]*date',
+        r'goods\s*receipt\s*date',
+        r'gr\s*date',
+        r'received\s*date',
+        r'posting\s*date',
         r'receipt\s*date',
         r'delivery\s*date',
         r'date\s*received',
+        r'document\s*dt\.?',
+        r'document\s*date',
         r'date',
     ]
 
@@ -1624,7 +1658,8 @@ def extract_gr_fields(ocr_text):
                 val = extract_amount(match.group(1))
                 if val and val > 1:
                     score, reason = score_amount_context(line_clean)
-                    amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency='MYR'))
+                    cur = select_currency(detect_currency_candidates(line_clean))
+                    amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency=cur))
 
         # Subtotal as its own, separate, lower-priority candidate — same
         # reasoning as extract_po_fields()'s equivalent fallback.
@@ -1636,20 +1671,40 @@ def extract_gr_fields(ocr_text):
             val = extract_amount(sub_match.group(1))
             if val and val > 1:
                 score, reason = score_amount_context(line_clean)
-                amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency='MYR'))
+                cur = select_currency(detect_currency_candidates(line_clean))
+                amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency=cur))
 
     selected_total = select_best_amount(amount_candidates, preferred_currency='USD')
     if selected_total:
         fields['total_amount'] = selected_total['value']
-        fields['currency'] = selected_total.get('currency') or 'MYR'
+        fields['currency'] = selected_total.get('currency')
     fields['_confidence']['total_amount'] = log_extraction_result(
         'GR', 'total_amount', amount_candidates, selected_total)
+    log_currency_result(
+        'GR',
+        detect_currency_candidates(selected_total['context']) if selected_total else [],
+        fields['currency'])
 
     selected_date = select_best(receipt_date_candidates)
     if selected_date:
         fields['receipt_date'] = normalize_date_string(selected_date['value'])
     fields['_confidence']['receipt_date'] = log_extraction_result(
         'GR', 'receipt_date', receipt_date_candidates, selected_date)
+
+    # Issue-specific structured debug (GR receipt_date has repeatedly been
+    # the field where a wrong "From Doc Date"/"PO Date" selection needed
+    # diagnosing) — same underlying candidates as the generic
+    # log_extraction_result() call above, in the exact format requested
+    # for that investigation.
+    _gr_date_cand_str = ',\n'.join(
+        f'{{\n"value": {c["value"]!r},\n"context": {c["context"]!r},\n"score": {c["confidence_score"]}\n}}'
+        for c in receipt_date_candidates
+    ) or '(none found)'
+    print(
+        f"GR DATE CANDIDATES:\n\n[\n{_gr_date_cand_str}\n]\n\n"
+        f"Selected:\n\n{selected_date['value'] if selected_date else None}\n\n"
+        f"Reason:\n\n{selected_date['reason'] if selected_date else 'no candidate found'}"
+    )
 
     selected_gr_number = select_best(gr_number_candidates)
     if selected_gr_number:
@@ -1687,6 +1742,7 @@ def extract_gr_fields(ocr_text):
             val = extract_amount(match.group(1))
             if val:
                 fields['total_amount'] = val
+                fields['currency'] = 'MYR'
 
     # No Gemini call here — extract_gr_fields() is regex-only, used as the
     # FALLBACK. The single merged Gemini vision call (fields + authenticity
