@@ -3,8 +3,30 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 import psycopg2.extras
 from db import get_db_connection, get_user_by_id
 from helpers.audit_log import log_audit
+from helpers.entity_normalizer import is_same_company, log_entity_match_debug
 
 matching_bp = Blueprint('matching', __name__)
+
+
+# ============================================================
+# Helper: Compare two vendor names (normalized + OCR-typo-tolerant
+# fuzzy similarity — see helpers/entity_normalizer.py). Kept separate
+# from the generic compare_field() below, which the vendor comparisons
+# here used to go through: compare_field()'s "text" branch is a naive
+# substring/character-overlap heuristic, not company-name-aware (no
+# suffix stripping, no fuzzy tolerance for a single OCR-dropped letter),
+# and reported the SAME supplier as a mismatch whenever spacing/suffix/
+# spelling varied across documents.
+# ============================================================
+def compare_vendor_field(val1, val2, source_label='vendor A', target_label='vendor B'):
+    if val1 is None and val2 is None:
+        return True, 100.0
+    if val1 is None or val2 is None:
+        return False, 0.0
+    result = is_same_company(val1, val2)
+    log_entity_match_debug(source_label, val1, target_label, val2, result)
+    return result['match'], result['similarity']
+
 
 # ============================================================
 # Helper: Compare two field values
@@ -65,8 +87,8 @@ def serialize_row(row):
 def run_two_way_match(invoice, gr):
     results = {}
 
-    inv_gr_vendor, inv_gr_vendor_score = compare_field(
-        invoice.get('vendor_name'), gr.get('vendor_name'), 'text'
+    inv_gr_vendor, inv_gr_vendor_score = compare_vendor_field(
+        invoice.get('vendor_name'), gr.get('vendor_name'), 'Invoice vendor', 'GR vendor'
     )
 
     # Check logistics partner if vendor doesn't match
@@ -114,8 +136,8 @@ def run_three_way_match(invoice, po, gr):
     results = {}
 
     # Invoice vs PO
-    inv_po_vendor, inv_po_vendor_score = compare_field(
-        invoice.get('vendor_name'), po.get('vendor_name'), 'text'
+    inv_po_vendor, inv_po_vendor_score = compare_vendor_field(
+        invoice.get('vendor_name'), po.get('vendor_name'), 'Invoice vendor', 'PO vendor'
     )
     inv_po_amount, inv_po_amount_score = compare_field(
         invoice.get('total_amount'), po.get('total_amount'), 'amount'
@@ -127,8 +149,8 @@ def run_three_way_match(invoice, po, gr):
     results['invoice_po_match']        = inv_po_vendor and inv_po_amount
 
     # Invoice vs GR
-    inv_gr_vendor, inv_gr_vendor_score = compare_field(
-        invoice.get('vendor_name'), gr.get('vendor_name'), 'text'
+    inv_gr_vendor, inv_gr_vendor_score = compare_vendor_field(
+        invoice.get('vendor_name'), gr.get('vendor_name'), 'Invoice vendor', 'GR vendor'
     )
 
     # Logistics partner check
@@ -152,8 +174,8 @@ def run_three_way_match(invoice, po, gr):
     results['logistics_note']          = logistics_note
 
     # PO vs GR
-    po_gr_vendor, po_gr_vendor_score = compare_field(
-        po.get('vendor_name'), gr.get('vendor_name'), 'text'
+    po_gr_vendor, po_gr_vendor_score = compare_vendor_field(
+        po.get('vendor_name'), gr.get('vendor_name'), 'PO vendor', 'GR vendor'
     )
     po_gr_amount, po_gr_amount_score = compare_field(
         po.get('total_amount'), gr.get('total_amount'), 'amount'

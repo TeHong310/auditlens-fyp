@@ -16,7 +16,7 @@ from helpers.anomaly_detector import run_anomaly_detection
 from helpers.authenticity_check import run_authenticity_check
 from helpers.gemini_extractor import gemini_extract_invoice_full, gemini_extract_po_full, gemini_extract_gr_full
 from helpers.gemini_cache import compute_file_hash, get_cached_gemini_result, save_gemini_result_to_cache
-from helpers.confidence_engine import compute_field_confidence, log_field_confidence
+from helpers.confidence_engine import compute_field_confidence, compute_line_items_confidence, log_field_confidence
 from helpers.extraction_validator import validate_extraction
 from config import Config
 
@@ -117,7 +117,12 @@ def _sanitize_line_items(items):
         desc = item.get('description')
         if not desc:
             continue
-        code = item.get('item_code')
+        # part_number and item_code are the SAME concept (the SKU/part
+        # code) — Gemini's schema now asks for both keys filled with the
+        # same value, but this accepts either one alone too, so neither
+        # a Gemini response that only fills one nor the regex fallback
+        # (which only ever produces item_code) loses the code.
+        code = item.get('item_code') or item.get('part_number')
         clean = normalize_line_item_code({
             'item_code':   str(code).strip()[:100] if code else None,
             'description': str(desc).strip()[:200],
@@ -130,6 +135,30 @@ def _sanitize_line_items(items):
             'amount':      _num(item, 'amount'),
         })
     return result
+
+
+def _log_line_item_debug(document_type, raw_candidates, selected_items):
+    """Structured production log — shows every line-item candidate Gemini/
+    OCR produced (before sanitization) and what actually got persisted,
+    so "no line items extracted" is diagnosable from logs alone: either
+    the candidates list is genuinely empty (Gemini/OCR found nothing —
+    an extraction problem) or candidates exist but Selected is empty/
+    shorter (a sanitization problem, e.g. every row missing a
+    description)."""
+    def _row(c):
+        return (
+            f'{{\n"description": {c.get("description")!r},\n'
+            f'"part_number": {(c.get("item_code") or c.get("part_number"))!r},\n'
+            f'"quantity": {c.get("quantity")!r}\n}}'
+        )
+    candidates_str = ',\n'.join(_row(c) for c in (raw_candidates or []) if isinstance(c, dict)) or '(none found)'
+    selected_str = ',\n'.join(_row(c) for c in selected_items) or '(none)'
+    print(
+        f"LINE ITEM EXTRACTION DEBUG\n\n"
+        f"Document:\n{document_type}\n\n"
+        f"Candidates:\n\n[\n{candidates_str}\n]\n\n"
+        f"Selected:\n\n[\n{selected_str}\n]"
+    )
 
 
 def _save_line_items(cursor, document_id, document_type, items):
@@ -293,6 +322,7 @@ def upload_document():
         # overwrites it — needed to compute Gemini-vs-OCR agreement
         # confidence (see helpers/confidence_engine.py) after the merge.
         _ocr_values = {key: fields.get(key) for key in _merge_keys}
+        _ocr_had_line_items = bool(fields.get('line_items'))
 
         if gemini_result:
             for key in _merge_keys:
@@ -309,6 +339,8 @@ def upload_document():
                 (gemini_result or {}).get(key), _ocr_values[key], fields.get('_confidence', {}).get(key))
             for key in _merge_keys
         }
+        _field_confidence['line_items'] = compute_line_items_confidence(
+            fields.get('line_items'), bool((gemini_result or {}).get('line_items')), _ocr_had_line_items)
         log_field_confidence('Invoice', _field_confidence)
 
         if fields['total_amount'] is not None:
@@ -358,7 +390,9 @@ def upload_document():
         )
         extraction_id = cursor.fetchone()[0]
 
-        _save_line_items(cursor, document_id, 'invoice', _sanitize_line_items(fields['line_items']))
+        _sanitized_line_items = _sanitize_line_items(fields['line_items'])
+        _log_line_item_debug('Invoice', fields['line_items'], _sanitized_line_items)
+        _save_line_items(cursor, document_id, 'invoice', _sanitized_line_items)
 
         cursor.execute(
             "UPDATE documents SET status = 'ocr_done' WHERE document_id = %s",
@@ -482,6 +516,7 @@ def upload_purchase_order(document_id):
         _merge_keys = ('po_number', 'vendor_name', 'po_date', 'total_amount',
                        'currency', 'item_description', 'quantity')
         _ocr_values = {key: fields.get(key) for key in _merge_keys}
+        _ocr_had_line_items = bool(fields.get('line_items'))
 
         if gemini_result:
             for key in _merge_keys:
@@ -495,6 +530,8 @@ def upload_purchase_order(document_id):
                 (gemini_result or {}).get(key), _ocr_values[key], fields.get('_confidence', {}).get(key))
             for key in _merge_keys
         }
+        _field_confidence['line_items'] = compute_line_items_confidence(
+            fields.get('line_items'), bool((gemini_result or {}).get('line_items')), _ocr_had_line_items)
         log_field_confidence('PO', _field_confidence)
 
         if fields['total_amount'] is not None:
@@ -541,7 +578,9 @@ def upload_purchase_order(document_id):
         )
         po_id = cursor.fetchone()[0]
 
-        _save_line_items(cursor, document_id, 'po', _sanitize_line_items(fields['line_items']))
+        _sanitized_line_items = _sanitize_line_items(fields['line_items'])
+        _log_line_item_debug('PO', fields['line_items'], _sanitized_line_items)
+        _save_line_items(cursor, document_id, 'po', _sanitized_line_items)
 
         conn.commit()
         conn.close()
@@ -649,6 +688,7 @@ def upload_goods_receipt(document_id):
                        'po_reference', 'item_description', 'quantity',
                        'total_amount', 'currency')
         _ocr_values = {key: fields.get(key) for key in _merge_keys}
+        _ocr_had_line_items = bool(fields.get('line_items'))
 
         if gemini_result:
             for key in _merge_keys:
@@ -662,6 +702,8 @@ def upload_goods_receipt(document_id):
                 (gemini_result or {}).get(key), _ocr_values[key], fields.get('_confidence', {}).get(key))
             for key in _merge_keys
         }
+        _field_confidence['line_items'] = compute_line_items_confidence(
+            fields.get('line_items'), bool((gemini_result or {}).get('line_items')), _ocr_had_line_items)
         log_field_confidence('GR', _field_confidence)
 
         if fields['total_amount'] is not None:
@@ -708,7 +750,9 @@ def upload_goods_receipt(document_id):
         )
         gr_id = cursor.fetchone()[0]
 
-        _save_line_items(cursor, document_id, 'gr', _sanitize_line_items(fields['line_items']))
+        _sanitized_line_items = _sanitize_line_items(fields['line_items'])
+        _log_line_item_debug('GR', fields['line_items'], _sanitized_line_items)
+        _save_line_items(cursor, document_id, 'gr', _sanitized_line_items)
 
         conn.commit()
         conn.close()

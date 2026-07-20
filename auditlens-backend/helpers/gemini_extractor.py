@@ -196,27 +196,35 @@ CURRENCY_NOTE = """
      ignore this rule."""
 
 LINE_ITEMS_NOTE = """
-- LINE ITEMS: extract EVERY row of the goods/services table (not just the first) as a "line_items"
-  array, in the SAME order as printed. Each entry:
-  {"item_code": string or null, "description": string, "quantity": number or null,
-   "unit_price": number or null, "amount": number or null}
-  1. item_code is the SKU/part-code (e.g. "SLT-MOS-N60R", "MTC-IND-4R7M") if the description cell
-     has one — whether it's printed in a SEPARATE code column, OR as the leading token of a single
-     combined description cell (e.g. the cell reads "SLT-MOS-N60R MOSFET N-Ch 600V TO-220"). EITHER
-     WAY, split it out into item_code and put ONLY the remaining text ("MOSFET N-Ch 600V TO-220")
-     in description — never leave the code duplicated inside description once it's been captured
-     in item_code. This must be done CONSISTENTLY for every row, on every document type (invoice,
-     PO, GR) — the SAME product on different documents must end up with the SAME item_code and
-     description, since these are matched against each other across documents.
-  2. If a row's description has no code-shaped prefix at all, item_code is null and description is
-     the full cell text unchanged.
+- LINE ITEMS: you are extracting structured PURCHASING data from a procurement document, not doing
+  simple OCR — a goods/services table on an invoice/PO/GR ALWAYS has MULTIPLE genuine rows in real
+  procurement data; treat a table with only one extracted row as a signal you likely missed the rest,
+  not as the normal case. Extract EVERY row of the table (not just the first) as a "line_items" array,
+  in the SAME order as printed. Each entry:
+  {"item_code": string or null, "part_number": string or null (SAME value as item_code — both keys
+   must be filled together, never one without the other), "description": string, "quantity": number
+   or null, "unit_price": number or null, "amount": number or null}
+  1. item_code/part_number is the SKU/part-code (e.g. "SLT-MOS-N60R", "0603DC-12NXGRW") if the
+     description cell has one — whether it's printed in a SEPARATE code column, OR as the leading
+     token of a single combined description cell (e.g. the cell reads "SLT-MOS-N60R MOSFET N-Ch 600V
+     TO-220"). EITHER WAY, split it out into item_code/part_number and put ONLY the remaining text
+     ("MOSFET N-Ch 600V TO-220") in description — never leave the code duplicated inside description
+     once it's been captured. This must be done CONSISTENTLY for every row, on every document type
+     (invoice, PO, GR) — the SAME product on different documents must end up with the SAME item_code/
+     part_number and description, since these are matched against each other across documents.
+  2. If a row's description has no code-shaped prefix at all, item_code/part_number are both null and
+     description is the full cell text unchanged.
   3. quantity/unit_price/amount: null for any cell you cannot confidently read, never a guess.
   4. If there are more than 50 rows, return only the first 50.
   5. If no line-item table can be found at all, return an empty array [].
   6. Do NOT include as a line item: a shipping/freight/delivery charge row, a tax/GST/SST row, a
      subtotal/total/grand total row, or footer text (terms and conditions, bank details, signatures,
      notes) — even if it visually appears as the last row(s) of the same table. Only genuine
-     goods/services rows belong in line_items."""
+     goods/services rows belong in line_items.
+  7. Do NOT return only the first item when more rows exist. Do NOT ignore the table entirely and
+     return an empty array when rows ARE visible. Do NOT summarize/collapse multiple distinct rows
+     into one combined entry. Do NOT merge two different products into a single line_items entry —
+     if the table shows 5 distinct rows, line_items must have 5 entries, not 1."""
 
 AUTHENTICITY_SIGNALS_BLOCK = """=== PART 2: AUTHENTICITY SIGNALS ===
 Detect the following signals AND identify how this document was captured/uploaded.
@@ -360,7 +368,7 @@ IMPORTANT RULES:
   "po_reference": "string or null (the PO number this invoice bills against)",
   "item_description": "string or null (first line-item row)",
   "quantity": number or null (first line-item row),
-  "line_items": [{"item_code": null, "description": "string", "quantity": null, "unit_price": null, "amount": null}],
+  "line_items": [{"item_code": null, "part_number": null, "description": "string", "quantity": null, "unit_price": null, "amount": null}],
 """ + AUTHENTICITY_JSON_TAIL
 
 PO_FULL_PROMPT = """You are an expert at extracting structured data from Malaysian SME
@@ -450,7 +458,7 @@ IMPORTANT RULES:
   "currency": "string or null (the ORIGINAL currency of total_amount, e.g. RM, MYR, USD)",
   "item_description": "string or null (first line-item row)",
   "quantity": number or null (first line-item row),
-  "line_items": [{"item_code": null, "description": "string", "quantity": null, "unit_price": null, "amount": null}],
+  "line_items": [{"item_code": null, "part_number": null, "description": "string", "quantity": null, "unit_price": null, "amount": null}],
 """ + AUTHENTICITY_JSON_TAIL
 
 GR_FULL_PROMPT = """You are an expert at extracting structured data from Malaysian SME
@@ -515,7 +523,7 @@ IMPORTANT RULES:
   "quantity": number or null (first line-item row),
   "total_amount": number or null (usually null — most GRNs carry no monetary total),
   "currency": "string or null (only if total_amount is present)",
-  "line_items": [{"item_code": null, "description": "string", "quantity": null, "unit_price": null, "amount": null}],
+  "line_items": [{"item_code": null, "part_number": null, "description": "string", "quantity": null, "unit_price": null, "amount": null}],
 """ + AUTHENTICITY_JSON_TAIL
 
 

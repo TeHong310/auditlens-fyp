@@ -7,19 +7,34 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 import psycopg2.extras
 from db import get_db_connection, get_user_by_id
 from helpers.ocr_helper import split_item_code_prefix
+from helpers.entity_normalizer import is_same_company, log_entity_match_debug
 
 auditor_bp = Blueprint('auditor', __name__)
 
 
-def _normalize_vendor(name):
-    if not name:
-        return ''
-    v = name.lower()
-    v = re.sub(r'[.,()]', '', v)
-    v = re.sub(r'\bsdn\s*bhd\b', '', v)
-    v = re.sub(r'\bberhad\b', '', v)
-    v = re.sub(r'\s+', ' ', v).strip()
-    return v
+def _vendor_match_all(named_vendors):
+    """named_vendors: [(label, value), ...] for whichever of Invoice/PO/
+    GR are present. Pairwise-compares every present pair via
+    is_same_company() (normalized + OCR-typo-tolerant fuzzy similarity —
+    see helpers/entity_normalizer.py) instead of the old exact-string-
+    after-light-normalization check, which reported the SAME supplier as
+    DIFFERENT whenever spacing/suffix/OCR-spelling varied across
+    documents. Returns True only if every present pair matches, False if
+    any pair doesn't, None if fewer than 2 vendor names are present to
+    compare at all."""
+    present = [(label, v) for label, v in named_vendors if v]
+    if len(present) < 2:
+        return None
+    all_match = True
+    for i in range(len(present)):
+        for j in range(i + 1, len(present)):
+            label_a, val_a = present[i]
+            label_b, val_b = present[j]
+            result = is_same_company(val_a, val_b)
+            log_entity_match_debug(label_a, val_a, label_b, val_b, result)
+            if not result['match']:
+                all_match = False
+    return all_match
 
 
 def _amounts_equal(a, b):
@@ -84,17 +99,21 @@ def _normalize_text(val):
 def _line_item_tokens(item):
     """(code_key, desc_key) for one line item, used by _find_line_item_
     match() below. code_key is the normalized item_code (uppercase,
-    non-alphanumerics stripped) or None. desc_key is the normalized
-    description via _normalize_text, with any leading item-code-shaped
-    token STRIPPED first (split_item_code_prefix) — this is what makes
-    matching robust even when item_code wasn't split out on one side:
-    "SLT-MOS-N60R MOSFET N-Ch 600V TO-220" and "MOSFET N-Ch 600V TO-220"
-    both reduce to the same desc_key regardless of which document's
-    extraction path already normalized it (persistence-time
-    normalization in routes/documents.py's _sanitize_line_items() is
-    the primary fix for NEW uploads; this is the defense-in-depth
-    fallback that also fixes matching for records already in the DB
-    from before that fix existed)."""
+    non-alphanumerics stripped) or None — this IS the "part_number"
+    priority-1 match key: Gemini's schema fills item_code and part_number
+    with the same value, and routes/documents.py's _sanitize_line_items()
+    merges either one into the single item_code column document_line_
+    items actually has, so checking item_code here already covers both
+    names. desc_key is the normalized description via _normalize_text,
+    with any leading item-code-shaped token STRIPPED first
+    (split_item_code_prefix) — this is what makes matching robust even
+    when item_code wasn't split out on one side: "SLT-MOS-N60R MOSFET
+    N-Ch 600V TO-220" and "MOSFET N-Ch 600V TO-220" both reduce to the
+    same desc_key regardless of which document's extraction path already
+    normalized it (persistence-time normalization in routes/documents.py's
+    _sanitize_line_items() is the primary fix for NEW uploads; this is
+    the defense-in-depth fallback that also fixes matching for records
+    already in the DB from before that fix existed)."""
     code = item.get('item_code')
     code_key = re.sub(r'[^A-Za-z0-9]', '', str(code)).upper() if code else None
     desc = item.get('description') or ''
@@ -411,15 +430,17 @@ def _build_comparison(cursor, invoice_document_id):
     line_items_match = (not line_items_hard_mismatch) if line_items else None
     line_items_price_match = (not line_items_soft_mismatch) if line_items else None
 
-    # ── Vendor match: compare normalized vendor_name across every
-    # present doc (invoice always present; PO/GR only if uploaded) ──
-    vendor_names = [invoice['vendor_name']]
+    # ── Vendor match: fuzzy-compare vendor_name across every present doc
+    # (invoice always present; PO/GR only if uploaded) — see
+    # _vendor_match_all()/helpers/entity_normalizer.py for why this is a
+    # normalized + OCR-typo-tolerant similarity check, not exact-string
+    # equality. ──
+    named_vendors = [('Invoice vendor', invoice['vendor_name'])]
     if po:
-        vendor_names.append(po['vendor_name'])
+        named_vendors.append(('PO vendor', po['vendor_name']))
     if gr:
-        vendor_names.append(gr['vendor_name'])
-    normalized = [_normalize_vendor(v) for v in vendor_names if v]
-    vendor_match = len(set(normalized)) <= 1 if normalized else None
+        named_vendors.append(('GR vendor', gr['vendor_name']))
+    vendor_match = _vendor_match_all(named_vendors)
 
     # ── Amount match: Invoice vs PO only (GR carries no monetary
     # total by design). currency is already normalized above (RM/MYR

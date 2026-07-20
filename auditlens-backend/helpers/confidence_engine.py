@@ -51,10 +51,45 @@ def compute_field_confidence(gemini_value, ocr_value, ocr_confidence_entry):
     return {'value': value, 'confidence': confidence, 'source': source, 'status': status}
 
 
+def compute_line_items_confidence(line_items, gemini_result_had_items, ocr_result_had_items):
+    """Confidence for the line_items array as a whole (not per-row):
+    what fraction of the extracted rows have every field a matching
+    engine actually needs (description + quantity), plus a source/
+    agreement signal — Gemini and OCR independently producing a non-
+    empty table is the same "two independent methods agree" signal
+    compute_field_confidence() uses for scalar fields."""
+    if not line_items:
+        return {'value': [], 'confidence': 0, 'source': None, 'status': 'needs_review'}
+
+    complete = sum(1 for it in line_items if it.get('description') and it.get('quantity') is not None)
+    completeness = complete / len(line_items)
+
+    if gemini_result_had_items and ocr_result_had_items:
+        source = 'Gemini + OCR agreement'
+        base = 95
+    elif gemini_result_had_items:
+        source = 'Gemini'
+        base = 85
+    else:
+        source = 'OCR'
+        base = 70
+
+    confidence = round(base * completeness)
+    if confidence >= ACCEPT_THRESHOLD:
+        status = 'accepted'
+    elif confidence >= REVIEW_THRESHOLD:
+        status = 'review'
+    else:
+        status = 'needs_review'
+    return {'value': line_items, 'confidence': confidence, 'source': source, 'status': status}
+
+
 def log_field_confidence(document_type, field_confidence):
     for field, entry in field_confidence.items():
+        value = entry['value']
+        value_repr = f'{len(value)} item(s)' if isinstance(value, list) else repr(value)
         print(
             f"FIELD CONFIDENCE ({document_type}) | {field} | "
-            f"value={entry['value']!r} | confidence={entry['confidence']} | "
+            f"value={value_repr} | confidence={entry['confidence']} | "
             f"source={entry['source']!r} | status={entry['status']}"
         )
