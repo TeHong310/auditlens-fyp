@@ -1,0 +1,27 @@
+"""Runs every extraction regression test in this directory and reports a
+single pass/fail summary — invoice, PO, GR.
+
+Usage:
+    python tests/extraction/run_all.py
+Exits 0 if every suite passes, 1 if any fail.
+"""
+import subprocess
+import sys
+import os
+
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+SUITES = ['test_invoice.py', 'test_po.py', 'test_gr.py']
+
+if __name__ == '__main__':
+    results = {}
+    for suite in SUITES:
+        print(f'\n{"=" * 60}\n{suite}\n{"=" * 60}')
+        proc = subprocess.run([sys.executable, os.path.join(THIS_DIR, suite)])
+        results[suite] = proc.returncode
+
+    print(f'\n{"=" * 60}\nSUMMARY\n{"=" * 60}')
+    failed = [s for s, code in results.items() if code != 0]
+    for suite, code in results.items():
+        print(f'  {"PASS" if code == 0 else "FAIL"}  {suite}')
+
+    sys.exit(1 if failed else 0)
