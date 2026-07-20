@@ -242,6 +242,13 @@ def upload_document():
         ocr_results, ocr_text, confidence = run_ocr(file_path, file_ext)
         confidence = float(confidence)
         fields     = extract_fields(ocr_text)
+        # TEMP-DEBUG (invoice field-loss investigation): what the regex OCR
+        # fallback found, BEFORE Gemini's result is merged in — this is the
+        # baseline that must survive if Gemini returns null for the same
+        # field. Safe to delete this line once no longer needed.
+        print(f"DEBUG OCR INVOICE FIELDS | invoice_number={fields.get('invoice_number')} | "
+              f"invoice_date={fields.get('invoice_date')} | vendor_name={fields.get('vendor_name')} | "
+              f"total_amount={fields.get('total_amount')} | tax_amount={fields.get('tax_amount')}")
         _debug_log_memory('5_after_ocr_processing')  # TEMP-DEBUG-MEM (NOTE: OCR runs BEFORE Gemini in this endpoint, not after — see report)
 
         # Single merged Gemini vision call: fields + authenticity signals
@@ -268,6 +275,22 @@ def upload_document():
             fields['total_amount'] = float(fields['total_amount'])
         if fields['tax_amount'] is not None:
             fields['tax_amount'] = float(fields['tax_amount'])
+
+        # FIX (invoice field-loss bug): validate_extraction()'s date check
+        # only recognizes ISO 'YYYY-MM-DD' strings. Gemini already returns
+        # dates in that format, but the regex OCR fallback (extract_fields()
+        # above) can produce natural-language dates like "2 March 2026" —
+        # those only get normalized to ISO by parse_date() below, which
+        # used to run AFTER validation. When Gemini returns null for
+        # invoice_date (correctly leaving the OCR value in fields['invoice_date']
+        # per the merge loop above), the validator was then rejecting that
+        # same valid OCR value for not looking like ISO yet, silently
+        # nulling a real extracted date. Normalizing here, before
+        # validate_extraction() runs, fixes that without changing the
+        # validator itself (which is shared with PO/GR — out of scope here).
+        _pre_validation_invoice_date = parse_date(fields['invoice_date'])
+        if _pre_validation_invoice_date is not None:
+            fields['invoice_date'] = str(_pre_validation_invoice_date)
 
         # Lightweight post-processing validation of the already-extracted
         # fields — no additional Gemini call. See helpers/extraction_validator.py.

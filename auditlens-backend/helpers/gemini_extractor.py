@@ -729,6 +729,13 @@ def gemini_extract_invoice_full(file_bytes, file_name):
         )
         if text is None:
             return None
+        # TEMP-DEBUG (invoice field-loss investigation): the raw response
+        # TEXT exactly as Gemini returned it, before json.loads() — lets a
+        # malformed/truncated response be told apart from a well-formed
+        # one that simply has null fields. Capped defensively since this
+        # is a full JSON blob (line_items, signal_boxes, notes and all).
+        _raw_preview = text if len(text) <= 3000 else text[:3000] + '...<truncated>'
+        print(f"DEBUG GEMINI RAW RESPONSE | type=invoice | text={_raw_preview!r}")
         result = json.loads(_strip_markdown_fences(text))
         # TEMP-DEBUG: the complete set of invoice scalar fields Gemini
         # itself returned, logged right after parsing — before anything
