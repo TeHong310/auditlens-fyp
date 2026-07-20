@@ -293,19 +293,44 @@ IMPORTANT RULES:
   as vendor_name on a PO. If no supplier heading/section can be found,
   return null rather than defaulting to the letterhead.
 - CRITICAL: PO Number rules:
-  1. PO Number is found in a LABELED field, never inferred from other text.
-  2. Look for these exact labels: "Doc No.", "PO No.", "P.O. No.", "Purchase Order No.", "Order No.", "PO Number", "Reference No."
-  3. The value must be adjacent to (right of or below) the label — read PAST the label to the actual
-     printed value. NEVER return the label word/abbreviation itself as the value. Specifically, the
-     bare words "Ref", "No", "Number" (with or without ":", any case) are LABELS, not valid PO numbers
-     — if that is all you can find next to the label, the real value is missing/illegible: return null.
-     Example of what NOT to do:
-       Wrong:   {"po_number": "Ref"}
-       Correct: {"po_number": "PO3006000"}
-  4. Do NOT extract any substring from company names, product descriptions, or address fields.
-  5. Common Malaysian SME PO number formats: PONNNNNNN (e.g. PO3005713), PO-YYYY-NNNN, or numeric-only.
-  6. If no clearly labeled PO number field exists, return null. Do NOT guess or extract from unrelated text.
-  7. Length is typically 6-12 characters. Reject candidates shorter than 5 — a short generic word like
+  1. PO Number identification priority — different suppliers label this field differently. Search for
+     these labels, in this priority order, and use the value adjacent to (right of or below) the FIRST
+     one you find on the document:
+     1. "Purchase Order Number"
+     2. "PO Number"
+     3. "PO No" / "PO No."
+     4. "Order Number" / "Order No."
+     5. "Document Number"
+     6. "Document No." / "Doc No."
+     7. "PO Ref No" / "PO Ref. No."
+     Accept close punctuation/spacing variants of these labels (e.g. "P.O. No.", "PONo:") — but do not
+     treat an unrelated label as a match just because it also happens to contain the word "No".
+  2. Read PAST the label to the actual printed value next to it. NEVER return any of the following as
+     the po_number value — these are field labels or placeholder text, not real identifiers, even if
+     one of them is literally the only text printed next to the label:
+     - "Ref", "No", "Number" (with or without ":", any case)
+     - any other bare field-label word
+     - empty placeholder text (blank underscores, dashes, "____", "...", or similar)
+     If a label from the priority list above is present but no real value follows it, return null —
+     do not fall back to returning the label itself.
+  3. Example:
+       Document reads:  "Doc No: PO3006000"
+       Correct output:  {"po_number": "PO3006000"}
+       Wrong output:    {"po_number": "Doc No"}  or  {"po_number": "No"}
+  4. If more than one candidate identifier appears on the document, choose the value that:
+     - identifies the PURCHASE ORDER document itself, not a different document referenced on it
+     - appears near the PO's header/title area (top of the document, alongside a "Purchase Order"/"PO"
+       heading), rather than buried in a body/table section
+     - matches a plausible alphanumeric PO format (see format note in rule 6 below)
+     Do NOT use any of the following as po_number, even if no better candidate is found:
+     - a supplier account number / customer account code
+     - an invoice number (that belongs to a different document)
+     - an item code / part number from the goods table
+     - a delivery reference / shipping reference number
+  5. Do NOT extract any substring from company names, product descriptions, or address fields.
+  6. Common Malaysian SME PO number formats: PONNNNNNN (e.g. PO3005713), PO-YYYY-NNNN, or numeric-only.
+  7. If no clearly labeled PO number field exists, return null. Do NOT guess or extract from unrelated text.
+  8. Length is typically 6-12 characters. Reject candidates shorter than 5 — a short generic word like
      "Ref" or "No" must never be returned even if it's the only text near the label.""" + DOCUMENT_NUMBER_NOTE + """
 - ITEM DESCRIPTION and QUANTITY: from the FIRST line-item row of the goods table. If multiple rows exist, use the first row.""" + LINE_ITEMS_NOTE + """
 - Total Amount priority (return the FIRST match found):
