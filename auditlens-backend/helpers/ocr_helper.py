@@ -9,7 +9,7 @@ from config import Config
 from helpers.extraction_engine import (
     make_candidate, select_best, select_best_amount, log_extraction_result,
     score_amount_context, score_docnumber_context, score_date_context,
-    is_rejected_docnumber_value,
+    is_rejected_docnumber_value, find_reverse_proximity_amount,
     INVOICE_NUMBER_LABELS, PO_NUMBER_LABELS, GR_NUMBER_LABELS,
     INVOICE_DATE_LABEL_SCORES, PO_DATE_LABEL_SCORES, GR_DATE_LABEL_SCORES,
 )
@@ -817,11 +817,25 @@ def extract_fields(ocr_text):
             currency_label_only = re.search(r'^total\s*\(\s*(us\$|usd|rm|myr)\s*\)\s*$', line_clean, re.IGNORECASE)
             if currency_label_only:
                 tag = currency_label_only.group(1).upper().replace('$', '')
+                cur = 'USD' if tag in ('US', 'USD') else 'MYR'
                 val = extract_amount(next_line)
                 if val and val > 1:
-                    cur = 'USD' if tag in ('US', 'USD') else 'MYR'
                     score, reason = score_amount_context(line_clean)
                     amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency=cur))
+                else:
+                    # Reverse layout: Google Vision sometimes reads a
+                    # totals mini-table's VALUE column before its LABEL
+                    # row ("SUB-TOTAL: / GST (0%) / 8,020.00 / 0.00 /
+                    # 8,020.00 / TOTAL (US$)") — the real amount is one of
+                    # the few lines ABOVE this label, not below it. Only
+                    # tried when the forward next-line lookup found nothing.
+                    _reverse = find_reverse_proximity_amount(lines, i)
+                    if _reverse:
+                        rev_val = extract_amount(_reverse[0])
+                        if rev_val and rev_val > 1:
+                            score, reason = score_amount_context(line_clean)
+                            amount_candidates.append(make_candidate(
+                                rev_val, f'{line_clean} reverse proximity', i, score, reason, currency=cur))
 
             # Bare-word form (no parentheses): "Total amount: USD 8,020.00",
             # "Grand Total USD 8,020.00" — as common on real invoices as the
@@ -893,6 +907,21 @@ def extract_fields(ocr_text):
                 if val and val > 1:
                     score, reason = score_amount_context(line_clean)
                     amount_candidates.append(make_candidate(val, line_clean, i, score, reason, currency='MYR'))
+                else:
+                    # Reverse layout — same reasoning as the currency_label_
+                    # only case above, for a bare "TOTAL" label with no
+                    # parenthesized currency tag (e.g. "8,020.00 USD" /
+                    # "TOTAL" — the value's own currency suffix, if any,
+                    # decides `cur` here since the label line has none).
+                    _reverse = find_reverse_proximity_amount(lines, i)
+                    if _reverse:
+                        raw_line, _ = _reverse
+                        rev_val = extract_amount(raw_line)
+                        if rev_val and rev_val > 1:
+                            cur = 'USD' if re.search(r'us\$|usd', raw_line, re.IGNORECASE) else 'MYR'
+                            score, reason = score_amount_context(line_clean)
+                            amount_candidates.append(make_candidate(
+                                rev_val, f'{line_clean} reverse proximity', i, score, reason, currency=cur))
 
         # ── TAX AMOUNT ────────────────────────────────────
         if fields['tax_amount'] is None:
@@ -924,20 +953,17 @@ def extract_fields(ocr_text):
     fields['_confidence']['total_amount'] = log_extraction_result(
         'Invoice', 'total_amount', amount_candidates, selected_total)
 
-    # TEMP-DEBUG: invoice total debugging — distinguishes "Vision never
-    # read TOTAL" (OCR text itself has no "total") from "the engine had
-    # candidates but picked wrong/none". Remove once root-caused.
+    # Production debug: shows every amount candidate considered (including
+    # ones found via reverse-proximity lookup) and which one was selected,
+    # so a wrong/missing invoice total is diagnosable from logs alone.
     _amt_cand_str = ',\n'.join(
         f'{{\nvalue: {c["value"]!r},\ncontext: {c["context"]!r},\nscore: {c["confidence_score"]}\n}}'
         for c in amount_candidates
     ) or '(none found)'
     print(
-        f"INVOICE TOTAL DEBUG\n\n"
-        f"Full OCR text:\n{ocr_text}\n\n"
-        f"OCR contains TOTAL:\n{'yes' if 'total' in ocr_text.lower() else 'no'}\n\n"
-        f"Amount candidates:\n\n[\n{_amt_cand_str}\n]\n\n"
-        f"Selected:\n{selected_total['value'] if selected_total else None}"
-    )  # TEMP-DEBUG
+        f"INVOICE TOTAL CANDIDATES:\n\n[\n{_amt_cand_str}\n]\n\n"
+        f"Selected:\n\n{selected_total['value'] if selected_total else None}"
+    )
 
     selected_invoice_number = select_best(invoice_number_candidates)
     if selected_invoice_number:

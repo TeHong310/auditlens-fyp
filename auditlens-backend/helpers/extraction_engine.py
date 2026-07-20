@@ -16,7 +16,34 @@ No layout/bounding-box geometry — "position" is the OCR line index
 aren't currently parsed for geometry anywhere in this app.
 """
 
+import re
+
 NEEDS_REVIEW_THRESHOLD = 60
+
+# A totals mini-table ("SUB-TOTAL: / GST (0%) / 8,020.00 / 0.00 /
+# 8,020.00 / TOTAL (US$)") is sometimes read by Google Vision with the
+# VALUE column emitted before the LABEL row, not after — a bare "TOTAL"-
+# style label line with no value on that line, and no value on the next
+# line either, because the value already came out several lines above.
+_BARE_NUMBER_RE = re.compile(r'^[\d,]+\.?\d*\s*(?:usd|us\$|rm|myr)?$', re.IGNORECASE)
+
+
+def find_reverse_proximity_amount(lines, label_index, window=5):
+    """Looks at up to `window` lines immediately ABOVE `label_index` for
+    the nearest bare-number line (optionally with a trailing currency
+    tag, e.g. "8,020.00 USD") and returns (raw_text, source_index), or
+    None if none is found. Only meant to be tried as a fallback, after a
+    same-line/forward-next-line match has already failed — a normal
+    forward-labeled document never reaches this.
+    """
+    for offset in range(1, window + 1):
+        idx = label_index - offset
+        if idx < 0:
+            break
+        line = lines[idx].strip()
+        if _BARE_NUMBER_RE.match(line):
+            return line, idx
+    return None
 
 
 def make_candidate(value, context, position, score, reason, **extra):

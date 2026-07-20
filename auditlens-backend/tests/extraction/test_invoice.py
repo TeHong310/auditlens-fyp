@@ -71,6 +71,29 @@ def run_case_amount_before_currency():
     check('currency == USD', fields['currency'] == 'USD', fields['currency'])
 
 
+def run_case_coilcraft_real_ocr_reverse_layout():
+    """Real Coilcraft production OCR layout: Google Vision read the
+    totals mini-table's VALUE column (Subtotal/GST/Total amounts) BEFORE
+    its LABEL row, so "TOTAL (US$)" is the LAST line, with its own value
+    several lines above it rather than below (reverse-proximity form)."""
+    print('Case: Coilcraft invoice — real OCR reverse-layout totals table')
+    ocr_text = (
+        "COILCRAFT SINGAPORE PTE LTD\n"
+        "INVOICE\n"
+        "INVOICE NO: IX107587\n"
+        "INVOICE DATE: 2 March 2026\n"
+        "SUB-TOTAL:\n"
+        "GST (0%)\n"
+        "8,020.00\n"
+        "0.00\n"
+        "8,020.00\n"
+        "TOTAL (US$)\n"
+    )
+    fields = extract_fields(ocr_text)
+    check('total_amount == 8020.00', fields['total_amount'] == 8020.00, fields['total_amount'])
+    check('currency == USD', fields['currency'] == 'USD', fields['currency'])
+
+
 def run_case_negative_keyword_not_selected():
     """A GST line must never outrank a real TOTAL line, even though both
     are numerically present — this is the "don't blindly select the
@@ -85,6 +108,7 @@ if __name__ == '__main__':
     run_case_coilcraft_invoice()
     run_case_different_currency_format()
     run_case_amount_before_currency()
+    run_case_coilcraft_real_ocr_reverse_layout()
     run_case_negative_keyword_not_selected()
 
     print()
