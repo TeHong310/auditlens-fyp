@@ -4,6 +4,7 @@ import psycopg2.extras
 import os
 import io
 import mimetypes
+import psutil
 from datetime import datetime
 from db import get_db_connection, get_user_by_id
 from helpers.audit_log import log_audit
@@ -20,6 +21,61 @@ from config import Config
 documents_bp = Blueprint('documents', __name__)
 
 MAX_LINE_ITEMS = 50
+
+
+# ============================================================
+# TEMP DEBUG LOGGING — Gemini extraction trace. Safe to delete this
+# whole function plus every call site tagged "# TEMP-DEBUG" below once
+# no longer needed; nothing else in this file depends on it.
+#
+# Purpose: distinguish, for any field that ends up missing/wrong,
+# whether (A) Gemini itself never returned it (see the 'gemini_raw'
+# log — inspect gemini_result), (B) the validator removed/nulled it
+# (compare 'gemini_raw' vs 'final_fields' — see helpers/extraction_
+# validator.py, NOT modified by this logging), or (C) something in the
+# merge/DB-insert layer below lost it (compare 'final_fields' against
+# what actually lands in the DB/response). Does not touch prompts,
+# validation logic, or the DB schema — logging only.
+# ============================================================
+def _debug_log_extraction_trace(stage, file_name, document_type, payload):
+    # TEMP-DEBUG memory fix: don't dump line_items (up to 50 rows) or
+    # signal_boxes (bounding-box coordinate arrays) in full — neither is
+    # needed to tell apart "Gemini didn't return it" / "validator nulled
+    # it" / "merge layer lost it" for the scalar fields this trace exists
+    # to debug, and printing them in full builds a real (if modest, KB-
+    # scale) transient string on every single upload. Summarized instead,
+    # with a hard length cap as a final safety net.
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        if isinstance(payload.get('line_items'), list):
+            payload['line_items'] = f"<{len(payload['line_items'])} item(s), omitted>"
+        if isinstance(payload.get('signal_boxes'), dict):
+            payload['signal_boxes'] = f"<{len(payload['signal_boxes'])} box(es), omitted>"
+    text = f"DEBUG EXTRACTION TRACE | file={file_name} | type={document_type} | stage={stage} | {payload}"
+    if len(text) > 2000:
+        text = text[:2000] + '...<truncated>'
+    print(text)
+# ============================================================
+# END TEMP DEBUG LOGGING helper
+# ============================================================
+
+
+# ============================================================
+# TEMP DEBUG LOGGING — RSS memory checkpoints, for investigating the
+# Render 512MB OOM during a single invoice upload. Logs only the
+# process's resident memory in MB at a named lifecycle point — never
+# document content, image bytes, or PDF content. Safe to delete this
+# function and every call site tagged "# TEMP-DEBUG-MEM" once no longer
+# needed. (A second, independent copy of this same tiny helper lives in
+# helpers/gemini_extractor.py for the one checkpoint that has to be
+# measured from inside that module — see its own TEMP-DEBUG block.)
+# ============================================================
+def _debug_log_memory(checkpoint):
+    rss_mb = psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
+    print(f"DEBUG MEMORY CHECKPOINT | {checkpoint} | rss_mb={rss_mb:.1f}")
+# ============================================================
+# END TEMP DEBUG LOGGING (memory checkpoints) helper
+# ============================================================
 
 
 def _sanitize_line_items(items):
@@ -148,6 +204,7 @@ def upload_document():
         return jsonify({'error': f'File type not allowed. Use: {Config.ALLOWED_EXTENSIONS}'}), 400
 
     try:
+        _debug_log_memory('1_before_upload_processing')  # TEMP-DEBUG-MEM
         os.makedirs(Config.UPLOAD_FOLDER, exist_ok=True)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         safe_name = f"{timestamp}_{file.filename}"
@@ -162,6 +219,7 @@ def upload_document():
         # just aren't persisted to the DB (won't survive a restart).
         with open(file_path, 'rb') as f:
             file_bytes_data = f.read()
+        _debug_log_memory('2_after_file_bytes_loaded')  # TEMP-DEBUG-MEM
         file_mime = mimetypes.guess_type(safe_name)[0] or 'application/octet-stream'
         db_file_bytes = file_bytes_data if len(file_bytes_data) <= Config.MAX_DB_FILE_BYTES else None
         if db_file_bytes is None:
@@ -184,6 +242,7 @@ def upload_document():
         ocr_results, ocr_text, confidence = run_ocr(file_path, file_ext)
         confidence = float(confidence)
         fields     = extract_fields(ocr_text)
+        _debug_log_memory('5_after_ocr_processing')  # TEMP-DEBUG-MEM (NOTE: OCR runs BEFORE Gemini in this endpoint, not after — see report)
 
         # Single merged Gemini vision call: fields + authenticity signals
         # in one request, so an invoice upload never spends more than one
@@ -192,6 +251,8 @@ def upload_document():
         # Falls back to the regex fields above and the OCR-text
         # authenticity heuristic (below) if this call fails.
         gemini_result = gemini_extract_invoice_full(file_bytes_data, safe_name)
+        _debug_log_memory('4_after_gemini_api_response')  # TEMP-DEBUG-MEM
+        _debug_log_extraction_trace('gemini_raw', safe_name, 'invoice', gemini_result)  # TEMP-DEBUG
         if gemini_result:
             for key in ('invoice_number', 'vendor_name', 'invoice_date', 'total_amount', 'tax_amount',
                         'currency', 'po_reference', 'item_description', 'quantity'):
@@ -211,9 +272,11 @@ def upload_document():
         # Lightweight post-processing validation of the already-extracted
         # fields — no additional Gemini call. See helpers/extraction_validator.py.
         fields, validation_result = validate_extraction('invoice', fields, fields.get('line_items'))
+        _debug_log_extraction_trace('final_fields', safe_name, 'invoice', fields)  # TEMP-DEBUG
 
         invoice_date = parse_date(fields['invoice_date'])
 
+        _debug_log_memory('7_before_database_save')  # TEMP-DEBUG-MEM
         cursor.execute(
             '''INSERT INTO extracted_fields
                (document_id, invoice_number, vendor_name, invoice_date,
@@ -249,10 +312,12 @@ def upload_document():
                                     skip_gemini=not gemini_result)
         except Exception as e:
             print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
+        _debug_log_memory('6_after_authentication_check')  # TEMP-DEBUG-MEM
 
         log_audit(user['user_id'], 'UPLOAD_DOCUMENT', 'documents', document_id,
                   f'Document uploaded and OCR processed: {safe_name}')
 
+        _debug_log_memory('8_end_of_request')  # TEMP-DEBUG-MEM
         return jsonify({
             'message':        'Document uploaded and OCR processed successfully',
             'document_id':    document_id,
@@ -325,6 +390,7 @@ def upload_purchase_order(document_id):
         # in one request, so a PO upload never spends more than one
         # Gemini call — mirrors upload_document()'s invoice pattern.
         gemini_result = gemini_extract_po_full(file_bytes_data, safe_name)
+        _debug_log_extraction_trace('gemini_raw', safe_name, 'po', gemini_result)  # TEMP-DEBUG
         if gemini_result:
             for key in ('po_number', 'vendor_name', 'po_date', 'total_amount',
                         'currency', 'item_description', 'quantity'):
@@ -339,6 +405,7 @@ def upload_purchase_order(document_id):
         # Lightweight post-processing validation of the already-extracted
         # fields — no additional Gemini call. See helpers/extraction_validator.py.
         fields, validation_result = validate_extraction('po', fields, fields.get('line_items'))
+        _debug_log_extraction_trace('final_fields', safe_name, 'po', fields)  # TEMP-DEBUG
 
         po_date = parse_date(fields['po_date'])
 
@@ -441,6 +508,7 @@ def upload_goods_receipt(document_id):
         # in one request, so a GR upload never spends more than one
         # Gemini call — mirrors upload_document()'s invoice pattern.
         gemini_result = gemini_extract_gr_full(file_bytes_data, safe_name)
+        _debug_log_extraction_trace('gemini_raw', safe_name, 'gr', gemini_result)  # TEMP-DEBUG
         if gemini_result:
             for key in ('gr_number', 'vendor_name', 'receipt_date',
                         'po_reference', 'item_description', 'quantity',
@@ -456,6 +524,7 @@ def upload_goods_receipt(document_id):
         # Lightweight post-processing validation of the already-extracted
         # fields — no additional Gemini call. See helpers/extraction_validator.py.
         fields, validation_result = validate_extraction('gr', fields, fields.get('line_items'))
+        _debug_log_extraction_trace('final_fields', safe_name, 'gr', fields)  # TEMP-DEBUG
 
         receipt_date = parse_date(fields['receipt_date'])
 

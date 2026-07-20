@@ -4,7 +4,7 @@ import base64
 import tempfile
 import requests
 from datetime import datetime
-from pdf2image import convert_from_path
+from pdf2image import convert_from_path, pdfinfo_from_path
 from config import Config
 
 INVOICE_BLACKLIST = ['account no', 'account number', 'deposit', 'page', 'sub total', 'total']
@@ -466,13 +466,41 @@ def run_ocr(file_path, file_ext):
 
     try:
         if file_ext == 'pdf':
-            images = convert_from_path(file_path, poppler_path=Config.POPPLER_PATH, dpi=300)
+            # TEMP-DEBUG memory fix: convert ONE page at a time instead of
+            # calling convert_from_path() once for the whole document.
+            # Without first_page/last_page, convert_from_path() has poppler
+            # rasterize and return EVERY page as a full-resolution PIL Image
+            # in one list, all resident simultaneously (at dpi=300 — higher
+            # than the Gemini-side render) — for a multi-page document this
+            # upfront peak (~26MB/A4 page x page count) happens before the
+            # per-page loop below even starts, regardless of how quickly
+            # each image is closed once inside the loop. pdfinfo_from_path()
+            # only reads PDF metadata (page count) — it does not rasterize
+            # anything, so it adds negligible memory/time cost.
+            page_count = pdfinfo_from_path(file_path, poppler_path=Config.POPPLER_PATH).get('Pages', 1)
             all_confidences = []
 
-            for img in images:
+            for page_num in range(1, page_count + 1):
+                # first_page=last_page=page_num -> poppler renders and
+                # returns only THIS page; at most one page's bitmap is ever
+                # resident, instead of all `page_count` of them at once.
+                page_images = convert_from_path(
+                    file_path, poppler_path=Config.POPPLER_PATH, dpi=300,
+                    first_page=page_num, last_page=page_num,
+                )
+                img = page_images[0]
+
                 with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
                     tmp_path = tmp.name
                 img.save(tmp_path, 'PNG')
+                # Once this page's pixels are saved to its temp file above,
+                # the in-memory PIL object is never read again
+                # (run_google_vision_ocr() reads back from tmp_path, not
+                # from `img`) — release it and the single-page result list
+                # immediately rather than waiting for the next loop
+                # iteration to reassign `page_images`.
+                img.close()
+                del page_images
 
                 page_text, page_conf = run_google_vision_ocr(tmp_path)
                 total_text += page_text + '\n'

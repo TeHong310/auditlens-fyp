@@ -1,11 +1,23 @@
 import json
+import os
 import re
 import time
+import psutil
 import requests
 import fitz  # PyMuPDF
 from google import genai
 from google.genai import types, errors
 from config import Config
+
+# TEMP-DEBUG: lightweight RSS checkpoint logging for investigating the
+# Render 512MB OOM during a single invoice upload. Logs only the
+# process's resident memory in MB at a named lifecycle point — never
+# document content, image bytes, or PDF content. Safe to delete this
+# function and its call site (tagged "# TEMP-DEBUG") once no longer
+# needed.
+def _debug_log_memory(checkpoint):
+    rss_mb = psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
+    print(f"DEBUG MEMORY CHECKPOINT | {checkpoint} | rss_mb={rss_mb:.1f}")
 
 # ListModels is still a plain REST call — confirmed working even with
 # this account's "AQ."-prefixed key (only generateContent rejects it over
@@ -563,6 +575,14 @@ def call_gemini_sdk(text_prompt, image=None, context='', timeout_ms=GEMINI_TIMEO
         parts.append(types.Part.from_bytes(data=data, mime_type=mime_type))
     parts.append(types.Part.from_text(text=text_prompt))
 
+    # TEMP-DEBUG: confirm Gemini actually receives the rendered image —
+    # logged once per call (not per retry attempt, since the image part
+    # doesn't change across retries). Safe to delete this block once no
+    # longer needed.
+    print(f"DEBUG GEMINI PAYLOAD | parts={1 if image is not None else 0} | "
+          f"mime={image[0] if image is not None else None} | "
+          f"size_kb={(len(image[1]) / 1024) if image is not None else 0.0:.1f}")
+
     attempt = 0
     while True:
         print(f"DEBUG Gemini request ({context}): model={Config.GEMINI_MODEL!r} "
@@ -630,12 +650,64 @@ def prepare_gemini_image_payload(file_bytes, file_name):
         try:
             pix = doc[0].get_pixmap(matrix=fitz.Matrix(PDF_RENDER_ZOOM, PDF_RENDER_ZOOM))
             png_bytes = pix.tobytes('png')
+            # TEMP-DEBUG: rendered-image characteristics, to compare against
+            # the previous working version. Reads pix.width/pix.height
+            # before `del pix` below. Safe to delete this one line once no
+            # longer needed.
+            print(f"DEBUG GEMINI IMAGE | width={pix.width} | height={pix.height} | "
+                  f"size_kb={len(png_bytes) / 1024:.1f} | zoom={PDF_RENDER_ZOOM}")
+            _debug_log_memory('3_after_pdf_render_for_gemini')  # TEMP-DEBUG (logged before del pix, to catch the true peak)
+            # TEMP-DEBUG memory fix: release the raw (uncompressed) pixmap
+            # buffer as soon as the much-smaller compressed PNG has been
+            # extracted from it, rather than waiting for this function to
+            # return. At PDF_RENDER_ZOOM=3.0 (~216 DPI) this buffer is the
+            # single largest transient allocation in this function — roughly
+            # width*height*3 bytes, ~13.5MB for an A4 page, vs. ~6MB at the
+            # old zoom=2.0 — so freeing it immediately (rather than relying
+            # on end-of-function refcounting) reduces peak memory.
+            del pix
         finally:
             doc.close()
+            # TEMP-DEBUG memory fix: MuPDF keeps its own internal cache
+            # ("store") of parsed/rendered objects that can persist and grow
+            # across renders within the same long-lived worker process, even
+            # after the Document itself is closed. Shrinking it to 0 here
+            # returns that cache memory — relevant because Render's free-tier
+            # 512MB limit is a per-PROCESS ceiling, not a per-request one, so
+            # memory this doesn't release stays counted against every
+            # subsequent upload handled by the same worker.
+            fitz.TOOLS.store_shrink(100)
         return 'image/png', png_bytes
 
     mime = 'image/png' if ext == 'png' else 'image/jpeg'
     return mime, file_bytes
+
+
+# ============================================================
+# TEMP DEBUG LOGGING — Gemini field-extraction trace. Safe to delete
+# this whole function plus its 3 call sites (tagged "# TEMP-DEBUG")
+# below once no longer needed.
+#
+# Purpose: log only the specific identifying fields, right where Gemini's
+# JSON is first parsed — before anything in routes/documents.py merges,
+# validates, or stores it — to tell apart "Gemini itself never returned
+# this value" from "something downstream (validator/merge/DB) removed
+# it". `result` here is always the already-parsed JSON dict of Gemini's
+# TEXT response; image bytes / PDF content are never part of it and are
+# never logged by this function.
+# ============================================================
+def _debug_log_gemini_fields(document_type, result):
+    print(
+        f"DEBUG GEMINI EXTRACTION FIELDS | doc_type={document_type} | "
+        f"invoice_number={result.get('invoice_number')} | "
+        f"invoice_date={result.get('invoice_date')} | "
+        f"total_amount={result.get('total_amount')} | "
+        f"po_number={result.get('po_number')} | "
+        f"gr_number={result.get('gr_number')}"
+    )
+# ============================================================
+# END TEMP DEBUG LOGGING helper
+# ============================================================
 
 
 def gemini_extract_invoice_full(file_bytes, file_name):
@@ -658,7 +730,16 @@ def gemini_extract_invoice_full(file_bytes, file_name):
         if text is None:
             return None
         result = json.loads(_strip_markdown_fences(text))
+        # TEMP-DEBUG: the complete set of invoice scalar fields Gemini
+        # itself returned, logged right after parsing — before anything
+        # in routes/documents.py merges/validates/stores it — to tell
+        # apart Gemini failing to extract vs. downstream code removing
+        # values. Safe to delete this line once no longer needed.
+        print(f"DEBUG GEMINI RESULT | type=invoice | invoice_number={result.get('invoice_number')} | "
+              f"invoice_date={result.get('invoice_date')} | total_amount={result.get('total_amount')} | "
+              f"tax_amount={result.get('tax_amount')} | vendor={result.get('vendor_name')}")
         print(f"DEBUG Gemini merged invoice+authenticity result: {result}")
+        _debug_log_gemini_fields('invoice', result)  # TEMP-DEBUG
         return result
     except Exception as e:
         print(f"DEBUG Gemini merged invoice call error: {type(e).__name__}: {e}")
@@ -684,7 +765,12 @@ def gemini_extract_po_full(file_bytes, file_name):
         if text is None:
             return None
         result = json.loads(_strip_markdown_fences(text))
+        # TEMP-DEBUG: see the matching comment in gemini_extract_invoice_full.
+        print(f"DEBUG GEMINI RESULT | type=po | po_number={result.get('po_number')} | "
+              f"po_date={result.get('po_date')} | total_amount={result.get('total_amount')} | "
+              f"vendor={result.get('vendor_name')}")
         print(f"DEBUG Gemini merged PO+authenticity result: {result}")
+        _debug_log_gemini_fields('po', result)  # TEMP-DEBUG
         return result
     except Exception as e:
         print(f"DEBUG Gemini merged PO call error: {type(e).__name__}: {e}")
@@ -710,7 +796,11 @@ def gemini_extract_gr_full(file_bytes, file_name):
         if text is None:
             return None
         result = json.loads(_strip_markdown_fences(text))
+        # TEMP-DEBUG: see the matching comment in gemini_extract_invoice_full.
+        print(f"DEBUG GEMINI RESULT | type=gr | gr_number={result.get('gr_number')} | "
+              f"receipt_date={result.get('receipt_date')} | vendor={result.get('vendor_name')}")
         print(f"DEBUG Gemini merged GR+authenticity result: {result}")
+        _debug_log_gemini_fields('gr', result)  # TEMP-DEBUG
         return result
     except Exception as e:
         print(f"DEBUG Gemini merged GR call error: {type(e).__name__}: {e}")
