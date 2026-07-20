@@ -13,7 +13,42 @@ from config import Config
 GEMINI_MODELS_LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 GEMINI_TIMEOUT_MS = 15_000
 GEMINI_VISION_TIMEOUT_MS = 20_000
-PDF_RENDER_ZOOM = 2.0  # ~144 DPI — enough detail for chop/logo/signature, keeps payload small
+
+# PDF_RENDER_ZOOM controls the resolution (DPI) a PDF's first page is
+# rasterized at before being sent to Gemini as an image — see
+# prepare_gemini_image_payload() below. PyMuPDF's zoom factor maps to DPI
+# as zoom * 72 (its base unit is 72 DPI at zoom 1.0), so 3.0 -> ~216 DPI.
+#
+# Why higher resolution matters here: Gemini reads the page as a raw
+# image, not as PDF text — every character is whatever pixels the render
+# produced, with no underlying text layer to fall back on. Small printed
+# fields (a PO number in a corner box, a "Doc No." value in a compact
+# header line, digits inside a total-amount cell) can be only a handful
+# of pixels tall at low DPI. At the previous 2.0 zoom (~144 DPI), a 6pt
+# label on a standard A4/Letter page renders at well under 20px tall —
+# thin strokes and tight digit spacing (e.g. distinguishing "PO3006000"
+# from "PO3OO6OOO") become genuinely ambiguous at that pixel density, the
+# same way a low-resolution scan is harder for a person to read even
+# when the layout is otherwise clear. Rendering at a higher DPI gives
+# those same small fields more pixels to be represented by, which is the
+# single biggest lever for improving small-text legibility short of
+# cropping/zooming into a sub-region (out of scope here — this stays a
+# single whole-page render, one image, one Gemini call per document).
+#
+# 3.0 (~216 DPI) was chosen as a moderate step up from 2.0, not the more
+# aggressive 4.0 (~288 DPI) also suggested: PyMuPDF's rendered pixmap
+# scales with the SQUARE of the zoom factor (width and height both grow
+# linearly with zoom), so going 2.0 -> 3.0 is already a 2.25x increase in
+# raw pixel count (and therefore in-memory pixmap size) per page, while
+# 2.0 -> 4.0 would be a 4x increase. On Render's free-tier 512MB RAM
+# limit (see /admin/debug/memory), a single extra in-flight PDF render
+# at 4x the pixel count is a less predictable memory spike than the more
+# moderate 2.25x step, for a resolution jump (144 -> 216 DPI) that
+# already comfortably clears the "small printed label" legibility
+# threshold. The output is still encoded losslessly as PNG
+# (pix.tobytes('png') below), so this resolution increase is not
+# undermined by any lossy compression afterward.
+PDF_RENDER_ZOOM = 3.0  # ~216 DPI — was 2.0 (~144 DPI); see rationale above
 
 # Uploading several documents in quick succession can hit the free-tier
 # per-minute rate limit on a later call even though each upload only makes
@@ -554,8 +589,19 @@ def prepare_gemini_image_payload(file_bytes, file_name):
     rather than sent as raw PDF bytes: sending a PDF's raw bytes doesn't
     reliably produce visual-signal detection or [ymin,xmin,ymax,xmax]
     bounding boxes for chop/logo/signature, since that's a rasterized-
-    page-image task, not a document-text task. Image files are passed
-    through unchanged.
+    page-image task, not a document-text task. The render resolution is
+    controlled by PDF_RENDER_ZOOM (see its comment above) — the higher
+    that value, the more pixels small printed fields (PO number, doc
+    number, total-amount cell) get to be represented by, which is what
+    actually determines whether Gemini can read them.
+
+    No resizing or compression is applied anywhere in this function:
+    the PDF render is encoded via pix.tobytes('png') — PNG is lossless,
+    so nothing is thrown away after rendering at PDF_RENDER_ZOOM. Image
+    files (jpg/png) are passed through completely unchanged — neither
+    downscaled nor re-compressed — specifically so a directly-uploaded
+    photo/scan's original detail on small fields is never degraded
+    before Gemini sees it.
     """
     ext = file_name.lower().rsplit('.', 1)[-1]
     if ext == 'pdf':
