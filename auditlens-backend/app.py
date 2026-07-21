@@ -266,6 +266,42 @@ def _ensure_gemini_cache_table():
         print(f'WARNING: could not create gemini_extraction_cache table: {type(e).__name__}: {e}')
 
 
+def _ensure_claude_cache_table():
+    """Same purpose/pattern as _ensure_gemini_cache_table() above, for
+    Claude (see helpers/claude_cache.py) — a SEPARATE table from
+    gemini_extraction_cache (not touched here) so the already-working
+    Gemini cache carries zero risk from this addition. The extra
+    `provider` column exists for parity with the requested cache key
+    shape (file_hash + document_type + provider); every row here is
+    provider='claude' today."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS claude_extraction_cache (
+                id SERIAL PRIMARY KEY,
+                file_hash VARCHAR(64) NOT NULL,
+                document_type VARCHAR(10) NOT NULL,
+                provider VARCHAR(10) NOT NULL DEFAULT 'claude',
+                claude_result JSONB NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        ''')
+        cursor.execute('''
+            SELECT 1 FROM pg_constraint WHERE conname = 'claude_extraction_cache_hash_type_provider_key'
+        ''')
+        if not cursor.fetchone():
+            cursor.execute('''
+                ALTER TABLE claude_extraction_cache
+                ADD CONSTRAINT claude_extraction_cache_hash_type_provider_key UNIQUE (file_hash, document_type, provider)
+            ''')
+        conn.commit()
+        conn.close()
+        print('claude_extraction_cache table ready')
+    except Exception as e:
+        print(f'WARNING: could not create claude_extraction_cache table: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -292,6 +328,7 @@ _ensure_3way_comparison_columns()
 _ensure_invoice_currency_column()
 _ensure_document_line_items_table()
 _ensure_gemini_cache_table()
+_ensure_claude_cache_table()
 
 @app.route('/')
 def hello_world():

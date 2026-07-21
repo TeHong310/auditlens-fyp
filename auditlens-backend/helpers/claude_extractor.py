@@ -1,15 +1,28 @@
-"""Claude Vision extraction — TEST MODE ONLY.
+"""Claude Vision extraction.
 
-NOT wired into the production upload pipeline (routes/documents.py still
-calls Gemini only, unchanged). This module exists so Claude extraction
-quality can be evaluated manually, on demand, via scripts/
-test_claude_extraction.py, without spending API credits on every normal
-upload or during automated test runs.
+Used both in production (routed via helpers/ai_extractor_router.py +
+routes/documents.py, per AI_EXTRACTION_PROVIDER) and by the manual test
+script (scripts/test_claude_extraction.py). extract_with_claude_test is
+kept as an alias of extract_with_claude for backward compatibility with
+that script — there is no functional difference between "test" and
+"production" extraction, only whether the caller wires the result into
+the DB.
 
 Image rendering (PDF -> PNG, or pass-through for jpg/png) is NOT
 duplicated here — prepare_gemini_image_payload() from gemini_extractor.py
 is reused as-is, so this module has no PDF-handling logic of its own to
 keep in sync with the real one.
+
+Schema note: one unified prompt/schema is used for all three document
+types (invoice/PO/GR), unlike gemini_extractor.py's three separate
+prompts — the `document_type` argument tells Claude which document it's
+looking at, so it knows which of invoice_number/po_number/gr_number and
+invoice_date/po_date/receipt_date are actually relevant; the rest stay
+null. The schema is a superset covering every field routes/documents.py's
+three merge-key sets read (see each endpoint's `_merge_keys` tuple) —
+including item_description/quantity (the first line item, kept only for
+backward-compat with the older single-value fields the regex fallback
+still populates) alongside the full line_items array.
 """
 import base64
 import json
@@ -87,6 +100,19 @@ LINE ITEMS:
   same code also functions as an item/SKU code, also fill item_code with
   the same value.
 
+DOCUMENT-TYPE-SPECIFIC FIELDS: you will be told which of invoice/PO/GR
+this document is. Only fill the ID/date field(s) that actually apply to
+THAT type — leave the others null:
+- invoice: fill invoice_number, invoice_date. Leave po_number, po_date,
+  gr_number, receipt_date null.
+- PO (purchase order): fill po_number, po_date. Leave invoice_number,
+  invoice_date, gr_number, receipt_date null. A PO never has po_reference
+  (it doesn't reference another PO) — leave that null too.
+- GR (goods receipt): fill gr_number, receipt_date. Leave invoice_number,
+  invoice_date, po_number, po_date null.
+po_reference (the PO this invoice/GR was raised against — NOT that
+document's own number) applies to invoices and GRs only.
+
 Return null (not empty string, not "N/A") for any field you cannot
 confidently extract — never guess.
 
@@ -94,14 +120,18 @@ Return ONLY valid JSON, no markdown, no code fences, no explanation —
 exactly this structure:
 {
   "invoice_number": "string or null",
+  "po_number": "string or null",
+  "gr_number": "string or null",
   "vendor_name": "string or null",
   "invoice_date": "YYYY-MM-DD or null",
-  "po_number": "string or null",
-  "po_reference": "string or null",
+  "po_date": "YYYY-MM-DD or null",
   "receipt_date": "YYYY-MM-DD or null",
   "total_amount": number or null,
   "tax_amount": number or null,
   "currency": "string or null",
+  "po_reference": "string or null",
+  "item_description": "string or null (the FIRST line item's description, same value as line_items[0].description)",
+  "quantity": number or null (the FIRST line item's quantity, same value as line_items[0].quantity),
   "line_items": [
     {
       "description": "string",
@@ -115,10 +145,8 @@ exactly this structure:
 }"""
 
 
-def extract_with_claude_test(image, document_type):
-    """TEST-MODE Claude Vision extraction. Makes ONE real Anthropic API
-    call — only ever invoked explicitly (scripts/test_claude_extraction.
-    py), never automatically.
+def extract_with_claude(image, document_type):
+    """Claude Vision extraction. Makes ONE real Anthropic API call.
 
     image: (mime_type, raw_bytes) tuple — same shape gemini_extractor.
       py's prepare_gemini_image_payload() returns; reuse that function to
@@ -127,7 +155,11 @@ def extract_with_claude_test(image, document_type):
 
     Returns the parsed dict on success, or None if the call fails for
     any reason (no API key, network, timeout, bad JSON) — same
-    fail-soft contract as gemini_extract_*_full().
+    fail-soft contract as gemini_extract_*_full(). Callers are
+    responsible for deciding what "success" means for their purposes
+    (see helpers/ai_extractor_router.py's completeness check) and for
+    caching (see helpers/claude_cache.py for production, or this
+    module's own file-based cache below for the manual test script).
     """
     client = _get_claude_client()
     if client is None:
@@ -178,6 +210,12 @@ def extract_with_claude_test(image, document_type):
         return None
 
     return result
+
+
+# Backward-compat alias — scripts/test_claude_extraction.py was written
+# against this name before Claude was wired into production; no
+# functional difference from extract_with_claude() above.
+extract_with_claude_test = extract_with_claude
 
 
 # ============================================================

@@ -14,8 +14,14 @@ from helpers.ocr_helper import (
 )
 from helpers.anomaly_detector import run_anomaly_detection
 from helpers.authenticity_check import run_authenticity_check
-from helpers.gemini_extractor import gemini_extract_invoice_full, gemini_extract_po_full, gemini_extract_gr_full
+from helpers.gemini_extractor import (
+    gemini_extract_invoice_full, gemini_extract_po_full, gemini_extract_gr_full,
+    prepare_gemini_image_payload,
+)
 from helpers.gemini_cache import compute_file_hash, get_cached_gemini_result, save_gemini_result_to_cache
+from helpers.claude_extractor import extract_with_claude
+from helpers.claude_cache import get_cached_claude_result, save_claude_result_to_cache
+from helpers.ai_extractor_router import route_ai_extraction
 from helpers.confidence_engine import compute_field_confidence, compute_line_items_confidence, log_field_confidence
 from helpers.extraction_validator import validate_extraction
 from config import Config
@@ -26,18 +32,20 @@ MAX_LINE_ITEMS = 50
 
 
 # ============================================================
-# TEMP DEBUG LOGGING — Gemini extraction trace. Safe to delete this
-# whole function plus every call site tagged "# TEMP-DEBUG" below once
-# no longer needed; nothing else in this file depends on it.
+# TEMP DEBUG LOGGING — AI extraction trace (Claude and/or Gemini,
+# whichever the AI extraction router picked — see helpers/
+# ai_extractor_router.py). Safe to delete this whole function plus every
+# call site tagged "# TEMP-DEBUG" below once no longer needed; nothing
+# else in this file depends on it.
 #
 # Purpose: distinguish, for any field that ends up missing/wrong,
-# whether (A) Gemini itself never returned it (see the 'gemini_raw'
-# log — inspect gemini_result), (B) the validator removed/nulled it
-# (compare 'gemini_raw' vs 'final_fields' — see helpers/extraction_
-# validator.py, NOT modified by this logging), or (C) something in the
-# merge/DB-insert layer below lost it (compare 'final_fields' against
-# what actually lands in the DB/response). Does not touch prompts,
-# validation logic, or the DB schema — logging only.
+# whether (A) the winning AI provider itself never returned it (see the
+# 'claude_raw'/'gemini_raw' log — inspect ai_result), (B) the validator
+# removed/nulled it (compare '{provider}_raw' vs 'final_fields' — see
+# helpers/extraction_validator.py, NOT modified by this logging), or (C)
+# something in the merge/DB-insert layer below lost it (compare
+# 'final_fields' against what actually lands in the DB/response). Does
+# not touch prompts, validation logic, or the DB schema — logging only.
 # ============================================================
 def _debug_log_extraction_trace(stage, file_name, document_type, payload):
     # TEMP-DEBUG memory fix: don't dump line_items (up to 50 rows) or
@@ -270,46 +278,63 @@ def upload_document():
         conn.commit()
 
         # ══════════════════════════════════════════════════════
-        # GEMINI-FIRST EXTRACTION ARCHITECTURE
-        # Gemini Vision is the PRIMARY extractor; the OCR regex engine
-        # below (extract_fields()) is fallback/validation only, filling
-        # in whatever Gemini didn't return. Cached by file-content hash
-        # so the exact same file bytes never trigger a second Gemini
-        # call, including across retries and Gunicorn worker processes
-        # (see helpers/gemini_cache.py) — at most one Gemini extraction
-        # call per document.
+        # AI EXTRACTION ROUTER (helpers/ai_extractor_router.py) — per
+        # Config.AI_EXTRACTION_PROVIDER (default CLAUDE): Claude Vision is
+        # the PRIMARY extractor, with Gemini called only as a fallback
+        # when Claude's result is missing/incomplete (or the provider is
+        # explicitly set to GEMINI). The OCR regex engine below
+        # (extract_fields()) is fallback/validation only regardless of
+        # which AI provider wins, filling in whatever neither returned.
+        # Both providers are cached by file-content hash so the exact
+        # same file bytes never trigger a second call to either, across
+        # retries and Gunicorn worker processes (see helpers/
+        # claude_cache.py / helpers/gemini_cache.py).
         # ══════════════════════════════════════════════════════
         file_hash = compute_file_hash(file_bytes_data)
-        gemini_result = get_cached_gemini_result(file_hash, 'invoice')
-        if gemini_result is not None:
-            print(f"GEMINI CACHE HIT (invoice, hash={file_hash[:12]}...) — Gemini not called")
-        else:
+
+        def _claude_call():
+            cached = get_cached_claude_result(file_hash, 'invoice')
+            if cached is not None:
+                print(f"CLAUDE CACHE HIT (invoice, hash={file_hash[:12]}...) — Claude not called")
+                return cached
+            image = prepare_gemini_image_payload(file_bytes_data, safe_name)
+            result = extract_with_claude(image, 'invoice')
+            if result:
+                save_claude_result_to_cache(file_hash, 'invoice', result)
+            return result
+
+        def _gemini_call():
+            cached = get_cached_gemini_result(file_hash, 'invoice')
+            if cached is not None:
+                print(f"GEMINI CACHE HIT (invoice, hash={file_hash[:12]}...) — Gemini not called")
+                return cached
             # Single merged Gemini vision call: fields + authenticity
-            # signals in one request, so an invoice upload never spends
-            # more than one Gemini call (avoids the free-tier per-minute
-            # limit that two separate calls — field extraction +
-            # authenticity — used to hit). Falls back to the regex OCR
-            # fields below and the OCR-text authenticity heuristic if
-            # this call fails.
-            gemini_result = gemini_extract_invoice_full(file_bytes_data, safe_name)
-            if gemini_result:
-                save_gemini_result_to_cache(file_hash, 'invoice', gemini_result)
-        print(f"DEBUG INVOICE PIPELINE\nGemini parsed:\n{gemini_result}")  # TEMP-DEBUG (pipeline trace, step 3/5 — "Gemini raw" text is logged inside gemini_extract_invoice_full itself)
-        _debug_log_memory('4_after_gemini_api_response')  # TEMP-DEBUG-MEM
-        _debug_log_extraction_trace('gemini_raw', safe_name, 'invoice', gemini_result)  # TEMP-DEBUG
+            # signals in one request, so this path never spends more than
+            # one Gemini call (avoids the free-tier per-minute limit that
+            # two separate calls — field extraction + authenticity —
+            # used to hit).
+            result = gemini_extract_invoice_full(file_bytes_data, safe_name)
+            if result:
+                save_gemini_result_to_cache(file_hash, 'invoice', result)
+            return result
+
+        ai_result, provider_used, fallback_reason = route_ai_extraction('invoice', _claude_call, _gemini_call)
+        print(f"DEBUG INVOICE PIPELINE\n{provider_used} parsed:\n{ai_result}")  # TEMP-DEBUG (pipeline trace, step 3/5)
+        _debug_log_memory('4_after_ai_extraction_response')  # TEMP-DEBUG-MEM
+        _debug_log_extraction_trace(f'{provider_used.lower()}_raw', safe_name, 'invoice', ai_result)  # TEMP-DEBUG
 
         # OCR fallback/verification — still runs unconditionally (its
         # ocr_text/confidence are independently needed for raw_ocr_text
         # storage and the authenticity heuristic below), but its field
-        # values are only used where Gemini returned null, per the merge
-        # loop directly below.
+        # values are only used where the winning AI provider returned
+        # null, per the merge loop directly below.
         ocr_results, ocr_text, confidence = run_ocr(file_path, file_ext)
         confidence = float(confidence)
         fields     = extract_fields(ocr_text)
         # TEMP-DEBUG (invoice field-loss investigation): what the regex OCR
-        # fallback found, BEFORE Gemini's result is merged in — this is the
-        # baseline that must survive if Gemini returns null for the same
-        # field. Safe to delete this line once no longer needed.
+        # fallback found, BEFORE the AI result is merged in — this is the
+        # baseline that must survive if the AI provider returns null for
+        # the same field. Safe to delete this line once no longer needed.
         print(f"DEBUG OCR INVOICE FIELDS | invoice_number={fields.get('invoice_number')} | "
               f"invoice_date={fields.get('invoice_date')} | vendor_name={fields.get('vendor_name')} | "
               f"total_amount={fields.get('total_amount')} | tax_amount={fields.get('tax_amount')}")
@@ -319,28 +344,28 @@ def upload_document():
         _merge_keys = ('invoice_number', 'vendor_name', 'invoice_date', 'total_amount', 'tax_amount',
                        'currency', 'po_reference', 'item_description', 'quantity')
         # Snapshot OCR's own value per field BEFORE the merge below
-        # overwrites it — needed to compute Gemini-vs-OCR agreement
+        # overwrites it — needed to compute AI-vs-OCR agreement
         # confidence (see helpers/confidence_engine.py) after the merge.
         _ocr_values = {key: fields.get(key) for key in _merge_keys}
         _ocr_had_line_items = bool(fields.get('line_items'))
 
-        if gemini_result:
+        if ai_result:
             for key in _merge_keys:
-                if gemini_result.get(key) is not None:
-                    fields[key] = gemini_result[key]
-            # line_items is list-shaped: an empty [] from Gemini means "no
-            # table found", not "override with nothing" — only replace the
-            # regex fallback's items when Gemini actually found some.
-            if gemini_result.get('line_items'):
-                fields['line_items'] = gemini_result['line_items']
+                if ai_result.get(key) is not None:
+                    fields[key] = ai_result[key]
+            # line_items is list-shaped: an empty [] means "no table
+            # found", not "override with nothing" — only replace the
+            # regex fallback's items when the AI provider actually found some.
+            if ai_result.get('line_items'):
+                fields['line_items'] = ai_result['line_items']
 
         _field_confidence = {
             key: compute_field_confidence(
-                (gemini_result or {}).get(key), _ocr_values[key], fields.get('_confidence', {}).get(key))
+                (ai_result or {}).get(key), _ocr_values[key], fields.get('_confidence', {}).get(key))
             for key in _merge_keys
         }
         _field_confidence['line_items'] = compute_line_items_confidence(
-            fields.get('line_items'), bool((gemini_result or {}).get('line_items')), _ocr_had_line_items)
+            fields.get('line_items'), bool((ai_result or {}).get('line_items')), _ocr_had_line_items)
         log_field_confidence('Invoice', _field_confidence)
 
         if fields['total_amount'] is not None:
@@ -407,9 +432,26 @@ def upload_document():
             print(f"DEBUG anomaly detection error: {type(e).__name__}: {e}")
 
         try:
-            run_authenticity_check(document_id, file_bytes_data, safe_name, 'invoice', ocr_text,
-                                    precomputed_result=gemini_result,
-                                    skip_gemini=not gemini_result)
+            # Claude's schema has NO authenticity fields at all (a
+            # different prompt entirely — it was never asked for chop/
+            # logo/signature detection), so its result must never be
+            # passed as precomputed_result: every signal would silently
+            # read as absent/False instead of falling back to the
+            # OCR-text heuristic. provider_used == 'GEMINI' covers both
+            # "GEMINI was the configured provider" and "GEMINI ran as the
+            # fallback" — in both cases ai_result IS (or would have been)
+            # the merged call's result, so reusing it here costs zero
+            # extra Gemini calls and preserves the exact skip_gemini=not
+            # ai_result contract this already had (a failed Gemini call
+            # is never retried a second time just for authenticity).
+            # When Claude wins outright, no Gemini call was made at all —
+            # authenticity checking makes its own fresh one.
+            if provider_used == 'GEMINI':
+                run_authenticity_check(document_id, file_bytes_data, safe_name, 'invoice', ocr_text,
+                                        precomputed_result=ai_result, skip_gemini=not ai_result)
+            else:
+                run_authenticity_check(document_id, file_bytes_data, safe_name, 'invoice', ocr_text,
+                                        precomputed_result=None, skip_gemini=False)
         except Exception as e:
             print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
         _debug_log_memory('6_after_authentication_check')  # TEMP-DEBUG-MEM
@@ -482,32 +524,49 @@ def upload_purchase_order(document_id):
                   f"over MAX_DB_FILE_BYTES ({Config.MAX_DB_FILE_BYTES}) — not persisted to DB")
 
         # ══════════════════════════════════════════════════════
-        # GEMINI-FIRST EXTRACTION ARCHITECTURE — see upload_document()'s
-        # invoice endpoint above for the full rationale. Gemini Vision is
-        # the PRIMARY extractor; extract_po_fields() below is fallback/
-        # validation only. Cached by file-content hash so the exact same
-        # file bytes never trigger a second Gemini call.
+        # AI EXTRACTION ROUTER — see upload_document()'s invoice endpoint
+        # above for the full rationale. Claude Vision is the PRIMARY
+        # extractor (per Config.AI_EXTRACTION_PROVIDER, default CLAUDE),
+        # Gemini a fallback; extract_po_fields() below is fallback/
+        # validation only regardless of which AI provider wins. Both
+        # cached by file-content hash so the exact same file bytes never
+        # trigger a second call to either.
         # ══════════════════════════════════════════════════════
         file_hash = compute_file_hash(file_bytes_data)
-        gemini_result = get_cached_gemini_result(file_hash, 'po')
-        if gemini_result is not None:
-            print(f"GEMINI CACHE HIT (po, hash={file_hash[:12]}...) — Gemini not called")
-        else:
+
+        def _claude_call():
+            cached = get_cached_claude_result(file_hash, 'po')
+            if cached is not None:
+                print(f"CLAUDE CACHE HIT (po, hash={file_hash[:12]}...) — Claude not called")
+                return cached
+            image = prepare_gemini_image_payload(file_bytes_data, safe_name)
+            result = extract_with_claude(image, 'po')
+            if result:
+                save_claude_result_to_cache(file_hash, 'po', result)
+            return result
+
+        def _gemini_call():
+            cached = get_cached_gemini_result(file_hash, 'po')
+            if cached is not None:
+                print(f"GEMINI CACHE HIT (po, hash={file_hash[:12]}...) — Gemini not called")
+                return cached
             # Single merged Gemini vision call: fields + authenticity
-            # signals in one request, so a PO upload never spends more
-            # than one Gemini call — mirrors upload_document()'s invoice
-            # pattern.
-            gemini_result = gemini_extract_po_full(file_bytes_data, safe_name)
-            if gemini_result:
-                save_gemini_result_to_cache(file_hash, 'po', gemini_result)
-        print(f"DEBUG PO PIPELINE\nGemini parsed:\n{gemini_result}")  # TEMP-DEBUG (pipeline trace, step 3/5 — "Gemini raw" text is logged inside gemini_extract_po_full itself)
-        _debug_log_extraction_trace('gemini_raw', safe_name, 'po', gemini_result)  # TEMP-DEBUG
+            # signals in one request, so this path never spends more than
+            # one Gemini call — mirrors upload_document()'s invoice pattern.
+            result = gemini_extract_po_full(file_bytes_data, safe_name)
+            if result:
+                save_gemini_result_to_cache(file_hash, 'po', result)
+            return result
+
+        ai_result, provider_used, fallback_reason = route_ai_extraction('po', _claude_call, _gemini_call)
+        print(f"DEBUG PO PIPELINE\n{provider_used} parsed:\n{ai_result}")  # TEMP-DEBUG (pipeline trace, step 3/5)
+        _debug_log_extraction_trace(f'{provider_used.lower()}_raw', safe_name, 'po', ai_result)  # TEMP-DEBUG
 
         # OCR fallback/verification — still runs unconditionally (its
         # ocr_text/confidence are independently needed for raw_ocr_text
         # storage and the authenticity heuristic below), but its field
-        # values are only used where Gemini returned null, per the merge
-        # loop directly below.
+        # values are only used where the winning AI provider returned
+        # null, per the merge loop directly below.
         ocr_results, ocr_text, confidence = run_ocr(file_path, file_ext)
         confidence = float(confidence)
         fields     = extract_po_fields(ocr_text)
@@ -518,20 +577,20 @@ def upload_purchase_order(document_id):
         _ocr_values = {key: fields.get(key) for key in _merge_keys}
         _ocr_had_line_items = bool(fields.get('line_items'))
 
-        if gemini_result:
+        if ai_result:
             for key in _merge_keys:
-                if gemini_result.get(key) is not None:
-                    fields[key] = gemini_result[key]
-            if gemini_result.get('line_items'):
-                fields['line_items'] = gemini_result['line_items']
+                if ai_result.get(key) is not None:
+                    fields[key] = ai_result[key]
+            if ai_result.get('line_items'):
+                fields['line_items'] = ai_result['line_items']
 
         _field_confidence = {
             key: compute_field_confidence(
-                (gemini_result or {}).get(key), _ocr_values[key], fields.get('_confidence', {}).get(key))
+                (ai_result or {}).get(key), _ocr_values[key], fields.get('_confidence', {}).get(key))
             for key in _merge_keys
         }
         _field_confidence['line_items'] = compute_line_items_confidence(
-            fields.get('line_items'), bool((gemini_result or {}).get('line_items')), _ocr_had_line_items)
+            fields.get('line_items'), bool((ai_result or {}).get('line_items')), _ocr_had_line_items)
         log_field_confidence('PO', _field_confidence)
 
         if fields['total_amount'] is not None:
@@ -586,9 +645,15 @@ def upload_purchase_order(document_id):
         conn.close()
 
         try:
-            run_authenticity_check(document_id, file_bytes_data, safe_name, 'po', ocr_text,
-                                    precomputed_result=gemini_result,
-                                    skip_gemini=not gemini_result)
+            # See upload_document()'s invoice endpoint for why this
+            # branches on provider_used — Claude's schema has no
+            # authenticity fields at all.
+            if provider_used == 'GEMINI':
+                run_authenticity_check(document_id, file_bytes_data, safe_name, 'po', ocr_text,
+                                        precomputed_result=ai_result, skip_gemini=not ai_result)
+            else:
+                run_authenticity_check(document_id, file_bytes_data, safe_name, 'po', ocr_text,
+                                        precomputed_result=None, skip_gemini=False)
         except Exception as e:
             print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
 
@@ -653,32 +718,49 @@ def upload_goods_receipt(document_id):
                   f"over MAX_DB_FILE_BYTES ({Config.MAX_DB_FILE_BYTES}) — not persisted to DB")
 
         # ══════════════════════════════════════════════════════
-        # GEMINI-FIRST EXTRACTION ARCHITECTURE — see upload_document()'s
-        # invoice endpoint above for the full rationale. Gemini Vision is
-        # the PRIMARY extractor; extract_gr_fields() below is fallback/
-        # validation only. Cached by file-content hash so the exact same
-        # file bytes never trigger a second Gemini call.
+        # AI EXTRACTION ROUTER — see upload_document()'s invoice endpoint
+        # above for the full rationale. Claude Vision is the PRIMARY
+        # extractor (per Config.AI_EXTRACTION_PROVIDER, default CLAUDE),
+        # Gemini a fallback; extract_gr_fields() below is fallback/
+        # validation only regardless of which AI provider wins. Both
+        # cached by file-content hash so the exact same file bytes never
+        # trigger a second call to either.
         # ══════════════════════════════════════════════════════
         file_hash = compute_file_hash(file_bytes_data)
-        gemini_result = get_cached_gemini_result(file_hash, 'gr')
-        if gemini_result is not None:
-            print(f"GEMINI CACHE HIT (gr, hash={file_hash[:12]}...) — Gemini not called")
-        else:
+
+        def _claude_call():
+            cached = get_cached_claude_result(file_hash, 'gr')
+            if cached is not None:
+                print(f"CLAUDE CACHE HIT (gr, hash={file_hash[:12]}...) — Claude not called")
+                return cached
+            image = prepare_gemini_image_payload(file_bytes_data, safe_name)
+            result = extract_with_claude(image, 'gr')
+            if result:
+                save_claude_result_to_cache(file_hash, 'gr', result)
+            return result
+
+        def _gemini_call():
+            cached = get_cached_gemini_result(file_hash, 'gr')
+            if cached is not None:
+                print(f"GEMINI CACHE HIT (gr, hash={file_hash[:12]}...) — Gemini not called")
+                return cached
             # Single merged Gemini vision call: fields + authenticity
-            # signals in one request, so a GR upload never spends more
-            # than one Gemini call — mirrors upload_document()'s invoice
-            # pattern.
-            gemini_result = gemini_extract_gr_full(file_bytes_data, safe_name)
-            if gemini_result:
-                save_gemini_result_to_cache(file_hash, 'gr', gemini_result)
-        print(f"DEBUG GR PIPELINE\nGemini parsed:\n{gemini_result}")  # TEMP-DEBUG (pipeline trace, step 3/5 — "Gemini raw" text is logged inside gemini_extract_gr_full itself)
-        _debug_log_extraction_trace('gemini_raw', safe_name, 'gr', gemini_result)  # TEMP-DEBUG
+            # signals in one request, so this path never spends more than
+            # one Gemini call — mirrors upload_document()'s invoice pattern.
+            result = gemini_extract_gr_full(file_bytes_data, safe_name)
+            if result:
+                save_gemini_result_to_cache(file_hash, 'gr', result)
+            return result
+
+        ai_result, provider_used, fallback_reason = route_ai_extraction('gr', _claude_call, _gemini_call)
+        print(f"DEBUG GR PIPELINE\n{provider_used} parsed:\n{ai_result}")  # TEMP-DEBUG (pipeline trace, step 3/5)
+        _debug_log_extraction_trace(f'{provider_used.lower()}_raw', safe_name, 'gr', ai_result)  # TEMP-DEBUG
 
         # OCR fallback/verification — still runs unconditionally (its
         # ocr_text/confidence are independently needed for raw_ocr_text
         # storage and the authenticity heuristic below), but its field
-        # values are only used where Gemini returned null, per the merge
-        # loop directly below.
+        # values are only used where the winning AI provider returned
+        # null, per the merge loop directly below.
         ocr_results, ocr_text, confidence = run_ocr(file_path, file_ext)
         confidence = float(confidence)
         fields     = extract_gr_fields(ocr_text)
@@ -690,20 +772,20 @@ def upload_goods_receipt(document_id):
         _ocr_values = {key: fields.get(key) for key in _merge_keys}
         _ocr_had_line_items = bool(fields.get('line_items'))
 
-        if gemini_result:
+        if ai_result:
             for key in _merge_keys:
-                if gemini_result.get(key) is not None:
-                    fields[key] = gemini_result[key]
-            if gemini_result.get('line_items'):
-                fields['line_items'] = gemini_result['line_items']
+                if ai_result.get(key) is not None:
+                    fields[key] = ai_result[key]
+            if ai_result.get('line_items'):
+                fields['line_items'] = ai_result['line_items']
 
         _field_confidence = {
             key: compute_field_confidence(
-                (gemini_result or {}).get(key), _ocr_values[key], fields.get('_confidence', {}).get(key))
+                (ai_result or {}).get(key), _ocr_values[key], fields.get('_confidence', {}).get(key))
             for key in _merge_keys
         }
         _field_confidence['line_items'] = compute_line_items_confidence(
-            fields.get('line_items'), bool((gemini_result or {}).get('line_items')), _ocr_had_line_items)
+            fields.get('line_items'), bool((ai_result or {}).get('line_items')), _ocr_had_line_items)
         log_field_confidence('GR', _field_confidence)
 
         if fields['total_amount'] is not None:
@@ -758,9 +840,15 @@ def upload_goods_receipt(document_id):
         conn.close()
 
         try:
-            run_authenticity_check(document_id, file_bytes_data, safe_name, 'gr', ocr_text,
-                                    precomputed_result=gemini_result,
-                                    skip_gemini=not gemini_result)
+            # See upload_document()'s invoice endpoint for why this
+            # branches on provider_used — Claude's schema has no
+            # authenticity fields at all.
+            if provider_used == 'GEMINI':
+                run_authenticity_check(document_id, file_bytes_data, safe_name, 'gr', ocr_text,
+                                        precomputed_result=ai_result, skip_gemini=not ai_result)
+            else:
+                run_authenticity_check(document_id, file_bytes_data, safe_name, 'gr', ocr_text,
+                                        precomputed_result=None, skip_gemini=False)
         except Exception as e:
             print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
 
