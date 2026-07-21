@@ -174,10 +174,15 @@ def extract_with_claude(image, document_type):
           f"mime={mime_type} | image_size_kb={len(image_bytes) / 1024:.1f}")
 
     try:
+        # No `temperature` — some current models reject it outright
+        # ("`temperature` is deprecated for this model", seen in
+        # production). max_tokens/model/messages/system are all still
+        # valid, current Messages API parameters; `timeout` is an
+        # SDK/HTTP-layer request timeout, not a generation-config
+        # parameter, so it stays.
         response = client.messages.create(
             model=Config.CLAUDE_MODEL,
             max_tokens=4096,
-            temperature=0,
             system=CLAUDE_SYSTEM_PROMPT,
             messages=[{
                 "role": "user",
@@ -208,6 +213,10 @@ def extract_with_claude(image, document_type):
     except (json.JSONDecodeError, ValueError) as e:
         print(f"DEBUG CLAUDE RESPONSE parse error: {type(e).__name__}: {e}")
         return None
+
+    line_items = result.get('line_items') or []
+    print(f"DEBUG CLAUDE SUCCESS | vendor={result.get('vendor_name')} | "
+          f"amount={result.get('total_amount')} | line_items_count={len(line_items)}")
 
     return result
 
