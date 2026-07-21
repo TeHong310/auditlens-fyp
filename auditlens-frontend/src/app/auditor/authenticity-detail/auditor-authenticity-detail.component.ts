@@ -41,7 +41,17 @@ const SIGNAL_LABELS: Record<SignalKey, string> = {
 // Purple=Supplier Address, Red=Stamp/Chop, Orange=Signature. Keyed by the
 // stable `type` machine key (not the display label) so relabeling never
 // breaks color/click-highlight matching.
-interface NamedBox {
+//
+// coordinate_space/source_image_width/source_image_height/
+// localization_quality are the v6 canonical-coordinate-contract fields
+// (see helpers/authenticity_check.py::_normalize_box_to_unit_space) —
+// all OPTIONAL on this interface because a legacy row saved before that
+// fix won't have them; convertBBoxToDisplay() below falls back
+// gracefully when they're absent.
+export type CoordinateSpace = 'normalized_0_1' | 'normalized_0_1000' | 'native_pixels';
+export type LocalizationQuality = 'exact' | 'approximate' | 'unreliable';
+
+export interface NamedBox {
   type: string;
   label: string;
   x: number;
@@ -49,12 +59,75 @@ interface NamedBox {
   width: number;
   height: number;
   confidence: number;
+  coordinate_space?: CoordinateSpace;
+  source_image_width?: number;
+  source_image_height?: number;
+  localization_quality?: LocalizationQuality;
+}
+
+export interface DisplayBBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
 }
 
 interface NewOverlayMarker extends NamedBox {
   colorClass: string;
+  quality: LocalizationQuality;
   left: number;
   top: number;
+}
+
+// v6 spec Step 5 — THE single bbox-to-display conversion function.
+// Supports every coordinate_space a box might declare:
+//   normalized_0_1     — x/y/width/height are fractions of the image
+//                         (the CANONICAL format every NEW box is stored
+//                         in — see _normalize_box_to_unit_space).
+//   normalized_0_1000  — Gemini's own reliable convention (legacy
+//                         signal_boxes-shaped data, if ever passed
+//                         through this same function).
+//   native_pixels      — raw pixel coordinates relative to either the
+//                         box's own recorded source_image_width/height,
+//                         or (for a LEGACY row saved before
+//                         coordinate_space existed at all) the
+//                         currently-loaded image's natural size — the
+//                         last known-good assumption for that older
+//                         data, since it's the same source file.
+// Returns null if the image hasn't finished laying out yet (zero
+// dimensions) — caller should skip rendering that marker for this pass;
+// recomputeMarkers() re-runs on image load and on every resize, so a
+// skipped marker is corrected on the very next call.
+export function convertBBoxToDisplay(box: NamedBox, img: HTMLImageElement): DisplayBBox | null {
+  const displayWidth = img.clientWidth;
+  const displayHeight = img.clientHeight;
+  const naturalWidth = img.naturalWidth;
+  const naturalHeight = img.naturalHeight;
+  if (!displayWidth || !displayHeight || !naturalWidth || !naturalHeight) return null;
+
+  const space: CoordinateSpace = box.coordinate_space || 'native_pixels';
+  let scaleX: number;
+  let scaleY: number;
+
+  if (space === 'normalized_0_1') {
+    scaleX = displayWidth;
+    scaleY = displayHeight;
+  } else if (space === 'normalized_0_1000') {
+    scaleX = displayWidth / 1000;
+    scaleY = displayHeight / 1000;
+  } else {
+    const sourceWidth = box.source_image_width || naturalWidth;
+    const sourceHeight = box.source_image_height || naturalHeight;
+    scaleX = displayWidth / sourceWidth;
+    scaleY = displayHeight / sourceHeight;
+  }
+
+  return {
+    left: box.x * scaleX,
+    top: box.y * scaleY,
+    width: box.width * scaleX,
+    height: box.height * scaleY,
+  };
 }
 
 const BOX_COLOR_CLASS: Record<string, string> = {
@@ -69,11 +142,26 @@ const EVIDENCE_KEYS = ['company_logo', 'company_name', 'supplier_address', 'stam
 type EvidenceKey = typeof EVIDENCE_KEYS[number];
 
 const EVIDENCE_LABELS: Record<EvidenceKey, string> = {
-  company_logo:     'Company Logo',
-  company_name:     'Company Name',
+  company_logo:     'Supplier Logo',
+  company_name:     'Supplier Name',
   supplier_address: 'Supplier Address',
   stamp:            'Stamp / Chop',
   signature:        'Signature',
+};
+
+// v6 spec Step 4: document-type-aware wording. A PO/GR's own letterhead
+// is normally the BUYER (see CLAUDE_AUTHENTICITY_PROMPT's document-type
+// guidance), so there's usually no distinct SUPPLIER logo to find at
+// all — the label makes that explicit instead of reading like a missed
+// detection. GR's stamp is normally a receiving/QC stamp, not a chop.
+const EVIDENCE_LABELS_BY_DOC_TYPE: Partial<Record<string, Partial<Record<EvidenceKey, string>>>> = {
+  po: {
+    company_logo: 'Supplier Logo (Optional)',
+  },
+  gr: {
+    company_logo: 'Supplier Logo (Optional)',
+    stamp:        'Receiving / QC Stamp',
+  },
 };
 
 // Maps each evidence key to the box `type` it corresponds to (see
@@ -305,31 +393,48 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     }
     this.markers = markers;
 
-    // check.boxes — native-pixel-to-displayed scaling (the actual fix).
-    const scaleX = displayWidth / naturalWidth;
-    const scaleY = displayHeight / naturalHeight;
-
+    // check.boxes — canonical coordinate-contract conversion (v6 fix).
+    // convertBBoxToDisplay() reads each box's OWN declared
+    // coordinate_space rather than a single hardcoded assumption for
+    // the whole array, so this is correct regardless of whether a given
+    // row was saved under the old (ambiguous) or new (canonical) shape.
     const newMarkers: NewOverlayMarker[] = [];
     if (Array.isArray(this.check?.boxes)) {
       for (const box of this.check.boxes as NamedBox[]) {
-        const scaledBBox = {
-          left: box.x * scaleX,
-          top: box.y * scaleY,
-          width: box.width * scaleX,
-          height: box.height * scaleY,
-        };
-        // TEMPORARY — remove once bbox alignment is confirmed fixed on
-        // real documents (see task: "AuditLens Authenticity Bounding Box
-        // Debug + Fix").
-        console.log('AUTH BBOX DEBUG', {
-          naturalWidth, naturalHeight, displayWidth, displayHeight,
-          originalBBox: { type: box.type, x: box.x, y: box.y, width: box.width, height: box.height },
-          scaledBBox,
+        const renderedBBox = convertBBoxToDisplay(box, img);
+        if (!renderedBBox) continue;
+
+        // TEMPORARY, development-only — remove/disable once bbox
+        // alignment is confirmed correct against real documents.
+        console.log('AUTH BBOX TRACE', {
+          documentType: this.documentType,
+          evidenceType: box.type,
+          coordinateSpace: box.coordinate_space || 'native_pixels (legacy row, no coordinate_space stored)',
+          sourceImageWidth: box.source_image_width,
+          sourceImageHeight: box.source_image_height,
+          naturalWidth, naturalHeight,
+          clientWidth: displayWidth, clientHeight: displayHeight,
+          rawBBox: { x: box.x, y: box.y, width: box.width, height: box.height },
+          normalizedBBox: box.coordinate_space === 'normalized_0_1'
+            ? { x: box.x, y: box.y, width: box.width, height: box.height }
+            : null,
+          renderedBBox,
         });
+
+        const quality: LocalizationQuality = box.localization_quality || 'exact';
+        if (quality === 'unreliable') {
+          // v6 spec Step 3: never draw a misleading rectangle for a box
+          // the AI itself wasn't confident about the exact location of
+          // — the sidebar still shows it as detected (see
+          // localizationNote()), just without a box on the image.
+          continue;
+        }
+
         newMarkers.push({
           ...box,
           colorClass: BOX_COLOR_CLASS[box.type] || 'box-blue',
-          ...scaledBBox,
+          quality,
+          ...renderedBBox,
         });
       }
     }
@@ -443,6 +548,26 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     if (entry.status === 'detected' || entry.detected) return 'Detected';
     if (entry.required === false) return 'Not required';
     return 'Not Detected';
+  }
+
+  // v6 spec Step 4: document-type-aware evidence wording — e.g. "Supplier
+  // Logo (Optional)" on a PO/GR, since their own letterhead is normally
+  // the buyer, not the supplier, so there's usually no distinct supplier
+  // logo to find at all.
+  evidenceLabelFor(key: EvidenceKey): string {
+    return EVIDENCE_LABELS_BY_DOC_TYPE[this.documentType]?.[key] || EVIDENCE_LABELS[key];
+  }
+
+  // v6 spec Step 3: for a box whose localization_quality is "unreliable"
+  // (excluded from the image overlay in recomputeMarkers()), surfaces
+  // that it WAS detected without implying a precise location is known.
+  // "approximate" boxes ARE drawn (dashed, see the template/CSS) so no
+  // separate note is needed for that case.
+  localizationNote(key: EvidenceKey): string {
+    const box = this.evidenceEntry(key)?.boxes;
+    if (!box) return '';
+    if (box.localization_quality === 'unreliable') return 'Detected, exact location unavailable';
+    return '';
   }
 
   supplierStatusClass(): string {

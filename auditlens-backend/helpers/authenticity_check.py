@@ -1,6 +1,9 @@
 import re
 import os
 import json
+import fitz  # PyMuPDF — already a project dependency (see helpers/gemini_extractor.py);
+             # imported fresh here (not touching that file) purely to read the exact
+             # pixel dimensions of the image bytes Claude/Gemini actually analyzed.
 from config import Config
 from db import get_db_connection
 from helpers.gemini_extractor import (
@@ -208,6 +211,17 @@ _BOX_TYPES = {
 # dependent (see _stamp_required); every other key is always expected.
 _NEVER_REQUIRED = {'signature'}
 
+# v6 spec Step 4: a PO/GR is normally ISSUED BY THE BUYER (see
+# CLAUDE_AUTHENTICITY_PROMPT's document-type guidance — the letterhead
+# on those two types is the buyer, not the supplier), so there is
+# usually no reason a distinct SUPPLIER logo would appear on the
+# document at all. Treating company_logo as always-required penalized
+# every legitimate PO/GR that (correctly) has no supplier logo to show,
+# reading as a hard authenticity failure when supplier name/address were
+# already verified. Invoice is unaffected (its own letterhead IS the
+# supplier, so a missing logo there is still meaningful).
+_OPTIONAL_ON_PO_GR = {'company_logo'}
+
 
 def _stamp_required(document_type):
     """Whether a stamp/chop is normally expected for this document type —
@@ -227,6 +241,9 @@ def _required_for(key, document_type):
     document type — drives the frontend's "Not required" (neutral)
     state instead of a false-negative-looking red X."""
     if key in _NEVER_REQUIRED:
+        return False
+    doc_type = _normalize_doc_type(document_type)
+    if key in _OPTIONAL_ON_PO_GR and doc_type in ('po', 'gr'):
         return False
     if key == 'stamp':
         return _stamp_required(document_type)
@@ -270,11 +287,101 @@ def _resolve_supplier_status(claude_supplier_name, claude_status, extracted_vend
     return claude_status, None
 
 
-def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=None):
+def _get_image_dimensions(image_bytes):
+    """Reads the EXACT pixel width/height of the rendered image bytes
+    Claude (or Gemini) actually analyzed, via PyMuPDF — the single
+    source of truth for "what image was this box drawn against",
+    instead of assuming any particular render size. Never raises;
+    returns (None, None) if the bytes can't be decoded (must not break
+    the authenticity check just because dimension-reading failed)."""
+    try:
+        pix = fitz.Pixmap(image_bytes)
+        return pix.width, pix.height
+    except Exception as e:
+        print(f"DEBUG Authenticity: could not read image dimensions: {type(e).__name__}: {e}")
+        return None, None
+
+
+_LOCALIZATION_EXACT_THRESHOLD = 85
+_LOCALIZATION_APPROXIMATE_THRESHOLD = 50
+
+
+def _localization_quality_for(confidence):
+    """v6 spec Step 3: distinguishes a RENDERING bug (box drawn at the
+    wrong pixels) from genuine AI LOCALIZATION imprecision (box drawn
+    roughly in the right area, just not pixel-tight) — the frontend
+    renders these two cases differently (solid box vs. dashed
+    "approximate area" vs. no box at all) instead of silently drawing a
+    misleading rectangle either way. Derived from Claude/Gemini's own
+    per-box confidence (already reported for every evidence item) rather
+    than a separate semantic judgment this code has no way to make
+    without seeing the image itself."""
+    if confidence >= _LOCALIZATION_EXACT_THRESHOLD:
+        return 'exact'
+    if confidence >= _LOCALIZATION_APPROXIMATE_THRESHOLD:
+        return 'approximate'
+    return 'unreliable'
+
+
+def _normalize_box_to_unit_space(raw_box, confidence, source_width, source_height):
+    """v6 spec Step 2: converts a raw [ymin,xmin,ymax,xmax] box (from
+    either engine, in WHATEVER scale it actually used) into ONE
+    canonical, self-describing format — so the frontend never again has
+    to guess or hardcode an assumption about coordinate space:
+
+        {coordinate_space: "normalized_0_1", x, y, width, height,
+         source_image_width, source_image_height, localization_quality,
+         raw_bbox, raw_coordinate_space}
+
+    Coordinate-space DETECTION here is a hard logical deduction, not a
+    guess: a 0-1000-normalized value can never legitimately exceed
+    ~1000 (that is the definition of the space) — so any coordinate
+    above that threshold PROVES the box is not 0-1000-normalized,
+    regardless of what the prompt asked the model for. Real-world
+    testing against production data confirmed Claude does not reliably
+    honor the "normalize to 0-1000" instruction and instead often
+    returns native-pixel coordinates relative to the exact source image
+    dimensions; this function transparently detects and corrects for
+    either case (and Gemini's signal_boxes, which DOES reliably use
+    0-1000 — see AUTHENTICITY_PROMPT above — is handled correctly too,
+    since its values are always ≤1000 and fall into that branch
+    naturally). Returns None if there's no usable box or source
+    dimensions to normalize against.
+    """
+    if not (isinstance(raw_box, list) and len(raw_box) == 4) or not source_width or not source_height:
+        return None
+    ymin, xmin, ymax, xmax = raw_box
+    if max(ymin, xmin, ymax, xmax) <= 1050:
+        raw_space = 'normalized_0_1000'
+        x, y, x2, y2 = xmin / 1000, ymin / 1000, xmax / 1000, ymax / 1000
+    else:
+        raw_space = 'native_pixels'
+        x, y, x2, y2 = xmin / source_width, ymin / source_height, xmax / source_width, ymax / source_height
+    x, y, x2, y2 = (max(0.0, min(1.0, v)) for v in (x, y, x2, y2))
+    return {
+        'coordinate_space':     'normalized_0_1',
+        'x':                    round(x, 4),
+        'y':                    round(y, 4),
+        'width':                round(max(0.0, x2 - x), 4),
+        'height':               round(max(0.0, y2 - y), 4),
+        'source_image_width':   source_width,
+        'source_image_height':  source_height,
+        'localization_quality': _localization_quality_for(confidence),
+        'raw_bbox':             raw_box,
+        'raw_coordinate_space': raw_space,
+    }
+
+
+def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=None,
+                              source_width=None, source_height=None):
     """Maps either engine's raw output onto ONE unified schema (the v2
     JSON shape: status enums, per-key `required`, 3-axis integrity) so
     DB storage and the frontend never need to branch on which engine
-    produced the result.
+    produced the result. Also converts each evidence entry's box (if
+    any) into the v6 canonical coordinate_space="normalized_0_1" shape
+    via _normalize_box_to_unit_space() — so `boxes` below is either
+    None or that fully self-describing dict, never a raw
+    [ymin,xmin,ymax,xmax] list a caller would have to interpret.
 
     engine == 'claude': raw is already close to the target shape —
       still defensively defaulted in case a sub-object is missing, and
@@ -283,7 +390,11 @@ def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=N
     engine in ('gemini', 'fallback'): raw is the OLD 4-signal schema
       (has_company_chop/logo/name/signature + signal_boxes) — mapped
       into the same shape with tampering/address/contact left
-      "not assessed" (neither older path evaluates those)."""
+      "not assessed" (neither older path evaluates those).
+    source_width/source_height: the exact pixel dimensions of the image
+      Claude/Gemini analyzed (see _get_image_dimensions) — required to
+      normalize a native-pixel box into the canonical 0-1 space; a box
+      is reported as None (not detected) if these are unavailable."""
     raw = raw or {}
 
     if engine == 'claude':
@@ -299,13 +410,14 @@ def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=N
             status = item.get('status')
             if status not in ('detected', 'not_detected'):
                 status = 'detected' if item.get('detected') else 'not_detected'
+            confidence = item.get('confidence') or 0
             entry = {
                 'status':      status,
                 'detected':    status == 'detected',
-                'confidence':  item.get('confidence') or 0,
+                'confidence':  confidence,
                 'label':       item.get('label') or static_label,
                 'reason':      item.get('reason') or '',
-                'boxes':       box if isinstance(box, list) and len(box) == 4 else None,
+                'boxes':       _normalize_box_to_unit_space(box, confidence, source_width, source_height),
                 'required':    _required_for(key, document_type),
             }
             if key == 'stamp':
@@ -351,13 +463,14 @@ def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=N
         return box if isinstance(box, list) and len(box) == 4 else None
 
     def _entry(key, detected, box):
+        confidence = 70 if detected else 0
         return {
             'status':     'detected' if detected else 'not_detected',
             'detected':   detected,
-            'confidence': 70 if detected else 0,
+            'confidence': confidence,
             'label':      _BOX_TYPES[key][1],
             'reason':     '',
-            'boxes':      box,
+            'boxes':      _normalize_box_to_unit_space(box, confidence, source_width, source_height),
             'required':   _required_for(key, document_type),
         }
 
@@ -407,35 +520,33 @@ def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=N
 
 def _flatten_boxes(evidence):
     """Converts the unified schema's per-category boxes into the flat
-    list the frontend overlay draws (v3 spec objective 3):
-    [{"type": "...", "label": "...", "confidence": 0-1, "reason": "...",
-      "x": ..., "y": ..., "width": ..., "height": ...}]. `type` is the
-    stable machine key the frontend keys color/click-highlight off of;
-    `label`/`reason` prefer Claude's own per-detection description (set
-    in _normalize_visual_result) over the static category name, falling
-    back to it when Claude didn't provide one (or for the Gemini/
-    fallback engines, which have no per-instance labeling at all);
-    `confidence` is the per-category confidence normalized from 0-100 to
-    0-1. Box coordinates are the same 0-1000-normalized scale already
-    used by the legacy signal_boxes column — only the shape (corner pair
-    vs. x/y/width/height) differs, so no new coordinate system is
-    introduced."""
+    list the frontend overlay draws (v6 spec Step 2 — canonical
+    coordinate contract):
+    [{"type", "label", "reason", "confidence", "coordinate_space":
+      "normalized_0_1", "x", "y", "width", "height",
+      "source_image_width", "source_image_height",
+      "localization_quality", "raw_bbox", "raw_coordinate_space"}].
+    `type` is the stable machine key the frontend keys color/click-
+    highlight off of; `label`/`reason` prefer Claude's own per-detection
+    description over the static category name. The box's own fields
+    (coordinate_space, x/y/width/height already 0-1-normalized,
+    source_image_*, localization_quality, raw_bbox) come straight from
+    _normalize_box_to_unit_space() in _normalize_visual_result() — this
+    function no longer does any coordinate MATH itself, only flattening/
+    labeling, so there is exactly one place or coordinate normalization
+    logic lives."""
     boxes = []
     for key, (box_type, static_label) in _BOX_TYPES.items():
         item = evidence.get(key) or {}
         box = item.get('boxes')
-        if not (isinstance(box, list) and len(box) == 4):
+        if not box:
             continue
-        ymin, xmin, ymax, xmax = box
         entry = {
             'type':       box_type,
             'label':      item.get('label') or static_label,
             'reason':     item.get('reason') or '',
-            'x':          xmin,
-            'y':          ymin,
-            'width':      xmax - xmin,
-            'height':     ymax - ymin,
             'confidence': round((item.get('confidence') or 0) / 100, 2),
+            **box,
         }
         if key == 'stamp':
             entry['stamp_type'] = item.get('type') or ''
@@ -629,6 +740,10 @@ def run_authenticity_check(document_id, file_bytes, file_name, document_type, do
         save_rendered_authenticity_image(document_id, document_type, file_bytes, file_name)
         image = prepare_gemini_image_payload(file_bytes, file_name)
         file_hash = compute_file_hash(file_bytes)
+        # The EXACT pixel dimensions of the image Claude/Gemini is about
+        # to analyze — required to normalize a native-pixel box into the
+        # canonical 0-1 coordinate space (see _normalize_box_to_unit_space).
+        source_width, source_height = _get_image_dimensions(image[1])
 
         cached_engine, cached_raw = (None, None)
         if use_cache:
@@ -672,7 +787,8 @@ def run_authenticity_check(document_id, file_bytes, file_name, document_type, do
                 save_authenticity_result_to_cache(file_hash, document_type,
                                                    CLAUDE_AUTHENTICITY_PROMPT_VERSION, engine, raw_result)
 
-        visual = _normalize_visual_result(engine, raw_result, document_type, extracted_vendor_name)
+        visual = _normalize_visual_result(engine, raw_result, document_type, extracted_vendor_name,
+                                           source_width, source_height)
         evidence = visual['document_visual_evidence']
 
         # Deterministic auditor score/decision (v4 spec objectives 1+6) —

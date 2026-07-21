@@ -133,6 +133,13 @@
   transition: box-shadow .2s ease;
 }
 
+/* v6 spec Step 3: an "approximate" localization_quality box is drawn
+   dashed instead of solid — a genuinely imprecise AI box must never be
+   presented as if it were pixel-exact. */
+.box-marker-approximate {
+  border-style: dashed;
+}
+
 .box-blue    { border-color: #2563EB; background: color-mix(in srgb, #2563EB 10%, transparent); }
 .box-green   { border-color: var(--success); background: color-mix(in srgb, var(--success) 10%, transparent); }
 .box-purple  { border-color: #7C3AED; background: color-mix(in srgb, #7C3AED 10%, transparent); }
@@ -372,6 +379,16 @@
   font-style: italic;
   padding: 0 0 6px 32px;
   line-height: 1.4;
+}
+
+/* v6 spec Step 3: "unreliable" localization — detected, but no box is
+   drawn on the image (see recomputeMarkers()), so this note is the
+   ONLY indication of where to look; slightly more prominent than a
+   plain reason line. */
+.evidence-location-note {
+  color: var(--warning);
+  font-style: normal;
+  font-weight: 600;
 }
 
 .risk-chip {

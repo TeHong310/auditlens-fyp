@@ -85,9 +85,12 @@ def run_case_prompt_formats_cleanly_for_every_document_type():
 
 # ── Pure-function tests: schema normalization / box flattening ──────────
 
+SOURCE_W, SOURCE_H = 1785, 2526  # a plausible ~A4-at-3x-zoom rendered PNG
+
+
 def run_case_normalize_claude_trusts_shape():
     print('Case: _normalize_visual_result(claude, ...) trusts the v3 schema as-is')
-    visual = ac._normalize_visual_result('claude', CLAUDE_RAW, 'invoice')
+    visual = ac._normalize_visual_result('claude', CLAUDE_RAW, 'invoice', source_width=SOURCE_W, source_height=SOURCE_H)
     check('supplier_name preserved', visual['supplier_identity']['supplier_name'] == 'COILCRAFT SINGAPORE PTE LTD')
     check('supplier status verified', visual['supplier_identity']['status'] == 'verified')
     check('stamp detected (status)', visual['document_visual_evidence']['stamp']['status'] == 'detected')
@@ -106,6 +109,80 @@ def run_case_normalize_claude_trusts_shape():
           and visual['document_visual_evidence']['supplier_address']['reason'] == '')
     check('address source_section (v5) carried through from Claude',
           visual['document_visual_evidence']['supplier_address']['source_section'] == 'supplier_address_label')
+    check('logo box normalized to the v6 canonical coordinate_space=normalized_0_1 shape',
+          visual['document_visual_evidence']['company_logo']['boxes']['coordinate_space'] == 'normalized_0_1',
+          visual['document_visual_evidence']['company_logo']['boxes'])
+    check('address box is None (Claude sent no boxes for it)',
+          visual['document_visual_evidence']['supplier_address']['boxes'] is None)
+
+
+# ── v6: canonical coordinate contract (auto-detect + normalize) ────────
+
+def run_case_normalize_box_detects_0_1000_when_values_stay_in_range():
+    print('Case: _normalize_box_to_unit_space() classifies values <=1050 as normalized_0_1000')
+    result = ac._normalize_box_to_unit_space([78, 40, 145, 340], 92, SOURCE_W, SOURCE_H)
+    check('coordinate_space is the canonical normalized_0_1', result['coordinate_space'] == 'normalized_0_1')
+    check('raw_coordinate_space detected as normalized_0_1000', result['raw_coordinate_space'] == 'normalized_0_1000', result)
+    check('x = xmin/1000', result['x'] == 0.04, result)
+    check('width = (xmax-xmin)/1000', result['width'] == 0.3, result)
+    check('source dimensions carried through', (result['source_image_width'], result['source_image_height']) == (SOURCE_W, SOURCE_H))
+
+
+def run_case_normalize_box_detects_native_pixels_when_values_exceed_1000():
+    print('Case: _normalize_box_to_unit_space() classifies any value >1050 as native_pixels (hard logical proof, not a guess)')
+    result = ac._normalize_box_to_unit_space([800, 700, 950, 1600], 92, SOURCE_W, SOURCE_H)
+    check('raw_coordinate_space detected as native_pixels', result['raw_coordinate_space'] == 'native_pixels', result)
+    check('x = xmin/source_width', result['x'] == round(700 / SOURCE_W, 4), result)
+    check('height = (ymax-ymin)/source_height', result['height'] == round((950 - 800) / SOURCE_H, 4), result)
+
+
+def run_case_normalize_box_returns_none_without_source_dimensions():
+    print('Case: _normalize_box_to_unit_space() returns None when source width/height are unavailable')
+    check('None with source_width=None', ac._normalize_box_to_unit_space([10, 10, 50, 50], 90, None, SOURCE_H) is None)
+    check('None with source_height=None', ac._normalize_box_to_unit_space([10, 10, 50, 50], 90, SOURCE_W, None) is None)
+    check('None with malformed raw_box', ac._normalize_box_to_unit_space([10, 10, 50], 90, SOURCE_W, SOURCE_H) is None)
+
+
+def run_case_normalize_box_clamps_out_of_bounds_values():
+    print('Case: _normalize_box_to_unit_space() clamps a slightly-over-bounds box into [0,1]')
+    result = ac._normalize_box_to_unit_space([0, 0, 1010, 1005], 92, SOURCE_W, SOURCE_H)
+    check('x2/y2 clamp to 1.0 instead of overflowing past the image edge',
+          result['x'] + result['width'] <= 1.0 and result['y'] + result['height'] <= 1.0, result)
+
+
+def run_case_localization_quality_thresholds():
+    print('Case: _localization_quality_for() buckets confidence into exact/approximate/unreliable')
+    check('>=85 -> exact', ac._localization_quality_for(85) == 'exact')
+    check('50-84 -> approximate', ac._localization_quality_for(50) == 'approximate' and ac._localization_quality_for(84) == 'approximate')
+    check('<50 -> unreliable', ac._localization_quality_for(49) == 'unreliable')
+
+
+def run_case_get_image_dimensions_reads_real_png():
+    print('Case: _get_image_dimensions() reads the true pixel size of real PNG bytes')
+    import struct
+    import zlib
+
+    def make_png(w, h):
+        def chunk(tag, data):
+            return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data))
+        sig = b'\x89PNG\r\n\x1a\n'
+        ihdr = struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)
+        raw = b''.join(b'\x00' + bytes([255, 0, 0] * w) for _ in range(h))
+        idat = zlib.compress(raw)
+        return sig + chunk(b'IHDR', ihdr) + chunk(b'IDAT', idat) + chunk(b'IEND', b'')
+
+    width, height = ac._get_image_dimensions(make_png(321, 214))
+    check('width read correctly', width == 321, width)
+    check('height read correctly', height == 214, height)
+    check('garbage bytes -> (None, None), never raises', ac._get_image_dimensions(b'not a real image') == (None, None))
+
+
+def run_case_company_logo_optional_on_po_and_gr():
+    print('Case: _required_for(company_logo, ...) is optional on PO/GR (v6 spec Step 4) but required on Invoice')
+    check('required on invoice', ac._required_for('company_logo', 'invoice') is True)
+    check('NOT required on po', ac._required_for('company_logo', 'po') is False)
+    check('NOT required on gr', ac._required_for('company_logo', 'gr') is False)
+    check('company_name still always required on po', ac._required_for('company_name', 'po') is True)
 
 
 def run_case_normalize_gemini_supplier_address_source_section_defaults_empty():
@@ -140,16 +217,19 @@ def run_case_normalize_claude_legacy_boolean_defensive():
 
 
 def run_case_normalize_gemini_maps_old_schema():
-    print('Case: _normalize_visual_result(gemini, ...) maps the old 4-signal schema to the v3 shape')
+    print('Case: _normalize_visual_result(gemini, ...) maps the old 4-signal schema to the v3 shape, box normalized to v6 canonical shape')
     old = {
         'has_company_chop': True, 'has_company_logo': True,
         'has_company_name': True, 'has_signature': False,
         'notes': 'looks fine', 'upload_source': 'scanned',
         'signal_boxes': {'has_company_chop': [1, 2, 3, 4]},
     }
-    visual = ac._normalize_visual_result('gemini', old, 'invoice')
+    visual = ac._normalize_visual_result('gemini', old, 'invoice', source_width=SOURCE_W, source_height=SOURCE_H)
     check('stamp.detected mapped from has_company_chop', visual['document_visual_evidence']['stamp']['detected'] is True)
-    check('stamp.boxes converted from signal_boxes', visual['document_visual_evidence']['stamp']['boxes'] == [1, 2, 3, 4])
+    check('stamp.boxes normalized (Gemini genuinely uses 0-1000, so [1,2,3,4]/1000)',
+          visual['document_visual_evidence']['stamp']['boxes']['coordinate_space'] == 'normalized_0_1'
+          and visual['document_visual_evidence']['stamp']['boxes']['x'] == 0.002,
+          visual['document_visual_evidence']['stamp']['boxes'])
     check('supplier_address defaults to not detected (no Gemini signal for it)',
           visual['document_visual_evidence']['supplier_address']['detected'] is False)
     check('overall status PASS when name detected', visual['overall_result']['status'] == 'PASS')
@@ -161,18 +241,20 @@ def run_case_normalize_gemini_maps_old_schema():
 
 
 def run_case_flatten_boxes():
-    print('Case: _flatten_boxes() converts corner boxes to {type,label,reason,x,y,width,height,confidence}')
-    visual = ac._normalize_visual_result('claude', CLAUDE_RAW, 'invoice')
+    print('Case: _flatten_boxes() carries the v6 canonical box shape through, only adding type/label/reason/confidence/stamp_type')
+    visual = ac._normalize_visual_result('claude', CLAUDE_RAW, 'invoice', source_width=SOURCE_W, source_height=SOURCE_H)
     boxes = ac._flatten_boxes(visual['document_visual_evidence'])
     by_type = {b['type']: b for b in boxes}
     check('3 boxes flattened (logo, name, stamp — address/signature have none)', len(boxes) == 3, boxes)
-    check('supplier_logo uses Claude\'s own label/reason, correct x/y/width/height/confidence',
-          by_type.get('supplier_logo') == {
-              'type': 'supplier_logo', 'label': 'Coilcraft red logo mark',
-              'reason': 'supplier letterhead graphic, top-left',
-              'x': 10, 'y': 10, 'width': 190, 'height': 50, 'confidence': 0.95,
-          },
-          by_type.get('supplier_logo'))
+    logo_box = by_type.get('supplier_logo', {})
+    check("supplier_logo uses Claude's own label/reason", logo_box.get('label') == 'Coilcraft red logo mark'
+          and logo_box.get('reason') == 'supplier letterhead graphic, top-left', logo_box)
+    check('supplier_logo coordinate_space is the canonical normalized_0_1', logo_box.get('coordinate_space') == 'normalized_0_1', logo_box)
+    check('supplier_logo x/y/width/height correctly normalized ([10,10,60,200] over 1000)',
+          (logo_box.get('x'), logo_box.get('y'), logo_box.get('width'), logo_box.get('height')) == (0.01, 0.01, 0.19, 0.05),
+          logo_box)
+    check('supplier_logo carries source_image_width/height + localization_quality',
+          logo_box.get('source_image_width') == SOURCE_W and logo_box.get('localization_quality') == 'exact', logo_box)
     check('company_stamp box present with confidence normalized to 0-1',
           by_type.get('company_stamp', {}).get('confidence') == 0.88, by_type.get('company_stamp'))
     check('company_stamp box carries stamp_type through', by_type.get('company_stamp', {}).get('stamp_type') == 'RECEIVED',
@@ -424,6 +506,39 @@ def run_case_ocr_fallback_never_cached():
     check('fallback engine result never cached', save_calls['count'] == 0, save_calls)
 
 
+def _make_png(w, h):
+    import struct
+    import zlib
+
+    def chunk(tag, data):
+        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data))
+    sig = b'\x89PNG\r\n\x1a\n'
+    ihdr = struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)
+    raw = b''.join(b'\x00' + bytes([255, 0, 0] * w) for _ in range(h))
+    idat = zlib.compress(raw)
+    return sig + chunk(b'IHDR', ihdr) + chunk(b'IDAT', idat) + chunk(b'IEND', b'')
+
+
+def run_case_end_to_end_real_png_produces_canonical_boxes():
+    print('Case: run_authenticity_check() with REAL PNG bytes measures dimensions and stores canonical boxes end-to-end')
+    fake_conn = _FakeConn()
+    real_png = _make_png(SOURCE_W, SOURCE_H)
+
+    with _Patched(fake_conn, lambda image, doc_type, extracted_vendor_name=None: CLAUDE_RAW, lambda fb, fn: None):
+        ac.prepare_gemini_image_payload = lambda fb, fn: ('image/png', real_png)  # override the _Patched default fake bytes
+        ac.run_authenticity_check(1, b'fake-bytes', 'test.pdf', 'invoice')
+
+    params = fake_conn.cursor_obj.executed[0][1]
+    stored_boxes = json.loads(params[12])
+    logo = next((b for b in stored_boxes if b['type'] == 'supplier_logo'), None)
+    check('a box was stored', logo is not None, stored_boxes)
+    check('coordinate_space is the canonical normalized_0_1', logo and logo.get('coordinate_space') == 'normalized_0_1', logo)
+    check('source_image_width matches the real PNG width measured from its bytes',
+          logo and logo.get('source_image_width') == SOURCE_W, logo)
+    check('x/y are plausible 0-1 fractions (not raw pixel numbers)',
+          logo and 0 <= logo['x'] <= 1 and 0 <= logo['y'] <= 1, logo)
+
+
 def run_case_use_cache_false_bypasses_lookup():
     print('Case: use_cache=False (Re-check) never consults the cache, always calls live')
     fake_conn = _FakeConn()
@@ -449,6 +564,13 @@ if __name__ == '__main__':
     run_case_document_type_guidance_differs_po_gr_vs_invoice()
     run_case_prompt_formats_cleanly_for_every_document_type()
     run_case_normalize_claude_trusts_shape()
+    run_case_normalize_box_detects_0_1000_when_values_stay_in_range()
+    run_case_normalize_box_detects_native_pixels_when_values_exceed_1000()
+    run_case_normalize_box_returns_none_without_source_dimensions()
+    run_case_normalize_box_clamps_out_of_bounds_values()
+    run_case_localization_quality_thresholds()
+    run_case_get_image_dimensions_reads_real_png()
+    run_case_company_logo_optional_on_po_and_gr()
     run_case_normalize_claude_stamp_not_required_on_po()
     run_case_normalize_claude_legacy_boolean_defensive()
     run_case_normalize_gemini_maps_old_schema()
@@ -465,6 +587,7 @@ if __name__ == '__main__':
     run_case_both_fail_uses_ocr_fallback()
     run_case_document_consistency_passed_through()
     run_case_extracted_vendor_name_reaches_claude_call()
+    run_case_end_to_end_real_png_produces_canonical_boxes()
     run_case_cache_hit_skips_both_engines()
     run_case_cache_miss_then_saves_successful_claude_result()
     run_case_ocr_fallback_never_cached()

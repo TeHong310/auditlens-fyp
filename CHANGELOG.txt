@@ -5867,3 +5867,117 @@ Testing:
 Setup/config needed:
   1. Redeploy the Render FRONTEND only.
   2. No new environment variables, no backend redeploy needed.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-21
+
+What was changed:
+  AuditLens Authenticity BBox Root-Cause Verification + Deterministic
+  Fix. Backend (helpers/authenticity_check.py only) + frontend
+  (auditor-authenticity-detail component only):
+    - NEW canonical coordinate contract. Every evidence box's `boxes`
+      field is now {coordinate_space: "normalized_0_1", x, y, width,
+      height, source_image_width, source_image_height,
+      localization_quality, raw_bbox, raw_coordinate_space} — computed
+      by the new _normalize_box_to_unit_space(), which auto-DETECTS
+      (not guesses) whether Claude's raw [ymin,xmin,ymax,xmax] output
+      is 0-1000-normalized or native-pixel: a 0-1000-normalized value
+      can never legitimately exceed ~1000, so any coordinate above that
+      is a hard logical proof it's native-pixel, regardless of what the
+      prompt asked for. Requires the EXACT pixel dimensions of the image
+      Claude/Gemini actually analyzed — new _get_image_dimensions()
+      reads them straight from the PNG bytes via PyMuPDF (already a
+      project dependency; imported fresh in this file only, gemini_
+      extractor.py untouched). _flatten_boxes() no longer does any
+      coordinate math itself, only labeling — there is exactly one
+      place coordinate normalization logic lives now.
+    - NEW localization_quality ("exact"/"approximate"/"unreliable"),
+      derived from the engine's own per-box confidence, so a genuine
+      RENDERING bug (fixed by this canonical contract) is never
+      conflated with genuine AI LOCALIZATION imprecision (a real but
+      different problem the frontend now surfaces honestly instead of
+      silently drawing a misleading rectangle).
+    - company_logo is now OPTIONAL (not required) on PO/GR in
+      _required_for() — a PO/GR's own letterhead is normally the BUYER
+      (already established by the v5 prompt fix), so there's usually no
+      distinct supplier logo to show at all; this no longer reads as a
+      hard authenticity failure when supplier name/address are already
+      verified.
+    - Frontend: single convertBBoxToDisplay(box, img) function (now
+      exported + unit-tested) replaces the previous single hardcoded
+      native-pixel assumption — supports normalized_0_1 (canonical),
+      normalized_0_1000 (Gemini legacy), and native_pixels (backward-
+      compatible fallback for any row saved before coordinate_space
+      existed at all). "approximate" boxes render dashed with an
+      "Approximate AI area" label; "unreliable" boxes are never drawn as
+      a rectangle — the sidebar shows "Detected, exact location
+      unavailable" instead. Evidence labels are now document-type-aware
+      ("Supplier Logo (Optional)" on PO/GR, "Receiving / QC Stamp" on
+      GR). Renamed the prior "AUTH BBOX DEBUG" console log to the
+      requested "AUTH BBOX TRACE" shape (documentType/evidenceType/
+      coordinateSpace/source+natural+client dimensions/rawBBox/
+      normalizedBBox/renderedBBox) — still temporary/development-only.
+
+Why:
+  The prior round's native-pixel fix improved alignment but left two
+  real gaps: (1) the codebase still asserted "0-1000 normalized" in the
+  prompt/comments while the frontend silently assumed native-pixel —
+  an unresolved contradiction with no way to tell, from the stored data
+  alone, which convention a given box actually used; (2) a PO/GR with no
+  distinct supplier logo (the normal case, since PO/GR letterheads are
+  the buyer) was scored as a hard authenticity failure. This round
+  replaces the assumption with a self-describing, auto-detected
+  contract every box carries with it, and separates "we don't know
+  where this is" (localization_quality) from "we know exactly where
+  this is" so the UI never overstates its own confidence.
+
+Testing:
+  - `python tests/extraction/run_all.py` — all 10 backend suites pass;
+    zero real Anthropic/Gemini API calls anywhere (all mocked/static
+    fixtures), zero AI credits consumed, no authenticity endpoint
+    invoked, no Re-check triggered, no documents uploaded.
+  - New backend tests: coordinate-space auto-detection (both branches:
+    values that stay ≤1050 vs. values that exceed it), clamping,
+    missing-source-dimensions handling, localization_quality thresholds,
+    _get_image_dimensions against a real (synthetically constructed)
+    PNG plus graceful failure on garbage bytes, company_logo optional on
+    PO/GR, and a full run_authenticity_check() end-to-end pass using
+    real PNG bytes (not mocked dimensions) proving the whole pipeline
+    measures the image and stores canonical boxes correctly together.
+  - New frontend tests (auditor-authenticity-detail.component.spec.ts,
+    `ng test`): all 3 coordinate spaces, the legacy-row backward-compat
+    fallback, zero-dimension guarding, and correct scaling across a
+    responsive resize — 6/6 pass. (One PRE-EXISTING, unrelated failure
+    in app.spec.ts confirmed via `git diff` — zero changes to that file
+    — a stale scaffold title assertion, not touched.)
+  - `npx ng build --configuration production` — clean build (pre-
+    existing bundle-size budget warnings only, unrelated to this
+    change).
+  - `git diff --stat` confirmed zero changes to routes/documents.py,
+    routes/auditor.py, routes/matching.py, helpers/gemini_extractor.py,
+    extraction_engine.py, ocr_helper.py, entity_normalizer.py,
+    auth_rules.py, and app.py (no new migration — everything lives
+    inside the existing `boxes`/`ai_visual_result` JSONB columns).
+  - IMPORTANT DISCLOSURE: this sandbox's database has zero real
+    authenticity_checks rows, zero cached authenticity images, and the
+    three real Coilcraft/EMITS PDFs referenced mid-task did not reach
+    this environment's filesystem (confirmed via repo-wide search) — so
+    the root-cause table and this fix could not be cross-checked against
+    the user's actual production screenshots/documents. The fix is
+    grounded in direct source-code inspection, the PRIOR round's
+    user-confirmed real-world finding (native-pixel, not 0-1000), and
+    a hard logical constraint (values >1000 cannot be 0-1000-normalized)
+    — not a guess — but real-document verification is still needed
+    post-deploy.
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND — no new migration, just updated
+     normalization code.
+  2. Redeploy the Render FRONTEND — picks up the new conversion function
+     and quality-aware rendering.
+  3. No new environment variables.
+  4. After deploy: open an authenticity detail page for a real Invoice/
+     PO/GR, check the browser console's AUTH BBOX TRACE output against
+     the visible box position, and confirm boxes now land tightly on
+     the actual logo/name/stamp — then remove the temporary trace log.

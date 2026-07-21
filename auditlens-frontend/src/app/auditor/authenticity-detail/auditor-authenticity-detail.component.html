@@ -22,13 +22,20 @@
       <div class="image-wrap" *ngIf="imageLoadState === 'image'">
         <img #docImage [src]="imageBlobUrl" (load)="onImageLoad()" class="doc-image" alt="Document" />
 
-        <!-- New engine: named boxes, 5-color legend, click-to-highlight -->
+        <!-- New engine: named boxes, 5-color legend, click-to-highlight.
+             Solid box = "exact" localization_quality; dashed box +
+             "Approximate AI area" label = "approximate" (v6 spec Step 3
+             — a genuinely imprecise AI box is never silently presented
+             as if it were pixel-exact). "unreliable" boxes are filtered
+             out entirely before reaching newMarkers (see
+             recomputeMarkers()) — those show a text-only note in the
+             sidebar instead of a rectangle on the image. -->
         <ng-container *ngIf="hasNewResult">
           <div class="marker box-marker" *ngFor="let m of newMarkers"
-               [ngClass]="[m.colorClass, m.type === selectedBoxType ? 'marker-active' : '']"
+               [ngClass]="[m.colorClass, m.type === selectedBoxType ? 'marker-active' : '', m.quality === 'approximate' ? 'box-marker-approximate' : '']"
                [style.left.px]="m.left" [style.top.px]="m.top"
                [style.width.px]="m.width" [style.height.px]="m.height">
-            <span class="box-label">[{{ m.label }}]</span>
+            <span class="box-label">[{{ m.label }}]<span *ngIf="m.quality === 'approximate'"> — Approximate AI area</span></span>
           </div>
         </ng-container>
 
@@ -137,11 +144,12 @@
                    [ngClass]="evidenceStatusClass(key) === 'icon-yes' ? 'ph-check' : (evidenceStatusClass(key) === 'icon-na' ? 'ph-minus' : 'ph-x')"></i>
               </span>
               <span class="checklist-label">
-                {{ evidenceLabels[key] }}<span *ngIf="key === 'stamp' && stampTypeLabel()"> — {{ stampTypeLabel() }}</span>
+                {{ evidenceLabelFor(key) }}<span *ngIf="key === 'stamp' && stampTypeLabel()"> — {{ stampTypeLabel() }}</span>
               </span>
               <span class="checklist-located" [ngClass]="{'located-na': evidenceStatusClass(key) === 'icon-na'}">{{ evidenceStatusLabel(key) }}</span>
             </div>
             <p class="evidence-reason" *ngIf="evidenceEntry(key)?.reason">{{ evidenceEntry(key).reason }}</p>
+            <p class="evidence-reason evidence-location-note" *ngIf="localizationNote(key)">{{ localizationNote(key) }}</p>
           </div>
         </div>
 
