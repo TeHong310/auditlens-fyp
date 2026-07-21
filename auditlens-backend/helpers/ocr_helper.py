@@ -15,6 +15,7 @@ from helpers.extraction_engine import (
     INVOICE_NUMBER_LABELS, PO_NUMBER_LABELS, GR_NUMBER_LABELS,
     INVOICE_DATE_LABEL_SCORES, PO_DATE_LABEL_SCORES, GR_DATE_LABEL_SCORES,
 )
+from helpers.entity_normalizer import normalize_company_name
 
 INVOICE_BLACKLIST = ['account no', 'account number', 'deposit', 'page', 'sub total', 'total']
 
@@ -582,13 +583,26 @@ def extract_fields(ocr_text):
     if item_qty is not None:
         fields['quantity'] = item_qty
 
-    # ── Track if we passed "Invoice To" section ──────────
-    passed_invoice_to = False
-    invoice_to_index  = -1
-    for i, line in enumerate(lines):
-        if re.search(r'invoice\s*to|bill\s*to|sold\s*to', line, re.IGNORECASE):
-            invoice_to_index = i
-            break
+    # ── Vendor candidate pre-pass: count how many times each normalized
+    # company name appears anywhere in the document (helpers/entity_
+    # normalizer.py) — a real vendor is often printed more than once
+    # (letterhead AND e.g. a footer/signature block), a customer/buyer
+    # name usually is not. Used as a scoring fallback signal below,
+    # alongside absolute top-of-document position — NOT a relative
+    # "before the Bill To section" heuristic (that previously made a
+    # genuine header vendor fall through to a low score whenever a
+    # document's OCR line order or layout didn't put Bill To cleanly
+    # after the letterhead). ──
+    _vendor_name_counts = {}
+    for _line in lines:
+        _m = re.search(
+            r'^([\w\s&\.\-\(\)\/]+(?:sdn\.?\s*bhd\.?|berhad|corporation|corp|ltd\.?|enterprise|trading|network|logistics|broadband|applications)[\w\s&\.\-\(\)\/\-]*)',
+            _line.strip(), re.IGNORECASE
+        )
+        if _m:
+            _norm = normalize_company_name(_m.group(1).strip())
+            if _norm:
+                _vendor_name_counts[_norm] = _vendor_name_counts.get(_norm, 0) + 1
 
     # Once an "EXCHANGE RATE" marker is seen anywhere in the document, every
     # subsequent generic "Total"/"Sub Total" line is almost certainly the
@@ -607,12 +621,12 @@ def extract_fields(ocr_text):
         # ── VENDOR NAME ───────────────────────────────────
         # Every company-name-shaped match becomes a candidate — scored
         # via score_vendor_context() using nearby buyer-indicator
-        # keywords (Bill To/Customer/Ship To — negative) and header
-        # position (positive, before any Bill-To/Invoice-To section)
-        # instead of hard-rejecting on a buyer-context check, so a
-        # document where the correct vendor line happens to sit near an
-        # ambiguous mention still has a scored fallback rather than
-        # nothing at all.
+        # keywords (Bill To/Customer/Ship To/etc — strongly negative) and
+        # ABSOLUTE top-of-document position (positive; NOT a "before Bill
+        # To" heuristic — see the pre-pass comment above). No label is
+        # required for a high score: most real invoices never print an
+        # explicit "Vendor:"/"Supplier:" label at all, so absence of a
+        # label must never be treated as low confidence.
         company_match = re.search(
             r'^([\w\s&\.\-\(\)\/]+(?:sdn\.?\s*bhd\.?|berhad|corporation|corp|ltd\.?|enterprise|trading|network|logistics|broadband|applications)[\w\s&\.\-\(\)\/\-]*)',
             line_clean, re.IGNORECASE
@@ -621,8 +635,10 @@ def extract_fields(ocr_text):
             vendor = company_match.group(1).strip()
             if len(vendor) > 5:
                 vendor_context = ' '.join(lines[max(0, i - 2):i + 1])
-                is_header = invoice_to_index == -1 or i < invoice_to_index
-                score, reason = score_vendor_context(vendor_context, is_header=is_header)
+                is_top_of_document = i < 5
+                is_repeated = _vendor_name_counts.get(normalize_company_name(vendor), 0) >= 2
+                score, reason = score_vendor_context(
+                    vendor_context, is_top_of_document=is_top_of_document, is_repeated=is_repeated)
                 vendor_candidates.append(make_candidate(
                     clean_vendor_name(vendor), vendor_context, i, score, reason))
 
@@ -1000,10 +1016,11 @@ def extract_fields(ocr_text):
     fields['_confidence']['vendor_name'] = log_extraction_result(
         'Invoice', 'vendor_name', vendor_candidates, selected_vendor)
     _vendor_cand_str = ',\n'.join(
-        f'{{\n"name": {c["value"]!r},\n"score": {c["confidence_score"]},\n"reason": {c["reason"]!r}\n}}'
+        f'{{\n"name": {c["value"]!r},\n"source": {c["context"]!r},\n"position": {c["position"]},\n'
+        f'"score": {c["confidence_score"]},\n"reason": {c["reason"]!r}\n}}'
         for c in vendor_candidates
     ) or '(none found)'
-    print(f"VENDOR EXTRACTION DEBUG\n\nCandidates:\n\n[\n{_vendor_cand_str}\n]\n\nSelected:\n{fields['vendor_name']}")
+    print(f"VENDOR CANDIDATES:\n[\n{_vendor_cand_str}\n]\n\nSELECTED VENDOR:\n{fields['vendor_name']}")
 
     selected_po_reference = select_best(po_reference_candidates)
     if selected_po_reference:
@@ -1441,10 +1458,11 @@ def extract_po_fields(ocr_text):
     fields['_confidence']['vendor_name'] = log_extraction_result(
         'PO', 'vendor_name', vendor_candidates, selected_vendor)
     _vendor_cand_str = ',\n'.join(
-        f'{{\n"name": {c["value"]!r},\n"score": {c["confidence_score"]},\n"reason": {c["reason"]!r}\n}}'
+        f'{{\n"name": {c["value"]!r},\n"source": {c["context"]!r},\n"position": {c["position"]},\n'
+        f'"score": {c["confidence_score"]},\n"reason": {c["reason"]!r}\n}}'
         for c in vendor_candidates
     ) or '(none found)'
-    print(f"VENDOR EXTRACTION DEBUG\n\nCandidates:\n\n[\n{_vendor_cand_str}\n]\n\nSelected:\n{fields['vendor_name']}")
+    print(f"VENDOR CANDIDATES:\n[\n{_vendor_cand_str}\n]\n\nSELECTED VENDOR:\n{fields['vendor_name']}")
 
     if fields['po_date'] is None:
         match = re.search(r'(\d{1,2}\/\d{1,2}\/\d{4})', ocr_text)
@@ -1869,10 +1887,11 @@ def extract_gr_fields(ocr_text):
     fields['_confidence']['vendor_name'] = log_extraction_result(
         'GR', 'vendor_name', vendor_candidates, selected_vendor)
     _vendor_cand_str = ',\n'.join(
-        f'{{\n"name": {c["value"]!r},\n"score": {c["confidence_score"]},\n"reason": {c["reason"]!r}\n}}'
+        f'{{\n"name": {c["value"]!r},\n"source": {c["context"]!r},\n"position": {c["position"]},\n'
+        f'"score": {c["confidence_score"]},\n"reason": {c["reason"]!r}\n}}'
         for c in vendor_candidates
     ) or '(none found)'
-    print(f"VENDOR EXTRACTION DEBUG\n\nCandidates:\n\n[\n{_vendor_cand_str}\n]\n\nSelected:\n{fields['vendor_name']}")
+    print(f"VENDOR CANDIDATES:\n[\n{_vendor_cand_str}\n]\n\nSELECTED VENDOR:\n{fields['vendor_name']}")
 
     selected_po_reference = select_best(po_reference_candidates)
     if selected_po_reference:

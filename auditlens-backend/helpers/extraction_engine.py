@@ -256,43 +256,65 @@ def score_po_reference_context(context_text):
 
 
 # ============================================================
-# VENDOR NAME scoring — AP vendor intelligence: the vendor is the
+# VENDOR NAME scoring (v5) — AP vendor intelligence: the vendor is the
 # SUPPLIER/SELLER/invoice issuer, never the buyer/customer/receiving
 # company. Checked in this order — the negative (buyer-side) labels
 # first, since a "Bill To"/"Ship To" section can still contain a company
 # name shaped exactly like a real vendor name.
+#
+# IMPORTANT: a real invoice very often prints NO explicit "Vendor:"/
+# "Supplier:" label at all — the vendor is identifiable only by its
+# header/letterhead position. Absence of a label must NEVER be treated
+# as low confidence; only an explicit buyer-side label is. See
+# score_vendor_context()'s default tier below — previously 20 ("no
+# recognized vendor label"), which penalized the overwhelmingly common
+# unlabeled-header-vendor case; now 60, the same floor as every other
+# non-negative signal.
 # ============================================================
 VENDOR_LABEL_SCORES = (
-    ('bill to',           -50, 'Bill To (the customer/buyer, not the vendor)'),
-    ('ship to',           -50, 'Ship To (the customer/buyer, not the vendor)'),
-    ('invoice to',        -50, 'Invoice To (the customer/buyer, not the vendor)'),
-    ('customer',          -40, 'Customer (the buyer, not the vendor)'),
-    ('buyer',             -40, 'Buyer (the buyer, not the vendor)'),
-    ('delivery address',  -30, 'Delivery address (the buyer\'s, not the vendor\'s)'),
-    ('deliver to',        -30, 'Deliver To (the buyer\'s address, not the vendor\'s)'),
-    ('supplier',           60, 'Supplier label'),
-    ('vendor',             60, 'Vendor label'),
-    ('seller',             60, 'Seller label'),
-    ('invoice issuer',     40, 'Invoice issuer label'),
-    ('issued by',          40, 'Issued by label'),
+    ('bill to',           -100, 'Bill To (the customer/buyer, not the vendor)'),
+    ('ship to',           -100, 'Ship To (the customer/buyer, not the vendor)'),
+    ('invoice to',        -100, 'Invoice To (the customer/buyer, not the vendor)'),
+    ('customer',          -100, 'Customer (the buyer, not the vendor)'),
+    ('buyer',             -100, 'Buyer (the buyer, not the vendor)'),
+    ('purchaser',         -100, 'Purchaser (the buyer, not the vendor)'),
+    ('receiver',          -100, 'Receiver (the buyer, not the vendor)'),
+    ('client',            -100, 'Client (the buyer, not the vendor)'),
+    ('delivery address',   -80, 'Delivery address (the buyer\'s, not the vendor\'s)'),
+    ('deliver to',         -80, 'Deliver To (the buyer\'s address, not the vendor\'s)'),
+    ('supplier',             90, 'Supplier label'),
+    ('vendor',               90, 'Vendor label'),
+    ('seller',               85, 'Seller label'),
+    ('invoice issuer',       85, 'Invoice issuer label'),
+    ('issued by',            85, 'Issued by label'),
 )
 
 
-def score_vendor_context(context_text, is_header=False, near_invoice_number=False):
+def score_vendor_context(context_text, is_top_of_document=False, is_repeated=False):
     """context_text: the line (or heading) the candidate company name was
-    found on/near. is_header: True if this candidate came from the
-    document's header/letterhead area (top of the page, before any
-    Bill-To/Ship-To section). near_invoice_number: True if found close to
-    the invoice/PO/GR's own document-number line."""
+    found on/near.
+    is_top_of_document: True if this candidate is among the first few
+      lines of the WHOLE document — the letterhead/header position,
+      computed from ABSOLUTE line position. Deliberately NOT a relative
+      "before the Bill To section" heuristic: a document whose Bill To
+      section appears early, or whose OCR line order isn't strictly
+      top-to-bottom, must not make a genuine header vendor fall through
+      to a low score just because that heuristic misfired.
+    is_repeated: True if the SAME normalized company name (see helpers/
+      entity_normalizer.py) also appears elsewhere in the document — a
+      real vendor is often printed more than once (letterhead AND e.g. a
+      footer/signature block); a customer/buyer name usually is not.
+    No label is required for a high score.
+    """
     text = (context_text or '').lower()
     for kw, score, label in VENDOR_LABEL_SCORES:
         if kw in text:
             return score, label
-    if is_header:
-        return 50, 'Header company (top of document)'
-    if near_invoice_number:
-        return 30, 'Company near invoice/document number'
-    return 20, 'no recognized vendor label'
+    if is_top_of_document:
+        return 100, 'Company name in top invoice header/letterhead area (no label required)'
+    if is_repeated:
+        return 60, 'Repeated company entity across the document'
+    return 60, 'No explicit label or header position — still a plausible vendor candidate, not penalized for a missing label'
 
 
 # ============================================================

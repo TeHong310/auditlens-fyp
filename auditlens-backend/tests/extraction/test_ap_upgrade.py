@@ -102,11 +102,53 @@ def run_case_vendor_never_selects_buyer_labels():
               fields['vendor_name'] == 'COILCRAFT SINGAPORE PTE LTD', fields['vendor_name'])
 
 
+def run_case_vendor_no_label_at_top_scores_high():
+    """v5 regression: a plain header vendor with NO "Vendor:"/"Supplier:"
+    label at all (the overwhelmingly common real-invoice case) must score
+    high (>=85, not needs_review) purely from its top-of-document
+    position — absence of a label must never be treated as low
+    confidence."""
+    print('Case: unlabeled header vendor scores high, not needs_review')
+    ocr_text = "COILCRAFT SINGAPORE PTE LTD\nINVOICE\nINVOICE NO: IX107587\nTOTAL (US$)\n8,020.00\n"
+    fields = extract_fields(ocr_text)
+    check('vendor_name == COILCRAFT SINGAPORE PTE LTD', fields['vendor_name'] == 'COILCRAFT SINGAPORE PTE LTD', fields['vendor_name'])
+    check('vendor confidence >= 85 (no label required for high confidence)',
+          fields['_confidence']['vendor_name']['confidence'] >= 85, fields['_confidence']['vendor_name'])
+    check('vendor not needs_review', fields['_confidence']['vendor_name']['needs_review'] is False,
+          fields['_confidence']['vendor_name'])
+
+
+def run_case_vendor_survives_early_false_positive_label():
+    """v5 regression — the actual production bug: a "Sold To Reference"
+    field (an unrelated reference code, NOT the real Bill To/customer
+    section) appearing BEFORE the real vendor line used to corrupt the
+    old relative "before the Bill To section" heuristic (invoice_to_index
+    landed on this line, making the genuine header vendor score as if it
+    were NOT at the top). The v5 scoring is based on ABSOLUTE
+    top-of-document position instead, so this must no longer happen."""
+    print('Case: early unrelated "Sold To" mention must not demote the real header vendor')
+    ocr_text = (
+        "Some Header Noise\n"
+        "Sold To Reference: N/A\n"
+        "Coilcraft Singapore Pte Ltd\n"
+        "INVOICE\n"
+        "INVOICE NO: IX107587\n"
+        "TOTAL (US$)\n"
+        "8,020.00\n"
+    )
+    fields = extract_fields(ocr_text)
+    check('vendor_name == Coilcraft Singapore Pte Ltd', fields['vendor_name'] == 'Coilcraft Singapore Pte Ltd', fields['vendor_name'])
+    check('vendor confidence == 100 (top-of-document, absolute position)',
+          fields['_confidence']['vendor_name']['confidence'] == 100, fields['_confidence']['vendor_name'])
+
+
 if __name__ == '__main__':
     run_case_invoice()
     run_case_po()
     run_case_gr()
     run_case_vendor_never_selects_buyer_labels()
+    run_case_vendor_no_label_at_top_scores_high()
+    run_case_vendor_survives_early_false_positive_label()
 
     print()
     if FAILURES:
