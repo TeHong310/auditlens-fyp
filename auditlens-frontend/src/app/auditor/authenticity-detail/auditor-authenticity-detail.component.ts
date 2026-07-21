@@ -246,14 +246,24 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     this.recomputeMarkers();
   }
 
-  // Scales each [ymin,xmin,ymax,xmax] (normalized 0-1000) to the image's
-  // actual rendered pixel size. Re-run on ResizeObserver so markers stay
-  // correct across window resize / sidebar toggle / responsive reflow.
+  // Re-run on ResizeObserver so markers stay correct across window
+  // resize / sidebar toggle / responsive reflow.
   //
-  // Also builds newMarkers from check.boxes (already x/y/width/height,
-  // same 0-1000 normalization — see helpers/authenticity_check.py's
-  // _flatten_boxes) using the identical scaleX/scaleY math, just without
-  // the corner-to-width/height conversion the legacy path needs.
+  // TWO DIFFERENT coordinate systems are in play here, confirmed against
+  // real production data (see git history for this fix):
+  //   - check.signal_boxes (legacy, Gemini-only AUTHENTICITY_PROMPT path)
+  //     is genuinely 0-1000-normalized — a well-documented, reliable
+  //     Gemini vision API convention — so it's scaled by
+  //     renderedSize/1000, unchanged from before.
+  //   - check.boxes (the newer Claude-generated boxes, see helpers/
+  //     authenticity_check.py::_flatten_boxes) are NATIVE PIXEL
+  //     coordinates matching the rendered PNG's actual dimensions —
+  //     Claude does not reliably follow the prompt's "normalize to
+  //     0-1000" instruction the way Gemini's vision API does. These are
+  //     scaled from the image's own naturalWidth/naturalHeight (its
+  //     intrinsic pixel size, available once the <img> 'load' event has
+  //     fired) to its DISPLAYED size — scaleX = displayWidth/naturalWidth
+  //     — never by a hardcoded /1000.
   recomputeMarkers() {
     if (!this.docImageRef) {
       this.markers = [];
@@ -262,12 +272,15 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
       return;
     }
     const img = this.docImageRef.nativeElement;
-    const renderedWidth = img.clientWidth;
-    const renderedHeight = img.clientHeight;
-    if (!renderedWidth || !renderedHeight) return;
+    const displayWidth = img.clientWidth;
+    const displayHeight = img.clientHeight;
+    const naturalWidth = img.naturalWidth;
+    const naturalHeight = img.naturalHeight;
+    if (!displayWidth || !displayHeight || !naturalWidth || !naturalHeight) return;
 
-    const scaleX = renderedWidth / 1000;
-    const scaleY = renderedHeight / 1000;
+    // Legacy overlay only — see class comment above.
+    const legacyScaleX = displayWidth / 1000;
+    const legacyScaleY = displayHeight / 1000;
 
     // A signal has a marker whenever the backend kept a box for it,
     // regardless of present/missing — present=green, missing=red (a
@@ -283,25 +296,40 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
           key,
           shape: SHAPE_MAP[key],
           present: !!this.check[key],
-          left: xmin * scaleX,
-          top: ymin * scaleY,
-          width: (xmax - xmin) * scaleX,
-          height: (ymax - ymin) * scaleY,
+          left: xmin * legacyScaleX,
+          top: ymin * legacyScaleY,
+          width: (xmax - xmin) * legacyScaleX,
+          height: (ymax - ymin) * legacyScaleY,
         });
       }
     }
     this.markers = markers;
 
+    // check.boxes — native-pixel-to-displayed scaling (the actual fix).
+    const scaleX = displayWidth / naturalWidth;
+    const scaleY = displayHeight / naturalHeight;
+
     const newMarkers: NewOverlayMarker[] = [];
     if (Array.isArray(this.check?.boxes)) {
       for (const box of this.check.boxes as NamedBox[]) {
-        newMarkers.push({
-          ...box,
-          colorClass: BOX_COLOR_CLASS[box.type] || 'box-blue',
+        const scaledBBox = {
           left: box.x * scaleX,
           top: box.y * scaleY,
           width: box.width * scaleX,
           height: box.height * scaleY,
+        };
+        // TEMPORARY — remove once bbox alignment is confirmed fixed on
+        // real documents (see task: "AuditLens Authenticity Bounding Box
+        // Debug + Fix").
+        console.log('AUTH BBOX DEBUG', {
+          naturalWidth, naturalHeight, displayWidth, displayHeight,
+          originalBBox: { type: box.type, x: box.x, y: box.y, width: box.width, height: box.height },
+          scaledBBox,
+        });
+        newMarkers.push({
+          ...box,
+          colorClass: BOX_COLOR_CLASS[box.type] || 'box-blue',
+          ...scaledBBox,
         });
       }
     }

@@ -5811,3 +5811,59 @@ Setup/config needed:
   1. Redeploy the Render BACKEND only — no new migration, no frontend
      changes this round.
   2. No new environment variables.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-21
+
+What was changed:
+  Frontend (auditlens-frontend/) only — auditor-authenticity-detail.
+  component.ts: fixed the bounding-box overlay coordinate math for
+  check.boxes (the newer Claude-generated evidence boxes). The
+  component was scaling box x/y/width/height by
+  renderedSize/1000 (treating them as 0-1000-normalized, matching what
+  the Claude prompt asks for), but confirmed against real production
+  data that Claude does not reliably follow that normalization
+  instruction — the stored values are actually native pixel coordinates
+  matching the rendered PNG's real dimensions. recomputeMarkers() now
+  reads img.naturalWidth/naturalHeight (available once the <img> 'load'
+  event fires) and scales with scaleX = displayWidth/naturalWidth (and
+  the Y equivalent), instead of dividing by a hardcoded 1000. Added
+  temporary "AUTH BBOX DEBUG" console logging (naturalWidth/
+  naturalHeight/displayWidth/displayHeight/originalBBox/scaledBBox) per
+  box to make the actual scale visually verifiable against a real
+  document. The LEGACY overlay (check.signal_boxes, from the older
+  Gemini-only AUTHENTICITY_PROMPT path) is untouched — Gemini's vision
+  API does reliably honor 0-1000 normalization, so that path still
+  scales by renderedSize/1000 as before.
+
+Why:
+  Auditors reported logo/stamp/supplier-address boxes appearing
+  shifted, oversized, or in the wrong location on real Coilcraft
+  documents, despite the backend's stored box data looking individually
+  reasonable. Root-caused (with the user's confirmation, since this
+  sandbox has no real authenticity_checks data to verify against) to a
+  coordinate-system mismatch: the frontend assumed 0-1000-normalized
+  values per the prompt's own instructions, but Claude's actual returned
+  coordinates are native-pixel. No backend, extraction, OCR, matching,
+  or database changes — this was purely a frontend coordinate-scaling
+  bug, confirmed via code inspection (no AI calls made in the process).
+
+Testing:
+  - `npx ng build --configuration development` — builds cleanly.
+  - `python tests/extraction/run_all.py` — all 10 suites still pass
+    (backend untouched, so this just confirms no accidental collateral
+    change); zero real Anthropic/Gemini API calls made anywhere in this
+    task, no documents uploaded, no AI credits spent.
+  - `git diff --stat` confirmed zero changes under auditlens-backend/ —
+    exactly one file changed, the frontend component.
+  - Live rendering verification against a real checked document (to
+    confirm boxes now align pixel-for-pixel) requires the user's actual
+    environment with real authenticity_checks data, not available in
+    this sandbox; the temporary AUTH BBOX DEBUG console logs are there
+    specifically to make that verification quick — safe to remove once
+    confirmed.
+
+Setup/config needed:
+  1. Redeploy the Render FRONTEND only.
+  2. No new environment variables, no backend redeploy needed.
