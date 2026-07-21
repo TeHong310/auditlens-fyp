@@ -159,13 +159,40 @@ def _ensure_sibling_checks(document_id, primary_type):
                 continue
 
             document_consistency = _document_consistency_for(cursor, document_id)
+            extracted_vendor_name = _extracted_vendor_name_for(cursor, document_id, doc_type)
             conn.close()
 
-            run_authenticity_check(document_id, info['file_bytes'], info['file_name'],
-                                    doc_type, document_consistency=document_consistency)
+            run_authenticity_check(document_id, info['file_bytes'], info['file_name'], doc_type,
+                                    document_consistency=document_consistency,
+                                    extracted_vendor_name=extracted_vendor_name)
         except Exception as e:
             print(f"DEBUG Authenticity sibling-check error for doc={document_id} "
                   f"type={doc_type}: {type(e).__name__}: {e}")
+
+
+def _extracted_vendor_name_for(cursor, document_id, document_type):
+    """Looks up the vendor_name the (separate) extraction pipeline
+    already found for this document_id/document_type, if any — passed
+    into run_authenticity_check() as a cross-check hint (v3 spec
+    objective 4). Returns None if extraction hasn't produced one (e.g.
+    a document that failed extraction entirely, or a type not yet
+    uploaded)."""
+    if document_type == 'invoice':
+        cursor.execute('SELECT vendor_name FROM extracted_fields WHERE document_id = %s', (document_id,))
+    elif document_type == 'po':
+        cursor.execute(
+            'SELECT vendor_name FROM purchase_orders WHERE document_id = %s ORDER BY uploaded_at DESC LIMIT 1',
+            (document_id,)
+        )
+    elif document_type == 'gr':
+        cursor.execute(
+            'SELECT vendor_name FROM goods_receipts WHERE document_id = %s ORDER BY uploaded_at DESC LIMIT 1',
+            (document_id,)
+        )
+    else:
+        return None
+    row = cursor.fetchone()
+    return row['vendor_name'] if row else None
 
 
 def _document_consistency_for(cursor, document_id):
@@ -228,10 +255,12 @@ def get_authenticity_check(document_id):
                 return jsonify({'error': 'No authenticity check for this document'}), 404
 
             document_consistency = _document_consistency_for(cursor, document_id)
+            extracted_vendor_name = _extracted_vendor_name_for(cursor, document_id, document_type)
             conn.close()
 
-            check_id = run_authenticity_check(document_id, info['file_bytes'], info['file_name'],
-                                                document_type, document_consistency=document_consistency)
+            check_id = run_authenticity_check(document_id, info['file_bytes'], info['file_name'], document_type,
+                                                document_consistency=document_consistency,
+                                                extracted_vendor_name=extracted_vendor_name)
             if check_id is None:
                 return jsonify({'error': 'Authenticity check failed — see server logs'}), 502
 
@@ -383,10 +412,16 @@ def recheck_authenticity(document_id):
             return jsonify({'error': 'No file found for this document/document_type'}), 404
 
         document_consistency = _document_consistency_for(cursor, document_id)
+        extracted_vendor_name = _extracted_vendor_name_for(cursor, document_id, document_type)
         conn.close()
 
-        check_id = run_authenticity_check(document_id, info['file_bytes'], info['file_name'],
-                                            document_type, document_consistency=document_consistency)
+        # use_cache=False: an explicit Re-check must always be a fresh,
+        # live look — never served from the authenticity cache (that
+        # would defeat the whole point of the auditor asking to re-check).
+        check_id = run_authenticity_check(document_id, info['file_bytes'], info['file_name'], document_type,
+                                            document_consistency=document_consistency,
+                                            extracted_vendor_name=extracted_vendor_name,
+                                            use_cache=False)
         if check_id is None:
             return jsonify({'error': 'Re-check failed (Claude/Gemini call unsuccessful) — see server logs'}), 502
 

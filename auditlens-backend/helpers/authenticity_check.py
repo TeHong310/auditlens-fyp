@@ -7,8 +7,12 @@ from helpers.gemini_extractor import (
     call_gemini_sdk, prepare_gemini_image_payload, GEMINI_VISION_TIMEOUT_MS,
     GeminiRateLimitError,
 )
-from helpers.claude_extractor import analyze_document_authenticity
+from helpers.claude_extractor import (
+    analyze_document_authenticity, compute_file_hash, CLAUDE_AUTHENTICITY_PROMPT_VERSION,
+)
 from helpers.auth_rules import AUTH_RULES, _normalize_doc_type
+from helpers.entity_normalizer import is_same_company, log_entity_match_debug
+from helpers.authenticity_cache import get_cached_authenticity_result, save_authenticity_result_to_cache
 
 # Where a PDF's rendered first page (the same image sent to Gemini vision)
 # gets saved so the frontend can display it and draw the overlay markers —
@@ -229,7 +233,44 @@ def _required_for(key, document_type):
     return True
 
 
-def _normalize_visual_result(engine, raw, document_type):
+def _resolve_supplier_status(claude_supplier_name, claude_status, extracted_vendor_name):
+    """Supplier identity confidence priority order (v3 spec objective 4):
+    1. Vendor name from extraction (already-extracted, independent of
+       this vision call) — if it fuzzy-matches what Claude saw visually,
+       that's the strongest possible signal (two independent passes
+       agree). Reuses helpers/entity_normalizer.py's is_same_company(),
+       the same fuzzy matcher already trusted for Invoice/PO/GR vendor
+       matching elsewhere in this app.
+    2/3/4. Supplier letterhead / logo / address — when there's no
+       extracted vendor_name to cross-check against (or Claude found no
+       supplier_name at all), fall back to Claude's own vision-only
+       status.
+
+    Returns (status, vendor_name_matches_extraction) — the latter is
+    True/False when a real comparison happened, None when there was
+    nothing to compare (no extracted vendor_name, or Claude found no
+    supplier_name).
+    """
+    if extracted_vendor_name and claude_supplier_name:
+        result = is_same_company(extracted_vendor_name, claude_supplier_name)
+        log_entity_match_debug('Extracted vendor_name', extracted_vendor_name,
+                                'Claude-detected supplier_name', claude_supplier_name, result)
+        return ('verified' if result['match'] else 'uncertain'), result['match']
+
+    if extracted_vendor_name and not claude_supplier_name:
+        # Extraction found a vendor but the vision call couldn't
+        # visually confirm any supplier name at all — worth a second
+        # look, not an outright failure.
+        return 'uncertain', False
+
+    # No extracted vendor_name available to cross-check against — trust
+    # Claude's own vision-only classification.
+    if claude_status not in ('verified', 'not_found', 'uncertain'):
+        claude_status = 'verified' if claude_supplier_name else 'not_found'
+    return claude_status, None
+
+
+def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=None):
     """Maps either engine's raw output onto ONE unified schema (the v2
     JSON shape: status enums, per-key `required`, 3-axis integrity) so
     DB storage and the frontend never need to branch on which engine
@@ -252,7 +293,7 @@ def _normalize_visual_result(engine, raw, document_type):
         overall = raw.get('overall_result') or {}
 
         evidence = {}
-        for key in _BOX_TYPES:
+        for key, (_box_type, static_label) in _BOX_TYPES.items():
             item = evidence_raw.get(key) or {}
             box = item.get('boxes')
             status = item.get('status')
@@ -262,6 +303,8 @@ def _normalize_visual_result(engine, raw, document_type):
                 'status':      status,
                 'detected':    status == 'detected',
                 'confidence':  item.get('confidence') or 0,
+                'label':       item.get('label') or static_label,
+                'reason':      item.get('reason') or '',
                 'boxes':       box if isinstance(box, list) and len(box) == 4 else None,
                 'required':    _required_for(key, document_type),
             }
@@ -269,18 +312,19 @@ def _normalize_visual_result(engine, raw, document_type):
                 entry['type'] = item.get('type') or ''
             evidence[key] = entry
 
-        supplier_status = supplier.get('status')
-        if supplier_status not in ('verified', 'not_found', 'uncertain'):
-            supplier_status = 'verified' if supplier.get('supplier_name_detected') else 'not_found'
+        supplier_status, vendor_name_matches_extraction = _resolve_supplier_status(
+            supplier.get('supplier_name'), supplier.get('status'), extracted_vendor_name)
 
         return {
             'supplier_identity': {
-                'status':                 supplier_status,
-                'supplier_name_detected': supplier_status == 'verified',
-                'supplier_name':          supplier.get('supplier_name'),
-                'logo_detected':          bool(supplier.get('logo_detected', False)),
-                'address_detected':       bool(supplier.get('address_detected', False)),
-                'contact_block_detected': bool(supplier.get('contact_block_detected', False)),
+                'status':                          supplier_status,
+                'supplier_name_detected':          supplier_status == 'verified',
+                'supplier_name':                   supplier.get('supplier_name'),
+                'extracted_vendor_name':            extracted_vendor_name,
+                'vendor_name_matches_extraction':  vendor_name_matches_extraction,
+                'logo_detected':                   bool(supplier.get('logo_detected', False)),
+                'address_detected':                bool(supplier.get('address_detected', False)),
+                'contact_block_detected':          bool(supplier.get('contact_block_detected', False)),
             },
             'document_visual_evidence': evidence,
             'integrity_check': {
@@ -308,6 +352,8 @@ def _normalize_visual_result(engine, raw, document_type):
             'status':     'detected' if detected else 'not_detected',
             'detected':   detected,
             'confidence': 70 if detected else 0,
+            'label':      _BOX_TYPES[key][1],
+            'reason':     '',
             'boxes':      box,
             'required':   _required_for(key, document_type),
         }
@@ -322,12 +368,14 @@ def _normalize_visual_result(engine, raw, document_type):
 
     return {
         'supplier_identity': {
-            'status':                 'verified' if name else 'not_found',
-            'supplier_name_detected': name,
-            'supplier_name':          None,
-            'logo_detected':          logo,
-            'address_detected':       False,
-            'contact_block_detected': False,
+            'status':                          'verified' if name else 'not_found',
+            'supplier_name_detected':          name,
+            'supplier_name':                   None,
+            'extracted_vendor_name':            extracted_vendor_name,
+            'vendor_name_matches_extraction':  None,
+            'logo_detected':                   logo,
+            'address_detected':                False,
+            'contact_block_detected':          False,
         },
         'document_visual_evidence': {
             'company_logo':     _entry('company_logo', logo, _box('has_company_logo')),
@@ -352,16 +400,21 @@ def _normalize_visual_result(engine, raw, document_type):
 
 def _flatten_boxes(evidence):
     """Converts the unified schema's per-category boxes into the flat
-    list the frontend overlay draws (v2 spec objective 2):
-    [{"type": "...", "label": "...", "x": ..., "y": ..., "width": ...,
-      "height": ..., "confidence": 0-1}]. `type` is the stable machine
-    key the frontend keys color/click-highlight off of; `confidence` is
-    the per-category confidence normalized from 0-100 to 0-1. Box
-    coordinates are the same 0-1000-normalized scale already used by the
-    legacy signal_boxes column — only the shape (corner pair vs.
-    x/y/width/height) differs, so no new coordinate system is introduced."""
+    list the frontend overlay draws (v3 spec objective 3):
+    [{"type": "...", "label": "...", "confidence": 0-1, "reason": "...",
+      "x": ..., "y": ..., "width": ..., "height": ...}]. `type` is the
+    stable machine key the frontend keys color/click-highlight off of;
+    `label`/`reason` prefer Claude's own per-detection description (set
+    in _normalize_visual_result) over the static category name, falling
+    back to it when Claude didn't provide one (or for the Gemini/
+    fallback engines, which have no per-instance labeling at all);
+    `confidence` is the per-category confidence normalized from 0-100 to
+    0-1. Box coordinates are the same 0-1000-normalized scale already
+    used by the legacy signal_boxes column — only the shape (corner pair
+    vs. x/y/width/height) differs, so no new coordinate system is
+    introduced."""
     boxes = []
-    for key, (box_type, label) in _BOX_TYPES.items():
+    for key, (box_type, static_label) in _BOX_TYPES.items():
         item = evidence.get(key) or {}
         box = item.get('boxes')
         if not (isinstance(box, list) and len(box) == 4):
@@ -369,7 +422,8 @@ def _flatten_boxes(evidence):
         ymin, xmin, ymax, xmax = box
         boxes.append({
             'type':       box_type,
-            'label':      label,
+            'label':      item.get('label') or static_label,
+            'reason':     item.get('reason') or '',
             'x':          xmin,
             'y':          ymin,
             'width':      xmax - xmin,
@@ -420,7 +474,8 @@ def save_rendered_authenticity_image(document_id, document_type, file_bytes, fil
         print(f"DEBUG Authenticity: failed to save rendered PDF image: {type(e).__name__}: {e}")
 
 
-def run_authenticity_check(document_id, file_bytes, file_name, document_type, document_consistency=None):
+def run_authenticity_check(document_id, file_bytes, file_name, document_type, document_consistency=None,
+                            extracted_vendor_name=None, use_cache=True):
     """
     Main entry — Claude Vision primary, Gemini fallback, OCR-text-only as
     the last-resort safety net. NEVER raises — pipeline safe. Called
@@ -438,36 +493,67 @@ def run_authenticity_check(document_id, file_bytes, file_name, document_type, do
       routes/auditor.py's _build_comparison() — this function only
       stores it, it does not compute cross-document consistency itself
       (Claude is not asked to reason across Invoice/PO/GR).
+    extracted_vendor_name: the vendor_name the (separate) extraction
+      pipeline already found for this document, if any — passed to
+      Claude as a hint and used server-side to cross-check its visually-
+      detected supplier_name (see _resolve_supplier_status).
+    use_cache: consult/populate helpers/authenticity_cache.py before
+      calling Claude/Gemini, keyed by (file_hash, document_type,
+      CLAUDE_AUTHENTICITY_PROMPT_VERSION) — skips a live API call
+      entirely for a document whose exact bytes were already analyzed.
+      POST /authenticity/<id>/recheck passes False: an explicit re-check
+      must always be a fresh, live look, never served from cache.
 
     Returns check_id on success, None on failure (e.g. document doesn't exist).
     """
     try:
         save_rendered_authenticity_image(document_id, document_type, file_bytes, file_name)
         image = prepare_gemini_image_payload(file_bytes, file_name)
+        file_hash = compute_file_hash(file_bytes)
 
-        claude_result = analyze_document_authenticity(image, document_type)
-        if _authenticity_is_complete(claude_result):
-            engine = 'claude'
-            raw_result = claude_result
-            print("DEBUG Authenticity: engine=claude")
+        cached_engine, cached_raw = (None, None)
+        if use_cache:
+            cached_engine, cached_raw = get_cached_authenticity_result(
+                file_hash, document_type, CLAUDE_AUTHENTICITY_PROMPT_VERSION)
+
+        if cached_raw is not None:
+            engine = cached_engine
+            raw_result = cached_raw
+            print(f"AUTH CACHE HIT | file_hash={file_hash[:12]}... document_type={document_type} engine={engine}")
         else:
-            rate_limited = False
-            gemini_result = None
-            try:
-                gemini_result = _call_gemini_vision(file_bytes, file_name)
-            except GeminiRateLimitError:
-                rate_limited = True
-            if gemini_result:
-                engine = 'gemini'
-                raw_result = gemini_result
-                print("DEBUG Authenticity: engine=gemini (Claude fallback)")
-            else:
-                engine = 'fallback'
-                raw_result = _fallback_from_ocr_text(None, rate_limited=rate_limited)
-                print("DEBUG Authenticity: Claude and Gemini both unavailable, using OCR-text fallback"
-                      + (" (rate-limited)" if rate_limited else ""))
+            print(f"AUTH CACHE MISS | file_hash={file_hash[:12]}... document_type={document_type}")
 
-        visual = _normalize_visual_result(engine, raw_result, document_type)
+            claude_result = analyze_document_authenticity(image, document_type,
+                                                            extracted_vendor_name=extracted_vendor_name)
+            if _authenticity_is_complete(claude_result):
+                engine = 'claude'
+                raw_result = claude_result
+                print("DEBUG Authenticity: engine=claude")
+            else:
+                rate_limited = False
+                gemini_result = None
+                try:
+                    gemini_result = _call_gemini_vision(file_bytes, file_name)
+                except GeminiRateLimitError:
+                    rate_limited = True
+                if gemini_result:
+                    engine = 'gemini'
+                    raw_result = gemini_result
+                    print("DEBUG Authenticity: engine=gemini (Claude fallback)")
+                else:
+                    engine = 'fallback'
+                    raw_result = _fallback_from_ocr_text(None, rate_limited=rate_limited)
+                    print("DEBUG Authenticity: Claude and Gemini both unavailable, using OCR-text fallback"
+                          + (" (rate-limited)" if rate_limited else ""))
+
+            # Only a real Claude/Gemini result is worth caching — the
+            # OCR-text fallback is a transient-unavailability path, not
+            # something to "remember" for a whole document.
+            if engine in ('claude', 'gemini'):
+                save_authenticity_result_to_cache(file_hash, document_type,
+                                                   CLAUDE_AUTHENTICITY_PROMPT_VERSION, engine, raw_result)
+
+        visual = _normalize_visual_result(engine, raw_result, document_type, extracted_vendor_name)
         evidence = visual['document_visual_evidence']
 
         chop = evidence['stamp']['detected']

@@ -327,6 +327,44 @@ def _ensure_claude_cache_table():
         print(f'WARNING: could not create claude_extraction_cache table: {type(e).__name__}: {e}')
 
 
+def _ensure_authenticity_cache_table():
+    """Same purpose/pattern as _ensure_claude_cache_table() above, for
+    the authenticity engine (see helpers/authenticity_cache.py) — a
+    SEPARATE table so this cost-optimization addition carries zero risk
+    to the existing extraction caches or the authenticity_checks table
+    itself. authenticity_version is part of the unique key so a prompt/
+    schema change (bumping CLAUDE_AUTHENTICITY_PROMPT_VERSION) never
+    serves a stale-shaped cached result."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS authenticity_result_cache (
+                id SERIAL PRIMARY KEY,
+                file_hash VARCHAR(64) NOT NULL,
+                document_type VARCHAR(10) NOT NULL,
+                authenticity_version VARCHAR(10) NOT NULL,
+                engine VARCHAR(10) NOT NULL,
+                raw_result JSONB NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        ''')
+        cursor.execute('''
+            SELECT 1 FROM pg_constraint WHERE conname = 'authenticity_result_cache_hash_type_version_key'
+        ''')
+        if not cursor.fetchone():
+            cursor.execute('''
+                ALTER TABLE authenticity_result_cache
+                ADD CONSTRAINT authenticity_result_cache_hash_type_version_key
+                UNIQUE (file_hash, document_type, authenticity_version)
+            ''')
+        conn.commit()
+        conn.close()
+        print('authenticity_result_cache table ready')
+    except Exception as e:
+        print(f'WARNING: could not create authenticity_result_cache table: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -355,6 +393,7 @@ _ensure_invoice_currency_column()
 _ensure_document_line_items_table()
 _ensure_gemini_cache_table()
 _ensure_claude_cache_table()
+_ensure_authenticity_cache_table()
 
 @app.route('/')
 def hello_world():

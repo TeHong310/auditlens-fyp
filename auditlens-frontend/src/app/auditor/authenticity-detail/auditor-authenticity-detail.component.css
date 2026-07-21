@@ -354,6 +354,26 @@
 .badge-uncertain  { background: var(--warning-bg); color: var(--warning); }
 .badge-not-found  { background: var(--danger-bg); color: var(--danger); }
 
+.match-note {
+  font-size: 11.5px;
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.match-note-ok   { color: var(--success); }
+.match-note-warn { color: var(--warning); }
+
+.evidence-item { padding: 2px 0; }
+.evidence-item:last-child .checklist-row { border-bottom: none; }
+
+.evidence-reason {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-style: italic;
+  padding: 0 0 6px 32px;
+  line-height: 1.4;
+}
+
 .risk-chip {
   font-size: 10.5px;
   font-weight: 700;

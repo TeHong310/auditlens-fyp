@@ -5474,3 +5474,116 @@ Setup/config needed:
      three as independent results (first view will be slower than usual
      since up to 3 AI calls now run before the banner returns; every
      view after that is instant, cached).
+
+----------------------------------------------------------------------
+
+Date: 2026-07-21
+
+What was changed:
+  Backend (auditlens-backend/) — Authenticity Vision v2 Improvement,
+  tightening Claude's accuracy and adding cost controls to the AI
+  Authentication engine:
+    - helpers/claude_extractor.py: rewrote CLAUDE_AUTHENTICITY_PROMPT
+      (bumped to CLAUDE_AUTHENTICITY_PROMPT_VERSION='v3') with an
+      explicit buyer-vs-supplier warning and worked example (a PO's own
+      letterhead is the BUYER issuing it, not supplier evidence — e.g.
+      "EMITS TECHNOLOGY SDN BHD" on a PO is the buyer; on an Invoice
+      Coilcraft issues, Coilcraft's letterhead is the supplier and a
+      "Ship To: EMITS..." block is only the receiving party), stricter
+      per-category box exclusion rules (logo: no name/address/reg
+      number; company name: no ATTN/address/Ship To/Bill To; address:
+      never the Bill To/Ship To address; stamp: no printed "CHP" text,
+      item codes, or handwritten AP notes), and a per-detection
+      `label`/`reason` pair so every finding states what it saw and
+      why. analyze_document_authenticity() gained an
+      extracted_vendor_name parameter — the already-extracted
+      vendor_name is passed to Claude as a hint ("verify, don't blindly
+      trust") via a templated prompt section.
+    - helpers/authenticity_check.py: added _resolve_supplier_status(),
+      which cross-checks Claude's visually-detected supplier_name
+      against the vendor_name the (separate) extraction pipeline
+      already found, using the existing entity_normalizer.
+      is_same_company() fuzzy matcher (already trusted for Invoice/PO/
+      GR vendor matching elsewhere) — a match promotes supplier_identity
+      to "verified" with vendor_name_matches_extraction=true; a mismatch
+      surfaces as "uncertain" instead of silently trusting either source
+      alone. _flatten_boxes() now carries `label`/`reason` through to
+      the stored `boxes` column. run_authenticity_check() gained
+      extracted_vendor_name (passed through) and use_cache (default
+      True) parameters, and now checks/populates the new authenticity
+      cache before calling Claude/Gemini, logging AUTH CACHE HIT / AUTH
+      CACHE MISS.
+    - helpers/authenticity_cache.py (new): DB-backed cache for the
+      authenticity engine's raw output, keyed by (file_hash,
+      document_type, authenticity_version) — mirrors helpers/
+      claude_cache.py's pattern. Caches the RAW engine output, not the
+      final normalized result, so a later extraction correction doesn't
+      require invalidating it; only successful Claude/Gemini results are
+      cached, never the OCR-text-only fallback.
+    - app.py: added _ensure_authenticity_result_cache_table() (new
+      authenticity_result_cache table, additive only).
+    - routes/authenticity.py: added _extracted_vendor_name_for() (looks
+      up the already-extracted vendor_name for a document_id/type) and
+      threads it into all 3 run_authenticity_check() call sites (GET
+      on-demand, sibling checks, recheck). POST /recheck passes
+      use_cache=False — an explicit re-check must always be a fresh,
+      live look, never served from cache.
+    - tests/extraction/test_authenticity_ai.py /
+      test_authenticity_siblings.py: updated for the new schema fields
+      (label/reason, vendor cross-check) and extended with cache-hit /
+      cache-miss / fallback-never-cached / use_cache=False test cases.
+
+  Frontend (auditlens-frontend/) — auditor-authenticity-detail component
+  only: shows each Visual Evidence row's `reason` as italic subtext, and
+  a Supplier Identity match note ("Matches extracted vendor ..." /
+  "Differs from extracted vendor ... — worth a second look") driven by
+  the new vendor_name_matches_extraction field.
+
+Why:
+  Real testing surfaced two accuracy problems (Claude sometimes
+  misclassified the BUYER's name/logo as supplier evidence, e.g. an
+  EMITS-issued PO; bounding boxes were still catching adjacent
+  text/whitespace) and a cost concern (every authenticity check — even
+  of a document already analyzed — spent a live Claude/Gemini call).
+  Fixed the accuracy problems with an explicit prompt rewrite plus a
+  server-side cross-check against data the app already has (the
+  extraction pipeline's vendor_name), and fixed the cost concern with a
+  file-hash cache that a Re-check deliberately bypasses. Per explicit
+  instruction, extraction and the matching engine are completely
+  untouched — only the Authenticity module's own files changed.
+
+Testing:
+  - `python tests/extraction/run_all.py` — all 9 suites pass, zero real
+    Anthropic/Gemini API calls (mocked).
+  - `python -c "import app; print('APP IMPORT OK')"` — confirms the new
+    authenticity_result_cache table migrates cleanly.
+  - Full end-to-end proof against the REAL dev Postgres DB (only the
+    Claude call mocked): created a synthetic document_id with an
+    Invoice (extracted vendor_name deliberately OCR-noisy,
+    "COLCRAFT SINGAPORE PTE LTD") and a PO. Confirmed: (1) 3 Claude
+    calls total for 3 distinct document_type checks (invoice + its 2
+    siblings); (2) re-viewing the SAME invoice logged "AUTH CACHE HIT"
+    and did NOT trigger a 4th Claude call; (3) the vendor cross-check
+    correctly matched the noisy extracted name against Claude's clean
+    "COILCRAFT SINGAPORE PTE LTD" at 97.3% similarity, setting
+    vendor_name_matches_extraction=true; (4) every stored box carried
+    type/label/reason/confidence. Then deleted every synthetic row.
+  - `git diff --stat` / targeted diffs confirmed zero changes to
+    routes/documents.py, routes/auditor.py, routes/matching.py,
+    helpers/gemini_extractor.py, extraction_engine.py, ocr_helper.py,
+    entity_normalizer.py, auth_rules.py, and that claude_extractor.py's
+    diff touches only the authenticity section (extract_with_claude/
+    CLAUDE_SYSTEM_PROMPT are byte-for-byte unchanged).
+  - `npx ng build --configuration development` — builds cleanly.
+  - Real box-tightness verification against the actual Coilcraft/EMITS
+    PDFs needs a live ANTHROPIC_API_KEY, not present in this sandbox —
+    same disclosed caveat as prior Claude-integration work; for the user
+    to verify post-deploy.
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND — picks up the new
+     authenticity_result_cache table automatically on next boot (same
+     auto-migrate-on-startup pattern as every other schema change here).
+  2. Redeploy the Render FRONTEND — picks up the reason/vendor-match-note
+     display additions.
+  3. No new environment variables.

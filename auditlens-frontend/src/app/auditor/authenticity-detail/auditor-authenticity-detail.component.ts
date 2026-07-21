@@ -395,6 +395,29 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return 'Not Found';
   }
 
+  // Cross-check against the vendor_name the (separate) extraction
+  // pipeline already found — the top-priority supplier-identity signal
+  // (v3 spec objective 4). null = nothing to compare (no extracted
+  // vendor_name, or the vision engine found no supplier_name at all).
+  get vendorMatchNote(): string {
+    const supplier = this.supplierIdentity;
+    if (!supplier || supplier.vendor_name_matches_extraction === null || supplier.vendor_name_matches_extraction === undefined) {
+      return '';
+    }
+    if (supplier.vendor_name_matches_extraction) {
+      return `Matches extracted vendor "${supplier.extracted_vendor_name}"`;
+    }
+    return `Differs from extracted vendor "${supplier.extracted_vendor_name}" — worth a second look`;
+  }
+
+  get vendorMatchClass(): string {
+    const supplier = this.supplierIdentity;
+    if (!supplier || supplier.vendor_name_matches_extraction === null || supplier.vendor_name_matches_extraction === undefined) {
+      return '';
+    }
+    return supplier.vendor_name_matches_extraction ? 'match-note-ok' : 'match-note-warn';
+  }
+
   // Click a sidebar evidence row (section 8: interactive highlight) —
   // pulses/highlights the matching box on the image, if one was located.
   selectBox(type: string) {

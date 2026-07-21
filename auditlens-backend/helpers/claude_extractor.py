@@ -238,6 +238,11 @@ extract_with_claude_test = extract_with_claude
 # how to talk to the Anthropic Messages API.
 # ============================================================
 
+# Bumped whenever this prompt/schema changes meaningfully — part of the
+# authenticity cache key (helpers/authenticity_cache.py) so a stale
+# cached result shaped for an older prompt version is never served.
+CLAUDE_AUTHENTICITY_PROMPT_VERSION = 'v3'
+
 CLAUDE_AUTHENTICITY_PROMPT = """You are an enterprise AP (Accounts Payable) audit AI performing VISUAL
 document authenticity verification. You are NOT doing OCR/field
 extraction — you are inspecting the document image itself: who issued
@@ -245,13 +250,28 @@ it, whether the expected visual marks (logo, stamp, signature) are
 present and where EXACTLY, and whether anything looks visually
 tampered with.
 
-SUPPLIER IDENTITY:
+SUPPLIER IDENTITY — the single most common mistake to avoid is
+confusing the BUYER for the SUPPLIER:
 - Identify the SUPPLIER issuing this document (the seller/biller) using
-  its letterhead, logo, and address block — NEVER the Bill To / Ship To
-  / Buyer / Customer / Purchaser / Receiver company. Example: if the
-  letterhead reads "Coilcraft Singapore Pte Ltd" and a "Ship To:" block
-  further down reads "EMITS TECHNOLOGY SDN BHD", the supplier is
-  Coilcraft — EMITS is only the receiving party.
+  its letterhead, logo, and address block — the letterhead at the very
+  top of the document (or the company the document is FROM) is almost
+  always the supplier.
+- NEVER treat the Bill To / Ship To / Buyer / Customer / Purchaser /
+  Receiver company's name, logo, or address as supplier evidence, even
+  if it is printed larger, higher on the page, or more prominently than
+  the actual supplier's letterhead.
+  Example: a Purchase Order's letterhead reads "EMITS TECHNOLOGY SDN
+  BHD" because EMITS is the BUYER issuing the PO — on THIS document
+  EMITS is the buyer's own header, not supplier evidence. The supplier
+  is whichever company the PO is addressed TO / ordering FROM (e.g.
+  "Coilcraft Singapore Pte Ltd" printed as the vendor/supplier field).
+  Conversely, on Coilcraft's own Invoice, Coilcraft's letterhead IS the
+  supplier, and a "Ship To: EMITS TECHNOLOGY SDN BHD" block further down
+  is only the receiving party — EMITS must NOT become the detected
+  supplier_name/logo on that document.
+  In short: which company is the supplier depends on WHOSE document
+  this is (who issued it), not which company's name/logo is largest or
+  most prominent.
 - Correct obvious OCR/scan spelling noise in the supplier name using
   context — e.g. "COLCRAFT", "COILCRAF", "COILCRAFTT" should all resolve
   to the one real, most plausible full name (e.g. "COILCRAFT SINGAPORE
@@ -260,35 +280,53 @@ SUPPLIER IDENTITY:
   "not_found" if there's no discernible supplier identity at all on the
   document, "uncertain" if something is present but ambiguous (e.g.
   multiple plausible company names, or the identity block is illegible).
+{vendor_hint_block}
 
 VISUAL EVIDENCE — for EACH of company_logo, company_name,
 supplier_address, stamp, signature, report a status ("detected" or
-"not_detected"), your confidence (0-100), and a bounding box IF you can
-locate it (even when a signal is not_detected but there's a plausible
-location for it, e.g. a blank signature line).
+"not_detected"), your confidence (0-100), a short `label` describing
+specifically what you found (e.g. "Coilcraft red logo mark", "COILCRAFT
+SINGAPORE PTE LTD header line"), a `reason` (one short phrase for why
+you classified it that way, e.g. "supplier letterhead graphic, top-left
+of page" or "printed inside Ship To block, this is the buyer not the
+supplier"), and a bounding box IF you can locate it (even when a signal
+is not_detected but there's a plausible location for it, e.g. a blank
+signature line).
+- company_logo / supplier_address: MUST belong to the SUPPLIER
+  identified above — a logo or address block that belongs to the Ship
+  To / Buyer / Customer company must be reported as not_detected here
+  (it is not supplier evidence), never substituted in just because it's
+  the most visible logo/address on the page.
 
 STRICT BOUNDING BOX RULES — every box must be TIGHT to only that one
 element, never a region that also happens to contain other things:
 
 1. company_logo — ONLY the graphical logo/brand symbol itself.
-   DO NOT include the company name text, the address, or a registration
-   number in this box, even if they sit right next to the logo.
+   DO NOT include the company name text, the address, registration
+   number, or surrounding whitespace in this box, even if they sit
+   right next to the logo.
    Wrong:  a box spanning [logo + "COILCRAFT SINGAPORE PTE LTD" + address]
    Correct: a box tightly around just the red Coilcraft mark/icon.
 
 2. company_name — ONLY the single legal supplier name line (e.g.
    "COILCRAFT SINGAPORE PTE LTD").
-   DO NOT include "ATTN", the address, "Customer:", "Ship To:", or
-   "Bill To:" labels/values in this box, even on an adjacent line.
+   DO NOT include "ATTN", the address, phone, email, "Customer:",
+   "Ship To:", or "Bill To:" labels/values in this box, even on an
+   adjacent line.
 
-3. stamp — ONLY the actual ink/stamp area itself.
-   DO NOT include nearby handwritten notes, approval-signature fields,
-   or table/line-item contents the stamp happens to be printed over or
-   near.
+3. supplier_address — ONLY the supplier's own registered address block.
+   DO NOT box the Bill To or Ship To address — those belong to the
+   buyer, not the supplier, and must not be reported as supplier_address
+   evidence at all.
 
-4. supplier_address / signature — same tightness principle: bound only
-   that specific text block or ink mark, not surrounding labels or
-   whitespace.
+4. stamp — ONLY the actual ink/stamp area itself: a physical chop,
+   received stamp, QC stamp, or official seal.
+   DO NOT box: printed text, item/part codes in a table, the printed
+   abbreviation "CHP" as text, or nearby handwritten AP reviewer notes —
+   none of these are a stamp even if they sit close to one.
+
+5. signature — same tightness principle: bound only the handwritten ink
+   mark itself, not surrounding labels or whitespace.
 
 - Bounding boxes: normalized to a 0-1000 scale relative to the full
   image, top-left = [0,0], bottom-right = [1000,1000], format
@@ -322,36 +360,36 @@ confidently determine — never guess.
 
 Return ONLY valid JSON, no markdown, no code fences, no explanation —
 exactly this structure:
-{
-  "supplier_identity": {
+{{
+  "supplier_identity": {{
     "status": "verified" or "not_found" or "uncertain",
     "supplier_name": "string or null",
     "logo_detected": true or false,
     "address_detected": true or false,
     "contact_block_detected": true or false
-  },
-  "document_visual_evidence": {
-    "company_logo":     {"status": "detected" or "not_detected", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null},
-    "company_name":      {"status": "detected" or "not_detected", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null},
-    "supplier_address":  {"status": "detected" or "not_detected", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null},
-    "stamp":             {"status": "detected" or "not_detected", "type": "string or empty", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null},
-    "signature":         {"status": "detected" or "not_detected", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}
-  },
-  "integrity_check": {
+  }},
+  "document_visual_evidence": {{
+    "company_logo":     {{"status": "detected" or "not_detected", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},
+    "company_name":      {{"status": "detected" or "not_detected", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},
+    "supplier_address":  {{"status": "detected" or "not_detected", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},
+    "stamp":             {{"status": "detected" or "not_detected", "type": "string or empty", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},
+    "signature":         {{"status": "detected" or "not_detected", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}}
+  }},
+  "integrity_check": {{
     "copy_paste_risk": "low" or "medium" or "high",
     "font_consistency": "low" or "medium" or "high",
     "alteration_risk": "low" or "medium" or "high",
     "reason": "string"
-  },
-  "overall_result": {
+  }},
+  "overall_result": {{
     "status": "PASS" or "REVIEW" or "FAIL",
     "risk_level": "LOW" or "MEDIUM" or "HIGH",
     "reasons": ["string", ...]
-  }
-}"""
+  }}
+}}"""
 
 
-def analyze_document_authenticity(image, document_type):
+def analyze_document_authenticity(image, document_type, extracted_vendor_name=None):
     """Claude Vision visual authenticity check. Makes ONE real Anthropic
     API call. Same fail-soft contract as extract_with_claude(): returns
     the parsed dict on success, or None on any failure (no API key,
@@ -362,24 +400,42 @@ def analyze_document_authenticity(image, document_type):
     document_type: 'invoice' | 'po' | 'gr' — for logging only; the prompt
       itself is document-type-agnostic (visual verification applies the
       same way to all three).
+    extracted_vendor_name: the vendor_name the (separate, already-run)
+      extraction pipeline identified for this document, if any — passed
+      through as a hint so Claude can cross-check its own visual
+      finding against it rather than working blind; Claude is
+      explicitly told to verify, not blindly trust, this hint (the
+      extraction pipeline can itself be wrong, e.g. from an OCR-noisy
+      scan).
     """
     client = _get_claude_client()
     if client is None:
         print("DEBUG AUTHENTICATION AI | skipped: ANTHROPIC_API_KEY not set")
         return None
 
+    if extracted_vendor_name:
+        vendor_hint_block = (
+            f'\nEXTRACTION HINT: a separate field-extraction pass already read the vendor '
+            f'name on this document as "{extracted_vendor_name}". Use this as a hint to help '
+            f'resolve ambiguity, but VERIFY it visually rather than blindly trusting it — '
+            f'confirm or correct it based on what the letterhead/logo actually show.\n'
+        )
+    else:
+        vendor_hint_block = ''
+    system_prompt = CLAUDE_AUTHENTICITY_PROMPT.format(vendor_hint_block=vendor_hint_block)
+
     mime_type, image_bytes = image
     user_text = "Analyze this document image for authenticity per the schema in your instructions."
 
     print(f"DEBUG AUTHENTICATION AI | request | model={Config.CLAUDE_MODEL!r} | "
           f"document_type={document_type!r} | mime={mime_type} | "
-          f"image_size_kb={len(image_bytes) / 1024:.1f}")
+          f"image_size_kb={len(image_bytes) / 1024:.1f} | extracted_vendor_name={extracted_vendor_name!r}")
 
     try:
         response = client.messages.create(
             model=Config.CLAUDE_MODEL,
             max_tokens=2048,
-            system=CLAUDE_AUTHENTICITY_PROMPT,
+            system=system_prompt,
             messages=[{
                 "role": "user",
                 "content": [

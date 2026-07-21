@@ -74,10 +74,11 @@ class _Patched:
 
     def __enter__(self):
         self._originals = {
-            'get_db_connection':         ra.get_db_connection,
-            '_lookup_file_info':         ra._lookup_file_info,
-            '_document_consistency_for': ra._document_consistency_for,
-            'run_authenticity_check':    ra.run_authenticity_check,
+            'get_db_connection':          ra.get_db_connection,
+            '_lookup_file_info':          ra._lookup_file_info,
+            '_document_consistency_for':  ra._document_consistency_for,
+            '_extracted_vendor_name_for': ra._extracted_vendor_name_for,
+            'run_authenticity_check':     ra.run_authenticity_check,
         }
 
         existing_types = self.existing_types
@@ -95,8 +96,14 @@ class _Patched:
             return None if self.consistency_fails else {'vendor_match': True}
         ra._document_consistency_for = fake_document_consistency_for
 
-        def fake_run_authenticity_check(document_id, file_bytes, file_name, doc_type, document_consistency=None):
+        ra._extracted_vendor_name_for = lambda cursor, document_id, doc_type: 'COILCRAFT SINGAPORE PTE LTD'
+
+        self.vendor_names_received = {}
+
+        def fake_run_authenticity_check(document_id, file_bytes, file_name, doc_type,
+                                         document_consistency=None, extracted_vendor_name=None):
             self.run_calls.append(doc_type)
+            self.vendor_names_received[doc_type] = extracted_vendor_name
             return 123
         ra.run_authenticity_check = fake_run_authenticity_check
 
@@ -138,6 +145,14 @@ def run_case_all_three_types_checked_independently():
     check('both siblings (po, gr) checked in one call', sorted(p.run_calls) == ['gr', 'po'], p.run_calls)
 
 
+def run_case_extracted_vendor_name_threaded_to_sibling_check():
+    print('Case: each sibling check is passed the vendor_name extracted for THAT sibling type')
+    with _Patched(existing_types=set(), files_present={'po'}) as p:
+        ra._ensure_sibling_checks(1, primary_type='invoice')
+    check('extracted_vendor_name reached the sibling run_authenticity_check call',
+          p.vendor_names_received.get('po') == 'COILCRAFT SINGAPORE PTE LTD', p.vendor_names_received)
+
+
 def run_case_sibling_failure_does_not_raise():
     print('Case: a sibling check that raises internally does not propagate')
     with _Patched(existing_types=set(), files_present={'po'}) as p:
@@ -156,6 +171,7 @@ if __name__ == '__main__':
     run_case_existing_sibling_not_rechecked()
     run_case_no_file_no_check()
     run_case_all_three_types_checked_independently()
+    run_case_extracted_vendor_name_threaded_to_sibling_check()
     run_case_sibling_failure_does_not_raise()
 
     print()

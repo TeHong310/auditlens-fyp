@@ -94,6 +94,7 @@
         <div class="checklist-box">
           <p class="section-label">Supplier Identity</p>
           <p class="status-badge" [ngClass]="supplierStatusClass()">{{ supplierStatusLabel() }}</p>
+          <p class="match-note" *ngIf="vendorMatchNote" [ngClass]="vendorMatchClass">{{ vendorMatchNote }}</p>
           <div class="checklist-row">
             <span class="checklist-icon" [ngClass]="supplierIdentity?.supplier_name_detected ? 'icon-yes' : 'icon-no'">
               <i class="ph-duotone" [ngClass]="supplierIdentity?.supplier_name_detected ? 'ph-check' : 'ph-x'"></i>
@@ -127,15 +128,18 @@
 
         <div class="checklist-box">
           <p class="section-label">Visual Evidence</p>
-          <div class="checklist-row evidence-row" *ngFor="let key of evidenceKeys"
-               (click)="selectBox(boxTypeFor(key))"
-               [ngClass]="{'evidence-row-active': selectedBoxType === boxTypeFor(key)}">
-            <span class="checklist-icon" [ngClass]="evidenceStatusClass(key)">
-              <i class="ph-duotone"
-                 [ngClass]="evidenceStatusClass(key) === 'icon-yes' ? 'ph-check' : (evidenceStatusClass(key) === 'icon-na' ? 'ph-minus' : 'ph-x')"></i>
-            </span>
-            <span class="checklist-label">{{ evidenceLabels[key] }}</span>
-            <span class="checklist-located" [ngClass]="{'located-na': evidenceStatusClass(key) === 'icon-na'}">{{ evidenceStatusLabel(key) }}</span>
+          <div class="evidence-item" *ngFor="let key of evidenceKeys">
+            <div class="checklist-row evidence-row"
+                 (click)="selectBox(boxTypeFor(key))"
+                 [ngClass]="{'evidence-row-active': selectedBoxType === boxTypeFor(key)}">
+              <span class="checklist-icon" [ngClass]="evidenceStatusClass(key)">
+                <i class="ph-duotone"
+                   [ngClass]="evidenceStatusClass(key) === 'icon-yes' ? 'ph-check' : (evidenceStatusClass(key) === 'icon-na' ? 'ph-minus' : 'ph-x')"></i>
+              </span>
+              <span class="checklist-label">{{ evidenceLabels[key] }}</span>
+              <span class="checklist-located" [ngClass]="{'located-na': evidenceStatusClass(key) === 'icon-na'}">{{ evidenceStatusLabel(key) }}</span>
+            </div>
+            <p class="evidence-reason" *ngIf="evidenceEntry(key)?.reason">{{ evidenceEntry(key).reason }}</p>
           </div>
         </div>
 
