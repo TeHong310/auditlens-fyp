@@ -26,6 +26,11 @@ Thumbs.db
 # Uploads
 uploads/
 
+# Claude test extraction cache (scripts/test_claude_extraction.py) —
+# holds real document extraction results from manual testing, never
+# meant to be committed.
+scripts/.claude_test_cache/
+
 # Database dumps
 *.dump
 *.sql

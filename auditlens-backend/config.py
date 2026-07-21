@@ -53,6 +53,15 @@ class Config:
     if GEMINI_MODEL.startswith('models/'):
         GEMINI_MODEL = GEMINI_MODEL[len('models/'):]
 
+    # Anthropic Claude API — TEST-MODE ONLY as of this addition (see
+    # helpers/claude_extractor.py / scripts/test_claude_extraction.py).
+    # NOT wired into the production upload pipeline (routes/documents.py
+    # still calls Gemini only) — loaded here purely so the manual test
+    # script and any future opt-in usage read the key from the
+    # environment, never hardcoded, same convention as GEMINI_API_KEY.
+    ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
+    CLAUDE_MODEL = os.environ.get('CLAUDE_MODEL', 'claude-sonnet-5').strip()
+
     # CORS - comma-separated list of allowed frontend origins
     FRONTEND_ORIGINS = [
         origin.strip()
@@ -74,3 +83,7 @@ if Config.GEMINI_API_KEY:
 else:
     print("DEBUG Gemini key loaded: none (GEMINI_API_KEY not set)")
 print(f"DEBUG Gemini model loaded: raw_env={Config._raw_gemini_model!r} normalized={Config.GEMINI_MODEL!r}")
+if Config.ANTHROPIC_API_KEY:
+    print(f"DEBUG Anthropic key loaded: ...{Config.ANTHROPIC_API_KEY[-4:]} (test-mode only, not used in production upload flow)")
+else:
+    print("DEBUG Anthropic key loaded: none (ANTHROPIC_API_KEY not set)")
