@@ -186,16 +186,23 @@ def _compute_authenticity_status(document_type, signals):
     return 'passed' if passed else 'warning'
 
 
-# Display labels for the new named bounding-box list (spec section 6/7) —
-# also the frontend's 5-color legend keys (Blue=logo, Green=name,
-# Purple=address, Red=stamp, Orange=signature).
-_BOX_LABELS = {
-    'company_logo':     'Supplier Logo',
-    'company_name':     'Company Name',
-    'supplier_address':  'Supplier Address',
-    'stamp':             'Stamp/Chop',
-    'signature':          'Signature',
+# Machine type key + display label for the flattened bounding-box list
+# (v2 spec objective 2) — `type` is what the frontend keys color/click-
+# highlight off of (stable across relabeling), `label` is what's shown.
+_BOX_TYPES = {
+    'company_logo':     ('supplier_logo',    'Company Logo'),
+    'company_name':     ('company_name',     'Company Name'),
+    'supplier_address': ('supplier_address', 'Supplier Address'),
+    'stamp':             ('company_stamp',    'Company Chop / Stamp'),
+    'signature':          ('signature',        'Signature'),
 }
+
+# Evidence keys that are NEVER required regardless of document type — a
+# missing signature must not render as a false-negative red X (v2 spec
+# objective 4: "Signature must NOT automatically fail... many invoices
+# are computer generated"). Stamp requiredness is document-type-
+# dependent (see _stamp_required); every other key is always expected.
+_NEVER_REQUIRED = {'signature'}
 
 
 def _stamp_required(document_type):
@@ -211,13 +218,27 @@ def _stamp_required(document_type):
     return 'company_chop' in rules.get('required', []) or 'company_chop' in rules.get('important', [])
 
 
-def _normalize_visual_result(engine, raw):
-    """Maps either engine's raw output onto ONE unified schema (the
-    section-1 JSON shape) so DB storage and the frontend never need to
-    branch on which engine produced the result.
+def _required_for(key, document_type):
+    """Whether this evidence category is normally expected on this
+    document type — drives the frontend's "Not required" (neutral)
+    state instead of a false-negative-looking red X."""
+    if key in _NEVER_REQUIRED:
+        return False
+    if key == 'stamp':
+        return _stamp_required(document_type)
+    return True
+
+
+def _normalize_visual_result(engine, raw, document_type):
+    """Maps either engine's raw output onto ONE unified schema (the v2
+    JSON shape: status enums, per-key `required`, 3-axis integrity) so
+    DB storage and the frontend never need to branch on which engine
+    produced the result.
 
     engine == 'claude': raw is already close to the target shape —
-      still defensively defaulted in case a sub-object is missing.
+      still defensively defaulted in case a sub-object is missing, and
+      accepts the pre-v2 boolean `detected` shape too (defensive against
+      a cached/older response).
     engine in ('gemini', 'fallback'): raw is the OLD 4-signal schema
       (has_company_chop/logo/name/signature + signal_boxes) — mapped
       into the same shape with tampering/address/contact left
@@ -231,21 +252,31 @@ def _normalize_visual_result(engine, raw):
         overall = raw.get('overall_result') or {}
 
         evidence = {}
-        for key in _BOX_LABELS:
+        for key in _BOX_TYPES:
             item = evidence_raw.get(key) or {}
             box = item.get('boxes')
+            status = item.get('status')
+            if status not in ('detected', 'not_detected'):
+                status = 'detected' if item.get('detected') else 'not_detected'
             entry = {
-                'detected':   bool(item.get('detected', False)),
-                'confidence': item.get('confidence') or 0,
-                'boxes':      box if isinstance(box, list) and len(box) == 4 else None,
+                'status':      status,
+                'detected':    status == 'detected',
+                'confidence':  item.get('confidence') or 0,
+                'boxes':       box if isinstance(box, list) and len(box) == 4 else None,
+                'required':    _required_for(key, document_type),
             }
             if key == 'stamp':
                 entry['type'] = item.get('type') or ''
             evidence[key] = entry
 
+        supplier_status = supplier.get('status')
+        if supplier_status not in ('verified', 'not_found', 'uncertain'):
+            supplier_status = 'verified' if supplier.get('supplier_name_detected') else 'not_found'
+
         return {
             'supplier_identity': {
-                'supplier_name_detected': bool(supplier.get('supplier_name_detected', False)),
+                'status':                 supplier_status,
+                'supplier_name_detected': supplier_status == 'verified',
                 'supplier_name':          supplier.get('supplier_name'),
                 'logo_detected':          bool(supplier.get('logo_detected', False)),
                 'address_detected':       bool(supplier.get('address_detected', False)),
@@ -253,11 +284,10 @@ def _normalize_visual_result(engine, raw):
             },
             'document_visual_evidence': evidence,
             'integrity_check': {
-                'suspicious_edit':    bool(integrity.get('suspicious_edit', False)),
-                'inconsistent_font':  bool(integrity.get('inconsistent_font', False)),
-                'abnormal_alignment': bool(integrity.get('abnormal_alignment', False)),
-                'suspicious_overlay': bool(integrity.get('suspicious_overlay', False)),
-                'confidence':         integrity.get('confidence') or 0,
+                'copy_paste_risk':  integrity.get('copy_paste_risk') or 'low',
+                'font_consistency': integrity.get('font_consistency') or 'low',
+                'alteration_risk':  integrity.get('alteration_risk') or 'low',
+                'reason':           integrity.get('reason') or '',
             },
             'overall_result': {
                 'status':     overall.get('status') or 'REVIEW',
@@ -273,13 +303,26 @@ def _normalize_visual_result(engine, raw):
         box = old_boxes.get(old_key)
         return box if isinstance(box, list) and len(box) == 4 else None
 
+    def _entry(key, detected, box):
+        return {
+            'status':     'detected' if detected else 'not_detected',
+            'detected':   detected,
+            'confidence': 70 if detected else 0,
+            'boxes':      box,
+            'required':   _required_for(key, document_type),
+        }
+
     name = bool(raw.get('has_company_name', False))
     logo = bool(raw.get('has_company_logo', False))
     chop = bool(raw.get('has_company_chop', False))
     sig = bool(raw.get('has_signature', False))
 
+    stamp_entry = _entry('stamp', chop, _box('has_company_chop'))
+    stamp_entry['type'] = ''
+
     return {
         'supplier_identity': {
+            'status':                 'verified' if name else 'not_found',
             'supplier_name_detected': name,
             'supplier_name':          None,
             'logo_detected':          logo,
@@ -287,16 +330,17 @@ def _normalize_visual_result(engine, raw):
             'contact_block_detected': False,
         },
         'document_visual_evidence': {
-            'company_logo':     {'detected': logo, 'confidence': 70 if logo else 0, 'boxes': _box('has_company_logo')},
-            'company_name':     {'detected': name, 'confidence': 70 if name else 0, 'boxes': _box('has_company_name')},
-            'supplier_address': {'detected': False, 'confidence': 0, 'boxes': None},
-            'stamp':             {'detected': chop, 'type': '', 'confidence': 70 if chop else 0, 'boxes': _box('has_company_chop')},
-            'signature':          {'detected': sig, 'confidence': 70 if sig else 0, 'boxes': _box('has_signature')},
+            'company_logo':     _entry('company_logo', logo, _box('has_company_logo')),
+            'company_name':     _entry('company_name', name, _box('has_company_name')),
+            'supplier_address': _entry('supplier_address', False, None),
+            'stamp':             stamp_entry,
+            'signature':          _entry('signature', sig, _box('has_signature')),
         },
         'integrity_check': {
-            'suspicious_edit': False, 'inconsistent_font': False,
-            'abnormal_alignment': False, 'suspicious_overlay': False,
-            'confidence': 0,
+            'copy_paste_risk':  'low',
+            'font_consistency': 'low',
+            'alteration_risk':  'low',
+            'reason':           'Not assessed — this document was checked by the fallback engine, not Claude Vision.',
         },
         'overall_result': {
             'status':     'PASS' if name else 'REVIEW',
@@ -308,18 +352,30 @@ def _normalize_visual_result(engine, raw):
 
 def _flatten_boxes(evidence):
     """Converts the unified schema's per-category boxes into the flat
-    named list the frontend overlay draws (spec section 6):
-    [{"name": "...", "x": ..., "y": ..., "width": ..., "height": ...}].
-    Box coordinates are the same 0-1000-normalized scale already used by
-    the legacy signal_boxes column — only the shape (corner pair vs.
+    list the frontend overlay draws (v2 spec objective 2):
+    [{"type": "...", "label": "...", "x": ..., "y": ..., "width": ...,
+      "height": ..., "confidence": 0-1}]. `type` is the stable machine
+    key the frontend keys color/click-highlight off of; `confidence` is
+    the per-category confidence normalized from 0-100 to 0-1. Box
+    coordinates are the same 0-1000-normalized scale already used by the
+    legacy signal_boxes column — only the shape (corner pair vs.
     x/y/width/height) differs, so no new coordinate system is introduced."""
     boxes = []
-    for key, label in _BOX_LABELS.items():
-        box = (evidence.get(key) or {}).get('boxes')
+    for key, (box_type, label) in _BOX_TYPES.items():
+        item = evidence.get(key) or {}
+        box = item.get('boxes')
         if not (isinstance(box, list) and len(box) == 4):
             continue
         ymin, xmin, ymax, xmax = box
-        boxes.append({'name': label, 'x': xmin, 'y': ymin, 'width': xmax - xmin, 'height': ymax - ymin})
+        boxes.append({
+            'type':       box_type,
+            'label':      label,
+            'x':          xmin,
+            'y':          ymin,
+            'width':      xmax - xmin,
+            'height':     ymax - ymin,
+            'confidence': round((item.get('confidence') or 0) / 100, 2),
+        })
     return boxes
 
 
@@ -411,9 +467,8 @@ def run_authenticity_check(document_id, file_bytes, file_name, document_type, do
                 print("DEBUG Authenticity: Claude and Gemini both unavailable, using OCR-text fallback"
                       + (" (rate-limited)" if rate_limited else ""))
 
-        visual = _normalize_visual_result(engine, raw_result)
+        visual = _normalize_visual_result(engine, raw_result, document_type)
         evidence = visual['document_visual_evidence']
-        evidence['stamp']['stamp_required'] = _stamp_required(document_type)
 
         chop = evidence['stamp']['detected']
         logo = evidence['company_logo']['detected']

@@ -125,6 +125,49 @@ def _lookup_file_info(cursor, document_id, document_type):
     }
 
 
+def _ensure_sibling_checks(document_id, primary_type):
+    """Opportunistically ensures every document type (invoice/po/gr) that
+    has an uploaded file for this document_id has an authenticity_checks
+    row — not just the one document_type the caller explicitly requested.
+
+    This is what makes PO/GR show up on the Authenticity page: Record
+    Detail's warning banner is the only place that already calls
+    GET /authenticity/<id> (for the invoice) on every record view, so
+    piggybacking sibling checks onto that call means opening a record
+    once is enough to check all of its Invoice/PO/GR — no separate UI
+    trigger needed for PO/GR specifically. Idempotent (a sibling that
+    already has a row is skipped) and best-effort: a sibling failure is
+    logged and never propagates to the caller's primary result.
+    """
+    for doc_type in VALID_DOC_TYPES:
+        if doc_type == primary_type:
+            continue
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cursor.execute(
+                'SELECT 1 FROM authenticity_checks WHERE document_id = %s AND document_type = %s',
+                (document_id, doc_type)
+            )
+            if cursor.fetchone():
+                conn.close()
+                continue
+
+            info = _lookup_file_info(cursor, document_id, doc_type)
+            if not info or not info['file_bytes']:
+                conn.close()
+                continue
+
+            document_consistency = _document_consistency_for(cursor, document_id)
+            conn.close()
+
+            run_authenticity_check(document_id, info['file_bytes'], info['file_name'],
+                                    doc_type, document_consistency=document_consistency)
+        except Exception as e:
+            print(f"DEBUG Authenticity sibling-check error for doc={document_id} "
+                  f"type={doc_type}: {type(e).__name__}: {e}")
+
+
 def _document_consistency_for(cursor, document_id):
     """Document Consistency Verification (spec section 3) — reuses the
     EXISTING 3-way matching engine (routes/auditor.py::_build_comparison,
@@ -198,6 +241,13 @@ def get_authenticity_check(document_id):
             row = cursor.fetchone()
 
         conn.close()
+
+        # Opportunistically check any sibling PO/GR (or Invoice) for this
+        # same document_id that hasn't been checked yet — see
+        # _ensure_sibling_checks' docstring for why this is the actual
+        # fix for "only Invoice shows up on the Authenticity page".
+        _ensure_sibling_checks(document_id, document_type)
+
         return jsonify(_with_authentication_score(row)), 200
 
     except Exception as e:

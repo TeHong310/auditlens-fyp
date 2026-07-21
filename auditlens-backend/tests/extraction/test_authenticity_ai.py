@@ -1,7 +1,8 @@
 """Regression tests for helpers/authenticity_check.py's upgraded
 authentication engine — schema normalization (Claude/Gemini -> one
-unified shape), box flattening, and engine-selection/fallback logic
-(Claude primary, Gemini fallback, OCR-text last resort). No real
+unified v2 shape with status enums, per-key `required` flags, and
+3-axis integrity risk), box flattening, and engine-selection/fallback
+logic (Claude primary, Gemini fallback, OCR-text last resort). No real
 Anthropic/Gemini API calls, no real DB writes — the Claude/Gemini call
 functions and get_db_connection() are monkey-patched with fakes, same
 house style as test_ai_router.py.
@@ -31,22 +32,22 @@ def check(label, condition, detail=''):
 
 CLAUDE_RAW = {
     'supplier_identity': {
-        'supplier_name_detected': True,
+        'status': 'verified',
         'supplier_name': 'COILCRAFT SINGAPORE PTE LTD',
         'logo_detected': True,
         'address_detected': True,
         'contact_block_detected': True,
     },
     'document_visual_evidence': {
-        'company_logo':     {'detected': True, 'confidence': 95, 'boxes': [10, 10, 60, 200]},
-        'company_name':      {'detected': True, 'confidence': 95, 'boxes': [70, 10, 100, 300]},
-        'supplier_address': {'detected': True, 'confidence': 90, 'boxes': None},
-        'stamp':              {'detected': True, 'type': 'RECEIVED', 'confidence': 88, 'boxes': [800, 700, 900, 950]},
-        'signature':          {'detected': False, 'confidence': 0, 'boxes': None},
+        'company_logo':     {'status': 'detected',     'confidence': 95, 'boxes': [10, 10, 60, 200]},
+        'company_name':      {'status': 'detected',     'confidence': 95, 'boxes': [70, 10, 100, 300]},
+        'supplier_address': {'status': 'detected',     'confidence': 90, 'boxes': None},
+        'stamp':              {'status': 'detected',     'type': 'RECEIVED', 'confidence': 88, 'boxes': [800, 700, 900, 950]},
+        'signature':          {'status': 'not_detected', 'confidence': 0,  'boxes': None},
     },
     'integrity_check': {
-        'suspicious_edit': False, 'inconsistent_font': False,
-        'abnormal_alignment': False, 'suspicious_overlay': False, 'confidence': 90,
+        'copy_paste_risk': 'low', 'font_consistency': 'low',
+        'alteration_risk': 'low', 'reason': 'No visual anomalies found.',
     },
     'overall_result': {'status': 'PASS', 'risk_level': 'LOW', 'reasons': []},
 }
@@ -55,41 +56,76 @@ CLAUDE_RAW = {
 # ── Pure-function tests: schema normalization / box flattening ──────────
 
 def run_case_normalize_claude_trusts_shape():
-    print('Case: _normalize_visual_result(claude, ...) trusts the schema as-is')
-    visual = ac._normalize_visual_result('claude', CLAUDE_RAW)
+    print('Case: _normalize_visual_result(claude, ...) trusts the v2 schema as-is')
+    visual = ac._normalize_visual_result('claude', CLAUDE_RAW, 'invoice')
     check('supplier_name preserved', visual['supplier_identity']['supplier_name'] == 'COILCRAFT SINGAPORE PTE LTD')
-    check('stamp detected', visual['document_visual_evidence']['stamp']['detected'] is True)
+    check('supplier status verified', visual['supplier_identity']['status'] == 'verified')
+    check('stamp detected (status)', visual['document_visual_evidence']['stamp']['status'] == 'detected')
+    check('stamp detected (bool, backward compat)', visual['document_visual_evidence']['stamp']['detected'] is True)
     check('signature not detected', visual['document_visual_evidence']['signature']['detected'] is False)
+    check('signature never required', visual['document_visual_evidence']['signature']['required'] is False)
+    check('stamp required on invoice', visual['document_visual_evidence']['stamp']['required'] is True)
+    check('company_name always required', visual['document_visual_evidence']['company_name']['required'] is True)
     check('risk_level LOW', visual['overall_result']['risk_level'] == 'LOW')
+    check('integrity 3-axis carried through', visual['integrity_check']['copy_paste_risk'] == 'low')
+
+
+def run_case_normalize_claude_stamp_not_required_on_po():
+    print('Case: _normalize_visual_result(claude, ..., document_type=po) -> stamp not required')
+    visual = ac._normalize_visual_result('claude', CLAUDE_RAW, 'po')
+    check('stamp not required on PO', visual['document_visual_evidence']['stamp']['required'] is False)
+
+
+def run_case_normalize_claude_legacy_boolean_defensive():
+    print('Case: _normalize_visual_result(claude, ...) accepts a legacy boolean `detected` shape defensively')
+    legacy_shape = {
+        'supplier_identity': {'supplier_name_detected': True, 'supplier_name': 'X'},
+        'document_visual_evidence': {
+            'company_logo': {'detected': True, 'confidence': 80, 'boxes': None},
+            'company_name': {'detected': False, 'confidence': 0, 'boxes': None},
+            'supplier_address': {'detected': False, 'confidence': 0, 'boxes': None},
+            'stamp': {'detected': False, 'confidence': 0, 'boxes': None},
+            'signature': {'detected': False, 'confidence': 0, 'boxes': None},
+        },
+    }
+    visual = ac._normalize_visual_result('claude', legacy_shape, 'invoice')
+    check('legacy detected=True maps to status=detected', visual['document_visual_evidence']['company_logo']['status'] == 'detected')
+    check('supplier status derived from legacy supplier_name_detected', visual['supplier_identity']['status'] == 'verified')
 
 
 def run_case_normalize_gemini_maps_old_schema():
-    print('Case: _normalize_visual_result(gemini, ...) maps the old 4-signal schema')
+    print('Case: _normalize_visual_result(gemini, ...) maps the old 4-signal schema to the v2 shape')
     old = {
         'has_company_chop': True, 'has_company_logo': True,
         'has_company_name': True, 'has_signature': False,
         'notes': 'looks fine', 'upload_source': 'scanned',
         'signal_boxes': {'has_company_chop': [1, 2, 3, 4]},
     }
-    visual = ac._normalize_visual_result('gemini', old)
+    visual = ac._normalize_visual_result('gemini', old, 'invoice')
     check('stamp.detected mapped from has_company_chop', visual['document_visual_evidence']['stamp']['detected'] is True)
     check('stamp.boxes converted from signal_boxes', visual['document_visual_evidence']['stamp']['boxes'] == [1, 2, 3, 4])
     check('supplier_address defaults to not detected (no Gemini signal for it)',
           visual['document_visual_evidence']['supplier_address']['detected'] is False)
     check('overall status PASS when name detected', visual['overall_result']['status'] == 'PASS')
     check('reasons carries notes through', visual['overall_result']['reasons'] == ['looks fine'])
+    check('signature still never required', visual['document_visual_evidence']['signature']['required'] is False)
+    check('integrity defaults to low/not-assessed', visual['integrity_check']['copy_paste_risk'] == 'low')
 
 
 def run_case_flatten_boxes():
-    print('Case: _flatten_boxes() converts corner boxes to named x/y/width/height')
-    visual = ac._normalize_visual_result('claude', CLAUDE_RAW)
+    print('Case: _flatten_boxes() converts corner boxes to {type,label,x,y,width,height,confidence}')
+    visual = ac._normalize_visual_result('claude', CLAUDE_RAW, 'invoice')
     boxes = ac._flatten_boxes(visual['document_visual_evidence'])
-    by_name = {b['name']: b for b in boxes}
+    by_type = {b['type']: b for b in boxes}
     check('3 boxes flattened (logo, name, stamp — address/signature have none)', len(boxes) == 3, boxes)
-    check('Supplier Logo x/y/width/height correct',
-          by_name.get('Supplier Logo') == {'name': 'Supplier Logo', 'x': 10, 'y': 10, 'width': 190, 'height': 50},
-          by_name.get('Supplier Logo'))
-    check('Stamp/Chop box present', 'Stamp/Chop' in by_name)
+    check('supplier_logo x/y/width/height/confidence correct',
+          by_type.get('supplier_logo') == {
+              'type': 'supplier_logo', 'label': 'Company Logo',
+              'x': 10, 'y': 10, 'width': 190, 'height': 50, 'confidence': 0.95,
+          },
+          by_type.get('supplier_logo'))
+    check('company_stamp box present with confidence normalized to 0-1',
+          by_type.get('company_stamp', {}).get('confidence') == 0.88, by_type.get('company_stamp'))
 
 
 def run_case_authenticity_is_complete():
@@ -227,6 +263,8 @@ def run_case_document_consistency_passed_through():
 
 if __name__ == '__main__':
     run_case_normalize_claude_trusts_shape()
+    run_case_normalize_claude_stamp_not_required_on_po()
+    run_case_normalize_claude_legacy_boolean_defensive()
     run_case_normalize_gemini_maps_old_schema()
     run_case_flatten_boxes()
     run_case_authenticity_is_complete()

@@ -5348,3 +5348,129 @@ Setup/config needed:
      Authentication detail page to confirm the old overlay/checklist
      still renders, then click Re-check (or open a never-checked
      document) to exercise the new Claude-first engine end-to-end.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-21
+What was changed:
+  Backend (auditlens-backend/) — Authenticity Vision Accuracy Upgrade v2,
+  three fixes to the AI Authentication engine added earlier the same day
+  (Claude Vision primary, Gemini fallback):
+    - routes/authenticity.py: FIX for "only Invoice shows up on the
+      Authenticity page". Root cause found by reading the code (not
+      assumed): the only frontend call to GET /authenticity/<id> is
+      Record Detail's warning banner, and it never passes
+      document_type — so PO/GR were simply never requested, on-demand
+      or otherwise; no DB column was missing. Added
+      _ensure_sibling_checks(document_id, primary_type), called at the
+      end of GET /authenticity/<id>: for whichever of the OTHER two
+      document types (of the same document_id) don't have a row yet and
+      do have an uploaded file, it opportunistically runs the same
+      Claude/Gemini engine for them too. Opening a record's Record
+      Detail page once now produces independent Invoice + PO + GR
+      authenticity_checks rows instead of only Invoice. Best-effort: a
+      sibling failure is logged and never breaks the primary response.
+      POST /authenticity/<id>/recheck is unchanged (still scoped to the
+      one type the auditor explicitly re-checks).
+    - helpers/claude_extractor.py: rewrote CLAUDE_AUTHENTICITY_PROMPT's
+      bounding-box instructions with explicit per-category include/
+      exclude rules (using the reported wrong/correct Coilcraft
+      examples) — company_logo boxes must no longer include the company
+      name/address, company_name boxes must no longer include ATTN/
+      address/Ship To/Bill To lines, stamp boxes must no longer include
+      nearby handwriting or table contents. Schema also gained:
+      supplier_identity.status (verified/not_found/uncertain, replacing
+      a bare boolean), each document_visual_evidence.<key>.status
+      (detected/not_detected), and integrity_check became 3 independent
+      risk axes (copy_paste_risk/font_consistency/alteration_risk, each
+      low/medium/high) + a reason string, replacing the old flat
+      boolean-flag list.
+    - helpers/authenticity_check.py: _normalize_visual_result now maps
+      either engine's output onto the v2 schema above (defensively
+      still accepts a legacy boolean `detected` if a cached/older
+      response used the pre-v2 shape) and adds a `required` flag per
+      evidence key — signature is NEVER required (a missing signature
+      on a computer-generated invoice must not read as a false
+      negative), stamp requiredness still comes from the existing
+      per-doc-type AUTH_RULES config. _flatten_boxes' output shape
+      changed from {name,x,y,width,height} to
+      {type,label,x,y,width,height,confidence} — `type` is a stable
+      machine key (supplier_logo/company_name/supplier_address/
+      company_stamp/signature) for the frontend to key color/click-
+      highlight off of, `confidence` is normalized from Claude's 0-100
+      scale to 0-1.
+    - tests/extraction/test_authenticity_ai.py: updated for the v2
+      schema (status enums, required flags, 3-axis integrity, new box
+      shape) plus a case proving the legacy-boolean defensive fallback.
+      New tests/extraction/test_authenticity_siblings.py: proves
+      _ensure_sibling_checks checks a missing sibling with an uploaded
+      file, skips one that's already checked, skips one with no file at
+      all, checks both siblings in one call, and never lets a sibling
+      failure propagate. Both wired into run_all.py.
+
+  Frontend (auditlens-frontend/) — auditor-authenticity-detail component
+  only:
+    - Box overlay/color-legend/click-highlight now keyed by the stable
+      `type` machine key instead of the display label string (so
+      relabeling never silently breaks the color mapping).
+    - Visual Evidence rows show a neutral "Not required" state (no red
+      X) instead of a false-negative-looking "Not Detected" whenever
+      the signal isn't expected for this document type (signature
+      always; stamp depending on document type).
+    - Supplier Identity section adds a Verified/Uncertain/Not Found
+      status badge.
+    - Integrity Risk section replaced the old boolean flag list with
+      the 3 independent low/medium/high risk axes (copy/paste, font
+      consistency, alteration) plus the AI's stated reason.
+
+Why:
+  Using the Authentication module surfaced 3 concrete problems: (1)
+  uploading an Invoice+PO+GR only ever produced an Invoice authenticity
+  result — traced to a genuine trigger-discoverability bug, not a
+  schema gap; (2) Claude's bounding boxes were too loose, e.g. the
+  "Supplier Logo" box also covering the company name and address; (3)
+  a missing signature rendered identically to every other "not
+  detected" signal even though most AP documents are legitimately
+  unsigned, reading as a false negative to the auditor. Fixed all three
+  without touching Claude/Gemini field extraction, OCR, the matching
+  engine, 3-way matching, or the extraction database schema, per
+  explicit instruction — only the Authenticity module's own files
+  changed.
+
+Testing:
+  - `python tests/extraction/run_all.py` — all 9 suites pass (7 prior +
+    the updated test_authenticity_ai.py + new
+    test_authenticity_siblings.py), zero real Anthropic/Gemini API
+    calls (mocked).
+  - `python -c "import app; print('APP IMPORT OK')"` — no new migration
+    this time (every column objective 1 asked for already existed from
+    the prior task); confirmed clean boot.
+  - Full end-to-end proof against the REAL dev Postgres DB (only the
+    Claude call itself mocked — no API spend): inserted a synthetic
+    document_id with linked Invoice+PO+GR rows, called the exact same
+    entry point Record Detail's banner calls for the invoice, and
+    confirmed all 3 independent authenticity_checks rows were created
+    in one pass (document_type=invoice/po/gr, each with its own
+    ai_visual_result/ai_engine_used/risk_level/box count) — then
+    deleted every synthetic row, leaving the dev DB unchanged.
+  - `git diff --stat` confirmed zero changes to routes/documents.py,
+    routes/auditor.py (matching engine), routes/matching.py,
+    helpers/gemini_extractor.py, extraction_engine.py, ocr_helper.py,
+    entity_normalizer.py, and app.py.
+  - `npx ng build --configuration development` — builds cleanly.
+  - Real bounding-box-tightness verification against the actual
+    Coilcraft PDFs needs a live ANTHROPIC_API_KEY, not present in this
+    sandbox — same disclosed caveat as the original Authentication
+    upgrade; for the user to verify post-deploy.
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND — no new migration to wait on, just the
+     updated prompt/normalization/route code.
+  2. Redeploy the Render FRONTEND — picks up the updated overlay/
+     dashboard.
+  3. No new environment variables.
+  4. After deploy: open Record Detail for a document that has Invoice +
+     PO + GR uploaded — the Authenticity page should then show all
+     three as independent results (first view will be slower than usual
+     since up to 3 AI calls now run before the banner returns; every
+     view after that is instant, cached).

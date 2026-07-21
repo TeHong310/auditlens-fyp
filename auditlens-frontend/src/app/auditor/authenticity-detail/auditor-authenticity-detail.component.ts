@@ -38,13 +38,17 @@ const SIGNAL_LABELS: Record<SignalKey, string> = {
 // New named-box overlay (check.boxes, populated once a document has been
 // checked by the upgraded Claude/Gemini authentication engine) — 5-color
 // legend per spec: Blue=Supplier Logo, Green=Company Name,
-// Purple=Supplier Address, Red=Stamp/Chop, Orange=Signature.
+// Purple=Supplier Address, Red=Stamp/Chop, Orange=Signature. Keyed by the
+// stable `type` machine key (not the display label) so relabeling never
+// breaks color/click-highlight matching.
 interface NamedBox {
-  name: string;
+  type: string;
+  label: string;
   x: number;
   y: number;
   width: number;
   height: number;
+  confidence: number;
 }
 
 interface NewOverlayMarker extends NamedBox {
@@ -54,11 +58,11 @@ interface NewOverlayMarker extends NamedBox {
 }
 
 const BOX_COLOR_CLASS: Record<string, string> = {
-  'Supplier Logo':    'box-blue',
-  'Company Name':     'box-green',
-  'Supplier Address': 'box-purple',
-  'Stamp/Chop':       'box-red',
-  'Signature':        'box-orange',
+  supplier_logo:    'box-blue',
+  company_name:     'box-green',
+  supplier_address: 'box-purple',
+  company_stamp:    'box-red',
+  signature:        'box-orange',
 };
 
 const EVIDENCE_KEYS = ['company_logo', 'company_name', 'supplier_address', 'stamp', 'signature'] as const;
@@ -72,11 +76,28 @@ const EVIDENCE_LABELS: Record<EvidenceKey, string> = {
   signature:        'Signature',
 };
 
+// Maps each evidence key to the box `type` it corresponds to (see
+// helpers/authenticity_check.py's _BOX_TYPES) — used to match a sidebar
+// row click to its overlay box.
+const EVIDENCE_TO_BOX_TYPE: Record<EvidenceKey, string> = {
+  company_logo:     'supplier_logo',
+  company_name:     'company_name',
+  supplier_address: 'supplier_address',
+  stamp:            'company_stamp',
+  signature:        'signature',
+};
+
 const CONSISTENCY_LABELS: Record<string, string> = {
   vendor_match: 'Vendor',
   po_match:     'PO Reference',
   item_match:   'Items',
   amount_match: 'Amount',
+};
+
+const RISK_LABELS: Record<string, string> = {
+  copy_paste_risk:   'Copy/Paste Risk',
+  font_consistency:  'Font Consistency',
+  alteration_risk:   'Alteration Risk',
 };
 
 @Component({
@@ -113,10 +134,12 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   // Claude/Gemini engine). Older, not-yet-rechecked rows fall back to the
   // markers/signalKeys checklist above.
   newMarkers: NewOverlayMarker[] = [];
-  selectedBoxName: string | null = null;
+  selectedBoxType: string | null = null;
   evidenceKeys = EVIDENCE_KEYS;
   evidenceLabels = EVIDENCE_LABELS;
   consistencyLabels = CONSISTENCY_LABELS;
+  riskKeys = Object.keys(RISK_LABELS);
+  riskLabels = RISK_LABELS;
 
   private resizeObserver: ResizeObserver | null = null;
   private rawBlobUrl: string | null = null;
@@ -273,7 +296,7 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
       for (const box of this.check.boxes as NamedBox[]) {
         newMarkers.push({
           ...box,
-          colorClass: BOX_COLOR_CLASS[box.name] || 'box-blue',
+          colorClass: BOX_COLOR_CLASS[box.type] || 'box-blue',
           left: box.x * scaleX,
           top: box.y * scaleY,
           width: box.width * scaleX,
@@ -321,8 +344,9 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   }
 
   riskLevelClass(level: string): string {
-    if (level === 'HIGH') return 'risk-high';
-    if (level === 'MEDIUM') return 'risk-medium';
+    const l = (level || '').toUpperCase();
+    if (l === 'HIGH') return 'risk-high';
+    if (l === 'MEDIUM') return 'risk-medium';
     return 'risk-low';
   }
 
@@ -338,14 +362,51 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return 'icon-na';
   }
 
+  // A signal that isn't required for this document type (e.g. a
+  // signature on a computer-generated invoice) must not render as a
+  // false-negative red X — shows a neutral "Not required" state instead.
+  evidenceStatusClass(key: EvidenceKey): string {
+    const entry = this.evidenceEntry(key);
+    if (!entry) return 'icon-na';
+    if (entry.status === 'detected' || entry.detected) return 'icon-yes';
+    if (entry.required === false) return 'icon-na';
+    return 'icon-no';
+  }
+
+  evidenceStatusLabel(key: EvidenceKey): string {
+    const entry = this.evidenceEntry(key);
+    if (!entry) return 'Unknown';
+    if (entry.status === 'detected' || entry.detected) return 'Detected';
+    if (entry.required === false) return 'Not required';
+    return 'Not Detected';
+  }
+
+  supplierStatusClass(): string {
+    const status = this.supplierIdentity?.status;
+    if (status === 'verified') return 'badge-verified';
+    if (status === 'uncertain') return 'badge-uncertain';
+    return 'badge-not-found';
+  }
+
+  supplierStatusLabel(): string {
+    const status = this.supplierIdentity?.status;
+    if (status === 'verified') return 'Verified';
+    if (status === 'uncertain') return 'Uncertain';
+    return 'Not Found';
+  }
+
   // Click a sidebar evidence row (section 8: interactive highlight) —
   // pulses/highlights the matching box on the image, if one was located.
-  selectBox(name: string) {
-    this.selectedBoxName = this.selectedBoxName === name ? null : name;
+  selectBox(type: string) {
+    this.selectedBoxType = this.selectedBoxType === type ? null : type;
   }
 
   boxLabelFor(key: EvidenceKey): string {
     return EVIDENCE_LABELS[key];
+  }
+
+  boxTypeFor(key: EvidenceKey): string {
+    return EVIDENCE_TO_BOX_TYPE[key];
   }
 
   // ── Re-check: the only action on this page that calls Gemini ──
