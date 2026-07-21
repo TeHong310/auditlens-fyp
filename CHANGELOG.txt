@@ -5981,3 +5981,106 @@ Setup/config needed:
      PO/GR, check the browser console's AUTH BBOX TRACE output against
      the visible box position, and confirm boxes now land tightly on
      the actual logo/name/stamp — then remove the temporary trace log.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-21
+What was changed:
+  Frontend only (auditlens-frontend/), no backend/DB/AI changes:
+    - auditor-authenticity-detail.component.ts: removed the entire
+      bounding-box overlay system — OverlayMarker/NewOverlayMarker/
+      NamedBox/DisplayBBox/CoordinateSpace/LocalizationQuality types,
+      convertBBoxToDisplay(), BOX_COLOR_CLASS, EVIDENCE_TO_BOX_TYPE,
+      selectBox()/selectedBoxType, recomputeMarkers(), onImageLoad()'s
+      ResizeObserver wiring, and the "AUTH BBOX TRACE" console.log. The
+      coordinate-space overlay work from the previous round remained
+      visually unreliable even after the coordinate-contract fix — per
+      this task, precise visual localization isn't essential to the FYP
+      objective, and misleading boxes were reducing auditor trust more
+      than they helped.
+    - Replaced the box overlay with four evidence-summary sections
+      driven entirely by data the backend already computes (no backend
+      call-shape changes): Supplier Identity (name/address verified +
+      an explicit Extracted Vendor Match row), Document Evidence
+      (renamed from "Visual Evidence"; rows and wording now vary by
+      document_type — Invoice shows Supplier Branding/Logo, Received
+      Stamp, Signature; PO shows Buyer/Issuer Letterhead, Supplier
+      Information Present, Supplier Logo (Optional); GR adds a QC/
+      Receiving Stamp row), Document Consistency (unchanged — reads the
+      existing matching-engine output), and Integrity Review (renamed
+      from "Document Integrity"; unchanged fields — Copy/Paste Risk,
+      Font Consistency, Alignment Consistency, Alteration Risk, AI
+      reasoning).
+    - New status vocabulary for evidence rows: 'yes' (green — detected/
+      matched), 'na' (grey — optional/not required/not applicable),
+      'warn' (amber — required signal not found, needs a human look),
+      'no' (red — reserved for genuine contradictions only: a vendor-
+      name mismatch against extraction, or a document-consistency
+      mismatch). Previously, any required-but-undetected evidence
+      (e.g. a missing stamp) rendered as a red X — now it renders amber
+      "Needs Review" instead, since absence alone isn't proof of fraud.
+      A missing supplier logo on PO/GR still never renders red (it's
+      backend-flagged optional there already); a missing signature
+      still never renders red (backend never requires it) — both now
+      show the same neutral grey "Not Required"/"Optional" treatment.
+    - Added a Final Recommendation section: the existing authenticity
+      score/decision (APPROVE/REVIEW/REJECT) and risk level, plus an
+      explicit disclaimer line ("AI-assisted assessment. The system
+      found no obvious visual alteration. Final decision remains with
+      the auditor.") so the UI never implies the AI has proven a
+      document genuine.
+    - Document preview: the full document image is still shown at full
+      size, just without overlay rectangles, click-to-highlight, or a
+      color legend — the auditor inspects the whole document directly.
+    - Deleted auditor-authenticity-detail.component.spec.ts (its only
+      tests were for convertBBoxToDisplay(), which no longer exists).
+  Untouched, confirmed via `git diff --stat`: every file under
+  auditlens-backend/ (Claude extraction, Gemini fallback, OCR, matching
+  engine, three-way matching, authenticity AI analysis) and all other
+  frontend files — this was a display-layer simplification of one
+  component only. No `authenticity_checks` rows, `boxes`/
+  `ai_visual_result` JSONB content, or any other existing database
+  record was modified or deleted.
+
+Why:
+  The bbox overlay remained inaccurate even after the coordinate-space
+  contract fix, and precise visual localization isn't required for the
+  FYP's objective — a reliable AI-assisted evidence review page that an
+  auditor can trust is more valuable than an imprecise rectangle on top
+  of the document.
+
+Testing:
+  - Zero Claude Vision / Gemini API calls made, zero AI API credits
+    consumed — no code path in this change calls either engine; only
+    display logic over already-cached `check` data was touched, and
+    Re-check was never invoked during testing.
+  - `npx ng build --configuration production` — clean build (same pre-
+    existing bundle-size budget warnings as before, unrelated to this
+    change).
+  - `npx ng test --watch=false` — 1/1 pre-existing unrelated failure in
+    app.spec.ts only (confirmed via `git diff --stat` — zero changes to
+    that file, a stale scaffold title assertion). No component-level
+    tests remain for this component since the function they covered
+    (convertBBoxToDisplay) was deleted along with the overlay.
+  - `git status`/`git diff --stat` confirmed changes are scoped to
+    exactly 4 files under auditlens-frontend/src/app/auditor/
+    authenticity-detail/ (.ts/.html/.css modified, .spec.ts deleted) —
+    zero changes anywhere under auditlens-backend/.
+  - Manual verification against real Coilcraft records was requested by
+    this task but could not be performed: this sandbox's
+    authenticity_checks table has zero rows and no cached images (same
+    disclosed limitation as the prior round) — the row/label logic was
+    instead verified by tracing the exact field names and `required`
+    flags the backend already writes (`document_visual_evidence.*.
+    status/detected/required`, `supplier_identity.*`, `integrity_check.
+    *`, `overall_result.risk_level`, `auditor_score.*`) via direct
+    source read of helpers/authenticity_check.py, not by guessing.
+
+Setup/config needed:
+  1. Redeploy the Render FRONTEND only — no backend changes, no new
+     migration, no new environment variables.
+  2. After deploy: open an Invoice, PO, and GR authenticity detail page
+     for a real record and confirm the Document Evidence section shows
+     the document-type-specific wording, a missing PO/GR supplier logo
+     shows grey "Optional" (not red), and a missing signature shows
+     grey "Not Required" (not red).

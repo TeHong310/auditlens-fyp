@@ -105,68 +105,9 @@
   border-radius: 8px;
 }
 
-.marker {
-  position: absolute;
-  pointer-events: none;
-}
-
-.marker-rect { border-radius: 6px; }
-.marker-circle { border-radius: 50%; }
-
-.marker-present {
-  border: 3px solid var(--success);
-  background: color-mix(in srgb, var(--success) 10%, transparent);
-}
-
-.marker-missing {
-  border: 3px solid var(--danger);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
-}
-
-/* New engine named-box overlay — 5-color legend (spec section 7):
-   Blue=Supplier Logo, Green=Company Name, Purple=Supplier Address,
-   Red=Stamp/Chop, Orange=Signature. */
-.box-marker {
-  border-radius: 6px;
-  border-width: 3px;
-  border-style: solid;
-  transition: box-shadow .2s ease;
-}
-
-/* v6 spec Step 3: an "approximate" localization_quality box is drawn
-   dashed instead of solid — a genuinely imprecise AI box must never be
-   presented as if it were pixel-exact. */
-.box-marker-approximate {
-  border-style: dashed;
-}
-
-.box-blue    { border-color: #2563EB; background: color-mix(in srgb, #2563EB 10%, transparent); }
-.box-green   { border-color: var(--success); background: color-mix(in srgb, var(--success) 10%, transparent); }
-.box-purple  { border-color: #7C3AED; background: color-mix(in srgb, #7C3AED 10%, transparent); }
-.box-red     { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
-.box-orange  { border-color: #F59E0B; background: color-mix(in srgb, #F59E0B 10%, transparent); }
-
-.marker-active {
-  box-shadow: 0 0 0 3px rgba(0,0,0,0.15), 0 0 16px rgba(0,0,0,0.25);
-}
-
-.box-label {
-  position: absolute;
-  top: -20px;
-  left: 0;
-  font-size: 10.5px;
-  font-weight: 700;
-  color: #111827;
-  background: rgba(255,255,255,0.9);
-  padding: 1px 5px;
-  border-radius: 4px;
-  white-space: nowrap;
-  pointer-events: none;
-}
-
 /* Sits on the white .image-panel above, so stays light-on-white rather
    than following the dark accent tokens — see .image-panel comment. */
-.image-hint {
+.image-caption {
   background: #EFF6FF;
   border: 1px solid #BFDBFE;
   border-radius: 8px;
@@ -175,8 +116,8 @@
   color: #1D4ED8;
 }
 
-/* .image-fallback/.legend sit within the light .image-panel above —
-   kept light-appropriate colors rather than the dark-tuned tokens. */
+/* .image-fallback sits within the light .image-panel above — kept
+   light-appropriate colors rather than the dark-tuned tokens. */
 .image-fallback {
   display: flex;
   flex-direction: column;
@@ -189,39 +130,6 @@
 
 .fallback-icon { font-size: 36px; }
 .fallback-sub { font-size: 12px; color: #9CA3AF; }
-
-.legend {
-  display: flex;
-  gap: 18px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  color: #6B7280;
-  border-top: 1px solid #E5E7EB;
-  padding-top: 12px;
-}
-
-.legend-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.legend-swatch {
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  display: inline-block;
-}
-
-.legend-green {
-  border: 2px solid var(--success);
-  background: color-mix(in srgb, var(--success) 10%, transparent);
-}
-
-.legend-red {
-  border: 2px solid var(--danger);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
-}
 
 /* Side panel */
 .side-panel {
@@ -313,9 +221,10 @@
   flex-shrink: 0;
 }
 
-.icon-yes { background: var(--success-bg); color: var(--success); }
-.icon-no  { background: var(--danger-bg); color: var(--danger); }
-.icon-na  { background: var(--bg-hover); color: var(--text-secondary); }
+.icon-yes  { background: var(--success-bg); color: var(--success); }
+.icon-no   { background: var(--danger-bg); color: var(--danger); }
+.icon-warn { background: var(--warning-bg); color: var(--warning); }
+.icon-na   { background: var(--bg-hover); color: var(--text-secondary); }
 
 .evidence-row { cursor: pointer; border-radius: 6px; }
 .evidence-row:hover { background: var(--bg-hover); }
@@ -381,16 +290,6 @@
   line-height: 1.4;
 }
 
-/* v6 spec Step 3: "unreliable" localization — detected, but no box is
-   drawn on the image (see recomputeMarkers()), so this note is the
-   ONLY indication of where to look; slightly more prominent than a
-   plain reason line. */
-.evidence-location-note {
-  color: var(--warning);
-  font-style: normal;
-  font-weight: 600;
-}
-
 .risk-chip {
   font-size: 10.5px;
   font-weight: 700;
@@ -408,10 +307,18 @@
   border: 1px solid var(--border-hover);
 }
 
+.ai-disclaimer {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
 .score-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   margin-bottom: 8px;
 }
 
