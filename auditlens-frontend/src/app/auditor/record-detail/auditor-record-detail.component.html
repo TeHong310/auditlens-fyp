@@ -317,6 +317,45 @@
           </div>
         </div>
 
+        <!-- Finance Response (Feature 4) — only once Finance has replied -->
+        <div class="finance-response-box" *ngIf="hasFinanceResponse">
+          <h3 class="subsection-title"><i class="ph-duotone ph-arrow-bend-up-left"></i> Finance Response</h3>
+          <div class="frb-meta-row">
+            <span class="priority-chip" [ngClass]="priorityClass(latestCycle.priority)">{{ priorityLabel(latestCycle.priority) }} priority</span>
+            <span class="overdue-chip" *ngIf="latestCycle.is_overdue"><i class="ph-duotone ph-clock-countdown"></i> Overdue</span>
+            <span class="due-date-note" *ngIf="latestCycle.response_due_date">Due {{ formatDate(latestCycle.response_due_date) }}</span>
+          </div>
+          <p class="frb-label">Original return reason</p>
+          <p class="frb-value">{{ reasonCategoryLabel(latestCycle.return_reason_category) }}</p>
+          <p class="frb-label">Original auditor instruction</p>
+          <p class="frb-value">{{ latestCycle.auditor_instruction }}</p>
+          <p class="frb-label">Finance response</p>
+          <p class="frb-value frb-response">{{ latestCycle.finance_response }}</p>
+          <p class="frb-submitted-by" *ngIf="latestCycle.finance_responded_by_name">
+            Submitted by {{ latestCycle.finance_responded_by_name }}
+            <ng-container *ngIf="latestCycle.finance_responded_at"> · {{ formatDateTime(latestCycle.finance_responded_at) }}</ng-container>
+          </p>
+
+          <ng-container *ngIf="changesSinceSendBack.length">
+            <p class="frb-label">Changes since send back</p>
+            <ul class="changes-list">
+              <li *ngFor="let change of changesSinceSendBack">{{ change }}</li>
+            </ul>
+          </ng-container>
+        </div>
+
+        <!-- History (Feature 5) — reuses review_records, the existing
+             audit-log system, so it stays correct across every send-back
+             cycle without a second competing log. -->
+        <div class="history-box" *ngIf="reviewHistory.length">
+          <h3 class="subsection-title"><i class="ph-duotone ph-clock-counter-clockwise"></i> History</h3>
+          <div class="history-entry" *ngFor="let h of reviewHistory">
+            <p class="history-time">{{ formatDateTime(h.reviewed_at) }}</p>
+            <p class="history-label">{{ historyLabel(h.action) }}<ng-container *ngIf="h.reviewer_name"> by {{ h.reviewer_name }}</ng-container></p>
+            <p class="history-remarks" *ngIf="h.remarks">{{ h.remarks }}</p>
+          </div>
+        </div>
+
         <!-- Audit Note -->
         <div class="note-section">
           <label class="note-label">Remarks / Notes</label>
@@ -329,8 +368,8 @@
           <button class="btn-need-review" [disabled]="isSubmitting">
             <i class="ph-duotone ph-warning"></i> Need Review
           </button>
-          <button class="btn-return" (click)="returnDocument()" [disabled]="isSubmitting">
-            <i class="ph-duotone ph-arrow-u-up-left"></i> Send Back
+          <button class="btn-return" (click)="openSendBackModal()" [disabled]="isSubmitting">
+            <i class="ph-duotone ph-arrow-u-up-left"></i> {{ sendBackButtonLabel }}
           </button>
           <button class="btn-approve" (click)="approveDocument()" [disabled]="isSubmitting">
             <ng-container *ngIf="!isSubmitting"><i class="ph-duotone ph-check-circle"></i> Approve</ng-container>
@@ -346,6 +385,90 @@
     </div>
 
   </ng-container>
+
+  <!-- ── Send Back to Finance Modal (Feature 1) ── -->
+  <div class="modal-backdrop" *ngIf="showSendBackModal" (click)="closeSendBackModal()">
+    <div class="sendback-modal-box" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <div class="modal-header-left">
+          <span class="modal-filename">{{ sendBackButtonLabel }}</span>
+        </div>
+        <button class="modal-close-btn" (click)="closeSendBackModal()"><i class="ph-duotone ph-x"></i></button>
+      </div>
+
+      <div class="sendback-modal-body">
+
+        <div class="error-box" *ngIf="sendBackErrors.length">
+          <i class="ph-duotone ph-x-circle"></i>
+          <ul class="sendback-error-list">
+            <li *ngFor="let e of sendBackErrors">{{ e }}</li>
+          </ul>
+        </div>
+
+        <div class="sb-field">
+          <label class="sb-label">Return Reason Category <span class="sb-required">*</span></label>
+          <select class="sb-select" [(ngModel)]="sendBack.reasonCategory">
+            <option value="" disabled>Select a reason…</option>
+            <option *ngFor="let opt of reasonCategoryOptions" [value]="opt.key">{{ opt.label }}</option>
+          </select>
+        </div>
+
+        <div class="sb-field" *ngIf="sendBack.reasonCategory === 'other'">
+          <label class="sb-label">Describe the reason <span class="sb-required">*</span></label>
+          <textarea class="sb-textarea" [(ngModel)]="sendBack.reasonOtherNote" rows="2"
+            placeholder="Explain the return reason..."></textarea>
+        </div>
+
+        <div class="sb-field">
+          <label class="sb-label">Auditor Instruction <span class="sb-required">*</span></label>
+          <textarea class="sb-textarea" [(ngModel)]="sendBack.instruction" rows="3"
+            placeholder='e.g. "Please confirm whether invoice INV-SLT-2026-A118 was uploaded more than once and provide the payment-processing status."'></textarea>
+        </div>
+
+        <div class="sb-field">
+          <label class="sb-label">Required Action <span class="sb-required">*</span> <span class="sb-hint">(select one or more)</span></label>
+          <div class="sb-checkbox-grid">
+            <label class="sb-checkbox" *ngFor="let opt of requiredActionOptions">
+              <input type="checkbox" [checked]="isRequiredActionChecked(opt.key)" (change)="toggleRequiredAction(opt.key)" />
+              {{ opt.label }}
+            </label>
+          </div>
+        </div>
+
+        <div class="sb-field" *ngIf="isRequiredActionChecked('other')">
+          <label class="sb-label">Describe the required action <span class="sb-required">*</span></label>
+          <textarea class="sb-textarea" [(ngModel)]="sendBack.requiredActionOtherNote" rows="2"
+            placeholder="Describe what Finance needs to do..."></textarea>
+        </div>
+
+        <div class="sb-field-row">
+          <div class="sb-field">
+            <label class="sb-label">Priority</label>
+            <select class="sb-select" [(ngModel)]="sendBack.priority">
+              <option value="normal">Normal</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </div>
+          <div class="sb-field">
+            <label class="sb-label">
+              Response Due Date
+              <span class="sb-required" *ngIf="sendBack.priority === 'high'">*</span>
+            </label>
+            <input class="sb-date-input" type="date" [(ngModel)]="sendBack.dueDate" [min]="todayIso" />
+          </div>
+        </div>
+
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn-modal-secondary" (click)="closeSendBackModal()" [disabled]="isSubmitting">Cancel</button>
+        <button class="btn-modal-primary" (click)="submitSendBack()" [disabled]="isSubmitting">
+          {{ isSubmitting ? 'Sending…' : 'Send Back to Finance' }}
+        </button>
+      </div>
+    </div>
+  </div>
 
   <!-- ── PDF Quick-View Modal ── -->
   <div class="modal-backdrop" *ngIf="showModal" (click)="closeModal()">

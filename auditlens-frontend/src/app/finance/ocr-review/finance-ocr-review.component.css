@@ -511,4 +511,144 @@
   transition: all .2s ease;
 }
 
+/* ── Returned for Correction (Feature 2) ── */
+.returned-box {
+  background: var(--bg-card);
+  border-radius: 14px;
+  padding: 20px 24px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+  border-left: 3px solid var(--danger);
+  margin-bottom: 20px;
+}
+
+.returned-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.returned-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background .2s ease;
+}
+
+.returned-item:hover { background: var(--danger-bg); }
+
+.returned-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.returned-item-invoice { font-size: 13.5px; font-weight: 700; color: var(--text-primary); }
+.returned-item-vendor { font-size: 12px; color: var(--text-secondary); }
+
+.badge-returned { background: var(--danger-bg); color: var(--danger); }
+
+/* ── Auditor Request panel (Feature 2) ── */
+.auditor-request-box {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+
+.ar-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.ar-loading { font-size: 12px; color: var(--text-muted); }
+
+.ar-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.ar-meta-row .badge { text-transform: capitalize; }
+
+.priority-normal { background: var(--bg-card); color: var(--text-secondary); }
+.priority-medium { background: var(--warning-bg); color: var(--warning); }
+.priority-high   { background: var(--danger-bg); color: var(--danger); }
+
+.ar-due { font-size: 11.5px; color: var(--text-muted); }
+
+.ar-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-top: 10px;
+}
+
+.ar-value {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-top: 2px;
+  line-height: 1.45;
+}
+
+.ar-actions-list {
+  margin: 4px 0 0 18px;
+  padding: 0;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.ar-actions-list li { margin-top: 3px; }
+
+.btn-upload-link {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  border: 1.5px dashed var(--accent-soft);
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-upload-link:hover { background: var(--accent-bg); }
+
+/* ── Finance Response (Feature 3) ── */
+.finance-response-field { margin-top: 4px; }
+
+.field-required { color: var(--danger); }
+
+.field-textarea {
+  padding: 10px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  outline: none;
+  resize: vertical;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+
+.field-textarea:focus {
+  border-color: var(--accent-soft);
+  background: var(--bg-card);
+}
+
 .btn-delete:hover { background: var(--danger-bg); }

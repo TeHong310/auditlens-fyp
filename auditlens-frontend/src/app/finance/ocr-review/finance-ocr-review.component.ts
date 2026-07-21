@@ -7,6 +7,32 @@ import { forkJoin, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 
+// Display labels for the auditor's structured send-back request (Feature
+// 2) — machine keys mirror helpers/send_back.py exactly; this is the
+// Finance-side counterpart of the same lookup used in
+// auditor-record-detail.component.ts.
+const REASON_CATEGORY_LABELS: Record<string, string> = {
+  missing_document: 'Missing document',
+  incorrect_extracted_information: 'Incorrect extracted information',
+  invoice_po_gr_mismatch: 'Invoice / PO / GR mismatch',
+  possible_duplicate_invoice: 'Possible duplicate invoice',
+  authenticity_evidence_requires_clarification: 'Authenticity evidence requires clarification',
+  incorrect_supplier_information: 'Incorrect supplier information',
+  amount_or_quantity_requires_verification: 'Amount or quantity requires verification',
+  other: 'Other',
+};
+
+const REQUIRED_ACTION_LABELS: Record<string, string> = {
+  upload_missing_document: 'Upload missing document',
+  correct_extracted_information: 'Correct extracted information',
+  provide_written_explanation: 'Provide written explanation',
+  confirm_duplicate_submission: 'Confirm duplicate submission',
+  replace_incorrect_document: 'Replace incorrect document',
+  verify_amount_or_quantity: 'Verify amount or quantity',
+  confirm_supplier_information: 'Confirm supplier information',
+  other: 'Other',
+};
+
 @Component({
   selector: 'app-finance-ocr-review',
   standalone: true,
@@ -31,6 +57,14 @@ export class FinanceOcrReviewComponent implements OnInit {
     invoice_date: '', total_amount: '', tax_amount: ''
   };
   showTaxAmount: boolean = false;
+
+  // ── Returned for Correction (Features 2, 3) ──
+  // The current open send-back cycle for the selected document, if it
+  // was returned by the auditor — loaded fresh whenever a 'returned'
+  // document is selected. financeResponse is required before resubmit.
+  selectedDocCycle: any = null;
+  isLoadingCycle: boolean = false;
+  financeResponse: string = '';
 
   // PO
   poList: any[] = [];
@@ -161,7 +195,47 @@ export class FinanceOcrReviewComponent implements OnInit {
     this.showTaxAmount = doc.tax_amount !== null && doc.tax_amount !== undefined && doc.tax_amount !== '';
     this.successMessage = '';
     this.errorMessage = '';
+    this.financeResponse = '';
+    this.selectedDocCycle = null;
+    if (doc.status === 'returned') this.loadSelectedDocCycle(doc.document_id);
     this.cdr.detectChanges();
+  }
+
+  // ── Returned for Correction (Features 2, 3) ──
+
+  get returnedDocuments() {
+    return this.documents.filter(d => d.status === 'returned');
+  }
+
+  loadSelectedDocCycle(documentId: number) {
+    this.isLoadingCycle = true;
+    this.http.get<any>(`${this.apiUrl}/reviews/send-back-cycles/${documentId}`, {
+      headers: this.getHeaders()
+    }).subscribe({
+      next: (res) => {
+        const cycles = res.cycles || [];
+        this.selectedDocCycle = cycles.length ? cycles[cycles.length - 1] : null;
+        this.isLoadingCycle = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.selectedDocCycle = null;
+        this.isLoadingCycle = false;
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  reasonCategoryLabel(key: string): string {
+    return REASON_CATEGORY_LABELS[key] || key;
+  }
+
+  requiredActionLabel(key: string): string {
+    return REQUIRED_ACTION_LABELS[key] || key;
+  }
+
+  goToUpload() {
+    this.router.navigate(['/finance/upload']);
   }
 
   addTaxAmount() {
@@ -206,13 +280,19 @@ export class FinanceOcrReviewComponent implements OnInit {
   }
 
   canSubmit(): boolean {
-    return !!(this.editFields.invoice_number && this.editFields.vendor_name &&
+    const fieldsReady = !!(this.editFields.invoice_number && this.editFields.vendor_name &&
       this.editFields.total_amount && this.editFields.invoice_date);
+    if (this.selectedDoc?.status === 'returned') {
+      return fieldsReady && !!this.financeResponse.trim();
+    }
+    return fieldsReady;
   }
 
   submitToAuditor() {
     if (!this.selectedDoc || !this.canSubmit()) {
-      this.errorMessage = 'Please fill in all required fields before submitting.';
+      this.errorMessage = this.selectedDoc?.status === 'returned' && !this.financeResponse.trim()
+        ? 'Please add a Finance response before resubmitting.'
+        : 'Please fill in all required fields before submitting.';
       this.cdr.detectChanges();
       return;
     }
@@ -221,8 +301,9 @@ export class FinanceOcrReviewComponent implements OnInit {
     const url = isReturned
       ? `${this.apiUrl}/reviews/resubmit/${this.selectedDoc.document_id}`
       : `${this.apiUrl}/reviews/submit/${this.selectedDoc.document_id}`;
+    const body = isReturned ? { response: this.financeResponse.trim() } : {};
 
-    this.http.post<any>(url, {}, { headers: this.getHeaders() }).subscribe({
+    this.http.post<any>(url, body, { headers: this.getHeaders() }).subscribe({
       next: () => {
         this.isSubmitting = false;
         this.successMessage = isReturned
@@ -236,6 +317,8 @@ export class FinanceOcrReviewComponent implements OnInit {
           p => p.document_id !== this.selectedDoc.document_id
         );
         this.selectedDoc = null;
+        this.selectedDocCycle = null;
+        this.financeResponse = '';
         this.cdr.detectChanges();
         setTimeout(() => { this.successMessage = ''; this.cdr.detectChanges(); }, 4000);
       },

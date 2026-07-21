@@ -6217,3 +6217,206 @@ Assumptions:
 Setup/config needed:
   1. Redeploy the Render FRONTEND only — no backend changes, no new
      migration, no new environment variables.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-21
+What was changed:
+  Backend (auditlens-backend/):
+    - New table `send_back_cycles` (app.py::_ensure_send_back_cycles_
+      table(), same idempotent auto-create-on-startup pattern as every
+      other table in this repo — CREATE TABLE IF NOT EXISTS, no
+      migration runner) — ONE ROW PER SEND-BACK CYCLE, never a single
+      mutable reason overwritten in place. Columns: cycle_number,
+      return_reason_category, reason_other_note, auditor_instruction,
+      required_actions (JSONB array), required_action_other_note,
+      priority, response_due_date, sent_back_by/sent_back_at,
+      finance_response, finance_responded_by/finance_responded_at,
+      resubmitted_by/resubmitted_at, cycle_status (action_required ->
+      resubmitted -> resolved), resolution (approved | returned_again),
+      resolved_at. Documentation-only mirror added at migrations/2026-
+      07-21_create_send_back_cycles_table.sql (force-added past the
+      repo's `*.sql` gitignore rule, matching how every prior dated
+      migration file in that directory was already tracked).
+      documents.status keeps its EXISTING values (under_review/
+      returned/resubmitted/approved/...) completely unchanged — no
+      existing dashboard count, filter, or report was touched.
+    - New helpers/send_back.py: pure validation/derivation functions,
+      no DB/Flask/AI — validate_send_back_payload() (reason category,
+      instruction, required_actions shape, priority, due-date-not-
+      before-today, "other" requires a note, due date required for
+      high priority), validate_finance_response_payload(),
+      compute_activity_summary() ("Changes Since Send Back" — reports
+      an activity ONLY when a real stored timestamp — extracted_
+      fields.edited_at / purchase_orders.uploaded_at / goods_receipts.
+      uploaded_at — is strictly after the cycle's sent_back_at, never a
+      fabricated field-level diff, since no field-history/versioning
+      table exists), is_overdue().
+    - routes/reviews.py extended (no new parallel routes for the core
+      transitions — the existing endpoints now own the richer
+      behavior):
+        - POST /reviews/return/<id>: accepts the new structured
+          payload (reason_category, instruction, required_actions[],
+          priority, due_date) and creates a send_back_cycles row; if
+          the document already has a prior cycle (a repeat send-back
+          after Finance responded), that prior cycle is marked resolved
+          (resolution='returned_again') — never overwritten. The OLD
+          {"remarks": "..."} payload shape still works exactly as
+          before for backward compatibility (no cycle row is created
+          for it, since there's no structured data to store).
+        - POST /reviews/resubmit/<id>: when the document has an open
+          cycle, a written Finance response is now REQUIRED and is
+          saved onto that cycle (finance_response/finance_responded_by/
+          finance_responded_at/resubmitted_by/resubmitted_at,
+          cycle_status -> 'resubmitted'). Documents returned before this
+          feature existed (no cycle row) fall back to the original
+          optional-remarks behavior.
+        - POST /reviews/approve/<id>: if the document has a cycle in
+          'resubmitted' state, it's marked resolved
+          (resolution='approved').
+        - NEW: GET /reviews/send-back-cycles/<id> — every cycle ever
+          created for the document, oldest first (full history,
+          nothing dropped), each annotated with `activity_summary` and
+          `is_overdue`.
+    - tests/reviews/ (new): test_send_back_validation.py (17 pure
+      unit-test cases for helpers/send_back.py — no Flask, no DB) and
+      test_send_back_routes.py (10 cases against a REAL Flask test
+      client + REAL JWT machinery hitting the REAL route functions, but
+      a fully in-memory fake DB — role restrictions, invalid status
+      transitions, missing-field/invalid-due-date rejection, the full
+      send-back -> response -> resubmit -> approve happy path, MULTIPLE
+      send-back cycles preserving prior cycle data unmodified, and the
+      legacy remarks-only payload still working). Both added to
+      tests/extraction/run_all.py's suite list so `python tests/
+      extraction/run_all.py` runs everything in one command, matching
+      this repo's existing convention.
+  Frontend (auditlens-frontend/):
+    - auditor-record-detail.component.ts/.html/.css: the old one-click
+      "Send Back" (returnDocument(), an immediate POST with just a free-
+      text note) is replaced by a modal (openSendBackModal() /
+      submitSendBack()) collecting Return Reason Category, a required
+      Auditor Instruction textarea, one-or-more Required Actions
+      (checkboxes), Priority, and a Response Due Date — validated
+      client-side via the exported pure function validateSendBackForm()
+      (instruction required, ≥1 required action, due date not before
+      today, "Other" requires an explanation, high priority requires a
+      due date) before the network call, with the backend re-validating
+      the same rules authoritatively. The button relabels itself "Send
+      Back Again" once the record already has at least one prior cycle.
+      Added a "Finance Response" panel (shown once the latest cycle has
+      one) displaying the original reason/instruction, priority/due
+      date/overdue state, Finance's response, and "Changes Since Send
+      Back" (the cycle's activity_summary — real recorded activity
+      only). Added a "History" timeline rendered directly from
+      review_records (GET /reviews/history/<id>, already existed
+      server-side but was never called from this page) — the EXISTING
+      audit-log system, reused as-is rather than building a second
+      competing log, so multiple send-back/resubmit/approve cycles all
+      show correctly with no merging logic needed.
+    - finance-ocr-review.component.ts/.html/.css: added a "Returned for
+      Correction" section (reusing the existing document list/edit/
+      resubmit flow — no separate document editor was built) showing
+      every invoice with status='returned'; selecting one now fetches
+      and displays a "View Auditor Request" panel (return reason,
+      instruction, required actions, priority, due date/overdue) via
+      the same GET /reviews/send-back-cycles/<id> endpoint. Added a
+      required "Finance Response" textarea — canSubmit()/
+      submitToAuditor() now require and send it (POST /reviews/
+      resubmit/<id> with {response: ...}) whenever the selected document
+      was returned; first-time submissions are unaffected. "Upload
+      Supporting Document" links to the existing /finance/upload page
+      rather than a new upload mechanism (this repo's upload endpoints
+      are scoped to Invoice/PO/GR, not arbitrary attachments — no new
+      upload system was built, per the task's explicit instruction).
+    - New auditor-record-detail.component.spec.ts (18 cases) and
+      finance-ocr-review.component.spec.ts (9 cases) — every HTTP call
+      mocked via HttpTestingController, no real backend, no AI calls.
+      Cover: modal open/close/reset, required-action toggling, client-
+      side validation (missing fields, missing required actions,
+      invalid due date, "Other" without an explanation, high priority
+      without a due date), the POST payload shape, server-error
+      surfacing, the Finance Response panel appearing once a cycle has
+      a response, multi-cycle history rendering, the "Returned for
+      Correction" filter, cycle fetching on document selection,
+      Finance-response-gated canSubmit()/submitToAuditor(), and reason/
+      action label mapping.
+  Untouched, confirmed via `git diff --stat`: Claude extraction, Gemini
+  extraction, OCR, regex extraction, three-way matching (routes/
+  matching.py, routes/auditor.py's _build_comparison/_classify_
+  exception), authenticity detection, anomaly generation, and every
+  other extraction/matching/authenticity helper file. documents.status
+  values are unchanged; no existing dashboard/filter/report logic that
+  reads them was modified.
+
+Why:
+  The existing "Send Back" button changed status on a single click with
+  only a free-text note, Finance saw a generic "Returned" badge with no
+  context anywhere, and resubmission sent an empty body — there was no
+  way for Finance to explain what they fixed, and repeated send-backs
+  had no concept of a "cycle," so nothing distinguished attempt #1 from
+  attempt #2 beyond raw chronological order.
+
+Tests run and results:
+  - `python tests/extraction/run_all.py`: 9/12 suites PASS. The 3
+    failures (test_authenticity_ai.py, test_authenticity_siblings.py,
+    test_authenticity_scoring.py) are PRE-EXISTING and unrelated to
+    this change — they fail on `import fitz` (PyMuPDF is not installed
+    in this venv), confirmed via `git diff --stat` showing zero changes
+    to helpers/authenticity_check.py or helpers/claude_extractor.py,
+    the files those suites import. Both new suites (test_send_back_
+    validation.py: 17 cases, test_send_back_routes.py: 10 cases) PASS.
+  - `npx ng build --configuration production`: clean build (same pre-
+    existing bundle-size budget warnings as before, unrelated to this
+    change).
+  - `npx ng test --watch=false`: 29/30 tests pass; the 1 failure is the
+    same pre-existing, unrelated app.spec.ts issue confirmed via `git
+    diff --stat` showing zero changes to that file across this entire
+    session.
+  - Zero Claude API calls, zero Gemini API calls — no code path in this
+    change calls either engine; this is a status-transition/form/
+    display feature over already-loaded document data only.
+
+Assumptions / deliberate deviations from the task's "Possible API
+behaviour" suggestions (all disclosed, with reasoning):
+  - The task suggested a separate `POST /auditor/records/<id>/send-back`
+    route; this extends the EXISTING `POST /reviews/return/<id>`
+    instead, to avoid two endpoints racing to both flip documents.
+    status='returned' and insert into review_records for the same
+    action — a real correctness risk, and the kind of "second
+    competing architecture" the task itself warns against for the
+    audit log.
+  - The task suggested a separate `POST /finance/records/<id>/response`
+    endpoint distinct from resubmit; this repo's existing UI already
+    combines "write a response" and "resubmit" into one button click,
+    so the EXISTING `POST /reviews/resubmit/<id>` was extended to
+    validate+save the response and resubmit in the same atomic request,
+    rather than requiring two round-trips for one user action.
+  - "In Correction" (one of the task's recommended cycle statuses) is
+    not a distinct value cycle_status ever takes — no existing action
+    in this app triggers a "Finance started but hasn't finished"
+    transition. It's derivable on the frontend from real data (editFields
+    changes / extracted_fields.edited_at) if ever needed, but wasn't
+    added as a stored state to avoid inventing a transition with no
+    real trigger.
+  - The "Need Review" button in the auditor UI has no click handler and
+    no backing endpoint (confirmed by inspection) — per the task's own
+    "if already supported" qualifier for that action, it was left
+    untouched rather than newly implemented.
+  - Report & Log (auditor-report.component / finance-report.component)
+    was not modified — review_records (which already powers GET
+    /auditor/report/audit-trail) automatically gains the new cycles'
+    entries with no changes needed there; the richer structured detail
+    lives in the new record-detail History/Finance-Response panels
+    instead, satisfying the acceptance criterion's "Report & Log OR the
+    existing audit history" wording.
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND — the new send_back_cycles table is
+     created automatically on next boot (no manual migration step).
+  2. Redeploy the Render FRONTEND.
+  3. No new environment variables.
+  4. After deploy: send a real record back with the new form, confirm
+     it appears in Finance's "Returned for Correction" list with the
+     correct reason/instruction, submit a Finance response and
+     resubmit, and confirm the auditor sees the Finance Response panel
+     and History timeline correctly on the next review.

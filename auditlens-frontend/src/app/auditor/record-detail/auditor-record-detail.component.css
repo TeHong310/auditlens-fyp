@@ -505,6 +505,118 @@
 .doc-info-label { color: var(--text-secondary); font-weight: 500; }
 .doc-info-value { color: var(--text-primary); font-weight: 600; }
 
+/* Finance Response / Changes Since Send Back (Feature 4) */
+.finance-response-box {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.subsection-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.frb-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.priority-chip, .overdue-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.priority-normal { background: var(--bg-card); color: var(--text-secondary); }
+.priority-medium { background: var(--warning-bg); color: var(--warning); }
+.priority-high   { background: var(--danger-bg); color: var(--danger); }
+
+.overdue-chip { background: var(--danger-bg); color: var(--danger); }
+
+.due-date-note { font-size: 11.5px; color: var(--text-muted); }
+
+.frb-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-top: 10px;
+}
+
+.frb-value {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-top: 2px;
+  line-height: 1.45;
+}
+
+.frb-response { font-weight: 500; }
+
+.frb-submitted-by {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
+.changes-list {
+  margin: 4px 0 0 18px;
+  padding: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.changes-list li { margin-top: 3px; }
+
+/* History Timeline (Feature 5) */
+.history-box {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.history-entry {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-entry:last-child { border-bottom: none; padding-bottom: 0; }
+.history-entry:first-child { padding-top: 0; }
+
+.history-time {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.history-label {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.history-remarks {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
 .note-section { margin-bottom: 16px; }
 
 .note-label {
@@ -763,4 +875,130 @@
   font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
+}
+
+.btn-modal-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ── Send Back to Finance Modal (Feature 1) — dark-themed, unlike the
+   white/paper PDF-viewer modal above, since this is a form, not a
+   document. Reuses .modal-backdrop/.modal-header/.modal-footer. ── */
+.sendback-modal-box {
+  background: var(--bg-card);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 560px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.35);
+  overflow: hidden;
+}
+
+.sendback-modal-box .modal-header {
+  background: var(--bg-hover);
+  border-bottom: 1px solid var(--border);
+}
+
+.sendback-modal-box .modal-filename {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  max-width: none;
+}
+
+.sendback-modal-box .modal-footer {
+  border-top: 1px solid var(--border);
+}
+
+.sendback-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sendback-error-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.sb-field { margin-bottom: 14px; }
+
+.sb-field-row {
+  display: flex;
+  gap: 14px;
+}
+
+.sb-field-row .sb-field { flex: 1; }
+
+.sb-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.sb-required { color: var(--danger); }
+
+.sb-hint {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.sb-select, .sb-date-input {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  outline: none;
+  font-family: inherit;
+}
+
+.sb-select:focus, .sb-date-input:focus, .sb-textarea:focus { border-color: var(--accent-soft); }
+
+.sb-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  resize: vertical;
+  outline: none;
+  font-family: inherit;
+}
+
+.sb-checkbox-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.sb-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.sb-checkbox input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+@media (max-width: 640px) {
+  .sb-field-row { flex-direction: column; gap: 0; }
+  .sb-checkbox-grid { grid-template-columns: 1fr; }
 }

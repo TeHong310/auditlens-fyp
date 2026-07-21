@@ -365,6 +365,57 @@ def _ensure_authenticity_cache_table():
         print(f'WARNING: could not create authenticity_result_cache table: {type(e).__name__}: {e}')
 
 
+def _ensure_send_back_cycles_table():
+    """Auditor <-> Finance send-back/correction workflow: one row per
+    send-back CYCLE (not one mutable reason overwritten in place), so a
+    record sent back multiple times keeps its full history — each new
+    cycle is a new row, never an UPDATE over a prior cycle's reason/
+    response. documents.status keeps its existing values (returned/
+    resubmitted/approved/...) unchanged; cycle_status here is a finer-
+    grained sub-state (action_required -> resubmitted -> resolved) used
+    only for the richer UI, so no existing dashboard count/filter that
+    reads documents.status is affected. Same auto-create-on-startup
+    pattern as every other _ensure_ function above (no migration runner
+    in this repo)."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS send_back_cycles (
+                cycle_id SERIAL PRIMARY KEY,
+                document_id INTEGER NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+                cycle_number INTEGER NOT NULL,
+                return_reason_category VARCHAR(50) NOT NULL,
+                reason_other_note TEXT,
+                auditor_instruction TEXT NOT NULL,
+                required_actions JSONB NOT NULL DEFAULT '[]',
+                required_action_other_note TEXT,
+                priority VARCHAR(10) NOT NULL DEFAULT 'normal',
+                response_due_date DATE,
+                sent_back_by INTEGER NOT NULL REFERENCES users(user_id),
+                sent_back_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                finance_response TEXT,
+                finance_responded_by INTEGER REFERENCES users(user_id),
+                finance_responded_at TIMESTAMP,
+                resubmitted_by INTEGER REFERENCES users(user_id),
+                resubmitted_at TIMESTAMP,
+                cycle_status VARCHAR(20) NOT NULL DEFAULT 'action_required',
+                resolution VARCHAR(20),
+                resolved_at TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                UNIQUE(document_id, cycle_number)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_send_back_cycles_document ON send_back_cycles(document_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_send_back_cycles_status ON send_back_cycles(cycle_status)')
+        conn.commit()
+        conn.close()
+        print('send_back_cycles table ready')
+    except Exception as e:
+        print(f'WARNING: could not create send_back_cycles table: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -394,6 +445,7 @@ _ensure_document_line_items_table()
 _ensure_gemini_cache_table()
 _ensure_claude_cache_table()
 _ensure_authenticity_cache_table()
+_ensure_send_back_cycles_table()
 
 @app.route('/')
 def hello_world():

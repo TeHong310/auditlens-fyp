@@ -8,6 +8,86 @@ import { environment } from '../../../environments/environment';
 
 type DocType = 'invoice' | 'po' | 'gr';
 
+// ── Send-Back structured form (Feature 1) — machine keys mirror
+// helpers/send_back.py's REASON_CATEGORIES / REQUIRED_ACTIONS / PRIORITIES
+// exactly, so the payload sent to POST /reviews/return/<id> validates
+// cleanly server-side. Labels are the only thing translated to English
+// here; the backend never sees the label text. ──
+export type ReasonCategory =
+  | 'missing_document' | 'incorrect_extracted_information' | 'invoice_po_gr_mismatch'
+  | 'possible_duplicate_invoice' | 'authenticity_evidence_requires_clarification'
+  | 'incorrect_supplier_information' | 'amount_or_quantity_requires_verification' | 'other';
+
+export type RequiredAction =
+  | 'upload_missing_document' | 'correct_extracted_information' | 'provide_written_explanation'
+  | 'confirm_duplicate_submission' | 'replace_incorrect_document' | 'verify_amount_or_quantity'
+  | 'confirm_supplier_information' | 'other';
+
+export type Priority = 'normal' | 'medium' | 'high';
+
+export interface SendBackFormState {
+  reasonCategory: ReasonCategory | '';
+  reasonOtherNote: string;
+  instruction: string;
+  requiredActions: RequiredAction[];
+  requiredActionOtherNote: string;
+  priority: Priority;
+  dueDate: string;
+}
+
+const REASON_CATEGORY_OPTIONS: { key: ReasonCategory; label: string }[] = [
+  { key: 'missing_document', label: 'Missing document' },
+  { key: 'incorrect_extracted_information', label: 'Incorrect extracted information' },
+  { key: 'invoice_po_gr_mismatch', label: 'Invoice / PO / GR mismatch' },
+  { key: 'possible_duplicate_invoice', label: 'Possible duplicate invoice' },
+  { key: 'authenticity_evidence_requires_clarification', label: 'Authenticity evidence requires clarification' },
+  { key: 'incorrect_supplier_information', label: 'Incorrect supplier information' },
+  { key: 'amount_or_quantity_requires_verification', label: 'Amount or quantity requires verification' },
+  { key: 'other', label: 'Other' },
+];
+
+const REQUIRED_ACTION_OPTIONS: { key: RequiredAction; label: string }[] = [
+  { key: 'upload_missing_document', label: 'Upload missing document' },
+  { key: 'correct_extracted_information', label: 'Correct extracted information' },
+  { key: 'provide_written_explanation', label: 'Provide written explanation' },
+  { key: 'confirm_duplicate_submission', label: 'Confirm duplicate submission' },
+  { key: 'replace_incorrect_document', label: 'Replace incorrect document' },
+  { key: 'verify_amount_or_quantity', label: 'Verify amount or quantity' },
+  { key: 'confirm_supplier_information', label: 'Confirm supplier information' },
+  { key: 'other', label: 'Other' },
+];
+
+export function emptySendBackForm(): SendBackFormState {
+  return {
+    reasonCategory: '', reasonOtherNote: '', instruction: '',
+    requiredActions: [], requiredActionOtherNote: '', priority: 'normal', dueDate: '',
+  };
+}
+
+// Client-side mirror of helpers/send_back.py::validate_send_back_payload —
+// instant feedback before the network round-trip; the backend re-
+// validates the same rules and remains authoritative. Exported as a pure
+// function (no DOM/HttpClient) so it's directly unit-testable.
+export function validateSendBackForm(form: SendBackFormState, todayIso: string): string[] {
+  const errors: string[] = [];
+  if (!form.reasonCategory) errors.push('Please select a return reason category.');
+  if (form.reasonCategory === 'other' && !form.reasonOtherNote.trim()) {
+    errors.push('Please describe the "Other" reason.');
+  }
+  if (!form.instruction.trim()) errors.push('Auditor instruction is required.');
+  if (form.requiredActions.length === 0) errors.push('Select at least one required action.');
+  if (form.requiredActions.includes('other') && !form.requiredActionOtherNote.trim()) {
+    errors.push('Please describe the "Other" required action.');
+  }
+  if (form.dueDate && form.dueDate < todayIso) {
+    errors.push('Due date cannot be earlier than today.');
+  }
+  if (form.priority === 'high' && !form.dueDate) {
+    errors.push('A response due date is required for high-priority send-back requests.');
+  }
+  return errors;
+}
+
 @Component({
   selector: 'app-auditor-record-detail',
   standalone: true,
@@ -25,6 +105,15 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   successMessage: string = '';
   errorMessage: string = '';
   auditNote: string = '';
+
+  // ── Send-Back workflow (Features 1, 4, 5) ──
+  reasonCategoryOptions = REASON_CATEGORY_OPTIONS;
+  requiredActionOptions = REQUIRED_ACTION_OPTIONS;
+  showSendBackModal: boolean = false;
+  sendBack: SendBackFormState = emptySendBackForm();
+  sendBackErrors: string[] = [];
+  cycles: any[] = [];
+  reviewHistory: any[] = [];
 
   // PDF quick-view modal
   showModal: boolean = false;
@@ -51,6 +140,8 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
         this.documentId = parseInt(params['document_id']);
         this.loadComparison();
         this.loadAuthenticity();
+        this.loadCycles();
+        this.loadReviewHistory();
       }
     });
   }
@@ -141,6 +232,159 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return 'Unknown';
   }
 
+  // ── Send-Back cycles + review history (Features 4, 5) ───
+  // Two separate, deliberately UN-merged data sources:
+  //   - cycles: the structured send-back detail (reason/instruction/
+  //     required actions/priority/due date/Finance response) — powers
+  //     the "Finance Response" + "Changes Since Send Back" panels.
+  //   - reviewHistory: review_records, the EXISTING audit-log system
+  //     (see helpers/audit_log.py / routes/reviews.py) — already has
+  //     everything the History timeline needs (action, remarks,
+  //     reviewer, timestamp), so it's used as-is rather than building a
+  //     second competing log.
+
+  loadCycles() {
+    if (!this.documentId) return;
+    this.http.get<any>(`${this.apiUrl}/reviews/send-back-cycles/${this.documentId}`, {
+      headers: this.getHeaders()
+    }).subscribe({
+      next: (res) => { this.cycles = res.cycles || []; this.cdr.detectChanges(); },
+      error: () => { this.cycles = []; }
+    });
+  }
+
+  loadReviewHistory() {
+    if (!this.documentId) return;
+    this.http.get<any>(`${this.apiUrl}/reviews/history/${this.documentId}`, {
+      headers: this.getHeaders()
+    }).subscribe({
+      next: (res) => { this.reviewHistory = res.history || []; this.cdr.detectChanges(); },
+      error: () => { this.reviewHistory = []; }
+    });
+  }
+
+  get latestCycle(): any {
+    return this.cycles.length ? this.cycles[this.cycles.length - 1] : null;
+  }
+
+  get hasFinanceResponse(): boolean {
+    return !!this.latestCycle?.finance_response;
+  }
+
+  get changesSinceSendBack(): string[] {
+    return this.latestCycle?.activity_summary || [];
+  }
+
+  reasonCategoryLabel(key: string): string {
+    return REASON_CATEGORY_OPTIONS.find(o => o.key === key)?.label || key;
+  }
+
+  requiredActionLabel(key: string): string {
+    return REQUIRED_ACTION_OPTIONS.find(o => o.key === key)?.label || key;
+  }
+
+  priorityLabel(p: string): string {
+    if (p === 'high') return 'High';
+    if (p === 'medium') return 'Medium';
+    return 'Normal';
+  }
+
+  priorityClass(p: string): string {
+    if (p === 'high') return 'priority-high';
+    if (p === 'medium') return 'priority-medium';
+    return 'priority-normal';
+  }
+
+  historyLabel(action: string): string {
+    if (action === 'returned') return 'Record sent back to Finance';
+    if (action === 'resubmitted') return 'Record resubmitted for auditor review';
+    if (action === 'approved') return 'Record approved';
+    if (action === 'need_review') return 'Marked for further review';
+    return action;
+  }
+
+  formatDateTime(dateStr: string): string {
+    if (!dateStr) return '-';
+    return new Date(dateStr).toLocaleString('en-MY', {
+      day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+  }
+
+  // ── Send-Back modal (Feature 1) ──────────────────────────
+
+  get todayIso(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  get sendBackButtonLabel(): string {
+    return this.cycles.length > 0 ? 'Send Back Again' : 'Send Back to Finance';
+  }
+
+  openSendBackModal() {
+    this.sendBack = emptySendBackForm();
+    this.sendBackErrors = [];
+    this.showSendBackModal = true;
+  }
+
+  closeSendBackModal() {
+    this.showSendBackModal = false;
+  }
+
+  toggleRequiredAction(key: RequiredAction) {
+    const i = this.sendBack.requiredActions.indexOf(key);
+    if (i === -1) this.sendBack.requiredActions.push(key);
+    else this.sendBack.requiredActions.splice(i, 1);
+  }
+
+  isRequiredActionChecked(key: RequiredAction): boolean {
+    return this.sendBack.requiredActions.includes(key);
+  }
+
+  submitSendBack() {
+    if (!this.documentId || this.isSubmitting) return;
+
+    const errors = validateSendBackForm(this.sendBack, this.todayIso);
+    if (errors.length) {
+      this.sendBackErrors = errors;
+      this.cdr.detectChanges();
+      return;
+    }
+    this.sendBackErrors = [];
+    this.isSubmitting = true;
+
+    const payload: any = {
+      reason_category: this.sendBack.reasonCategory,
+      instruction: this.sendBack.instruction.trim(),
+      required_actions: this.sendBack.requiredActions,
+      priority: this.sendBack.priority,
+    };
+    if (this.sendBack.reasonOtherNote.trim()) payload.reason_other_note = this.sendBack.reasonOtherNote.trim();
+    if (this.sendBack.requiredActionOtherNote.trim()) {
+      payload.required_action_other_note = this.sendBack.requiredActionOtherNote.trim();
+    }
+    if (this.sendBack.dueDate) payload.due_date = this.sendBack.dueDate;
+
+    this.http.post<any>(`${this.apiUrl}/reviews/return/${this.documentId}`,
+      payload,
+      { headers: this.getHeaders() }
+    ).subscribe({
+      next: () => {
+        this.isSubmitting = false;
+        this.showSendBackModal = false;
+        this.successMessage = 'Document returned to Finance!';
+        this.cdr.detectChanges();
+        setTimeout(() => {
+          this.router.navigate(['/auditor/home']);
+        }, 2000);
+      },
+      error: (err) => {
+        this.isSubmitting = false;
+        this.sendBackErrors = [err.error?.error || 'Failed to send back.'];
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
   // ── Audit decision actions ──────────────────────────────
 
   approveDocument() {
@@ -161,34 +405,6 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
       error: (err) => {
         this.isSubmitting = false;
         this.errorMessage = err.error?.error || 'Failed to approve.';
-        this.cdr.detectChanges();
-      }
-    });
-  }
-
-  returnDocument() {
-    if (!this.documentId) return;
-    if (!this.auditNote) {
-      this.errorMessage = 'Please add a note before returning the document.';
-      this.cdr.detectChanges();
-      return;
-    }
-    this.isSubmitting = true;
-    this.http.post<any>(`${this.apiUrl}/reviews/return/${this.documentId}`,
-      { remarks: this.auditNote },
-      { headers: this.getHeaders() }
-    ).subscribe({
-      next: () => {
-        this.isSubmitting = false;
-        this.successMessage = 'Document returned to Finance!';
-        this.cdr.detectChanges();
-        setTimeout(() => {
-          this.router.navigate(['/auditor/home']);
-        }, 2000);
-      },
-      error: (err) => {
-        this.isSubmitting = false;
-        this.errorMessage = err.error?.error || 'Failed to return.';
         this.cdr.detectChanges();
       }
     });
