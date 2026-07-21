@@ -102,10 +102,17 @@ def _get_client():
         _client = genai.Client(api_key=Config.GEMINI_API_KEY)
     return _client
 
-AP_EXPERT_NOTE = """You are an AP (Accounts Payable) automation expert, not a generic OCR
-reader. Analyze the document's CONTEXT before extracting any value —
-do not extract the first company name, the first date, or the first
-amount you encounter; read the whole layout and understand:
+AP_EXPERT_NOTE = """You are an enterprise AP (Accounts Payable) automation AI. You are
+analyzing the document IMAGE visually — you are not behaving as a plain
+OCR text parser. Before extracting any field, locate these regions of
+the document and understand how they relate to each other:
+1. Header section (document title/type, letterhead)
+2. Supplier section (who issued/sold this document — the vendor)
+3. Buyer section (who it's addressed to — NEVER the vendor)
+4. Item/line-item table (the goods/services rows)
+5. Financial summary section (subtotal/tax/total)
+Do not extract the first company name, the first date, or the first
+amount you encounter — read the whole layout and understand:
 - which company is the SUPPLIER and which is the CUSTOMER/BUYER
 - whether this document is an invoice, a purchase order, or a goods
   receipt, and what that implies about which fields even apply
@@ -114,9 +121,27 @@ amount you encounter; read the whole layout and understand:
 - which date is this document's OWN date and which belongs to a
   different, merely-referenced document
 - which rows of a table are genuine line items vs. shipping/tax/footer
-  text
+  text, and that the description/part-number/quantity/amount cells in
+  the SAME row all belong to the SAME item — never mix values across rows
 If you are not confident in a value after this analysis, return null —
 never guess."""
+
+VENDOR_ENTITY_CORRECTION_NOTE = """
+- ENTITY CORRECTION: if OCR-level image noise makes the vendor company
+  name look slightly misspelled in different ways across the page or
+  across related documents (e.g. "COLCRAFT" / "COILCRAF" / "COILCRAFTT"
+  for what is genuinely one company, "COILCRAFT"), correct the spelling
+  to the most consistent, plausible full form rather than returning the
+  noisiest variant. Use every available signal to decide the true entity
+  name: the company registration/letterhead text read as carefully as
+  possible, the logo/header area (the most prominent, official company
+  name), the block specifically labeled Supplier/Vendor/Seller (never the
+  buyer's block), and whether the same or a very similar spelling repeats
+  elsewhere on this document (repetition increases confidence in that
+  spelling). Only correct spelling when context strongly and consistently
+  supports one specific entity name — if the document is genuinely
+  ambiguous (no repeated occurrence, no clear logo/letterhead reading),
+  return the name exactly as printed rather than guessing a correction."""
 
 DOCUMENT_QUALITY_NOTE = """These documents may be:
 - Scanned (CamScanner watermark visible)
@@ -224,7 +249,13 @@ LINE_ITEMS_NOTE = """
   7. Do NOT return only the first item when more rows exist. Do NOT ignore the table entirely and
      return an empty array when rows ARE visible. Do NOT summarize/collapse multiple distinct rows
      into one combined entry. Do NOT merge two different products into a single line_items entry —
-     if the table shows 5 distinct rows, line_items must have 5 entries, not 1."""
+     if the table shows 5 distinct rows, line_items must have 5 entries, not 1.
+  8. item_code/part_number is the PRIMARY key this same product is matched on across Invoice/PO/GR —
+     never omit or drop a code you can actually read, even if the description alone would already be
+     understandable without it. A description also loses NO detail when a code is split out: preserve
+     the full product name, model number, and specification text in description, not just a short
+     category word (e.g. "CHIP INDUCTORS" with part_number "0603DC-12NXGRW" is correct; description
+     "INDUCTORS" alone, with the part number silently dropped, is not)."""
 
 AUTHENTICITY_SIGNALS_BLOCK = """=== PART 2: AUTHENTICITY SIGNALS ===
 Detect the following signals AND identify how this document was captured/uploaded.
@@ -286,16 +317,17 @@ AUTHENTICITY_JSON_TAIL = """  "has_company_chop": false,
   }
 }"""
 
-INVOICE_FULL_PROMPT = """You are an expert at extracting structured data from Malaysian SME
-business documents AND detecting authenticity signals on them. You are looking
-directly at the invoice IMAGE (not OCR text), so read the actual layout.
+INVOICE_FULL_PROMPT = """You are an enterprise AP automation AI extracting structured data from
+Malaysian SME business documents AND detecting authenticity signals on
+them. You are analyzing the invoice IMAGE visually (not OCR text) — you
+are not behaving as a plain OCR text parser.
 
 === PART 1: FIELD EXTRACTION ===
 """ + AP_EXPERT_NOTE + "\n" + DOCUMENT_QUALITY_NOTE + LABEL_NOT_VALUE_NOTE + """
 
 IMPORTANT RULES:
 - The VENDOR is the entity ISSUING the invoice (the seller), typically shown as the company name in the document header at the top
-- The BUYER is who the invoice is billed TO ("Bill To", "Invoice To"), which is NOT the vendor
+- The BUYER is who the invoice is billed TO ("Bill To", "Invoice To"), which is NOT the vendor""" + VENDOR_ENTITY_CORRECTION_NOTE + """
 - INVOICE NUMBER: Look for the invoice number in these labels (case-insensitive), in priority order:
   1. "No.", "No :", "No. :", "No:", "Invoice No.", "Invoice No", "Invoice #", "Invoice Number", "Bill No.", "Doc No.", "Tax Invoice No.", or a bare "INVOICE:" label
   2. If the label is followed by ":" or wide whitespace, the value is what comes after
@@ -354,6 +386,9 @@ IMPORTANT RULES:
   document (per the TOTAL AMOUNT rule above, including its Priority 3 fallback), treat any tax-labeled
   value you found with extra caution and double-check it is genuinely SST/GST/VAT-labeled before
   returning it, since an unverifiable tax figure is a common source of extraction errors.
+- SUBTOTAL: the pre-tax amount, printed on a line labeled "Subtotal"/"Sub Total"/"Total Excl. Tax" — a
+  SEPARATE field from total_amount (the final payable amount, after tax) and tax_amount. Return null if
+  no subtotal line exists on this document.
 - Return null for any field you cannot confidently extract
 - Amounts must be numbers only (no currency symbols, no commas, no "RM")
 - Dates in ISO format: YYYY-MM-DD
@@ -362,6 +397,7 @@ IMPORTANT RULES:
   "invoice_number": "string or null",
   "vendor_name": "string or null (the SELLER shown in the header)",
   "invoice_date": "YYYY-MM-DD or null",
+  "subtotal": number or null (the pre-tax amount, separate from total_amount),
   "total_amount": number or null (the ORIGINAL-currency total, never an exchange-rate-converted value),
   "tax_amount": number or null,
   "currency": "string or null (the ORIGINAL currency of total_amount, e.g. RM, MYR, USD)",
@@ -371,9 +407,10 @@ IMPORTANT RULES:
   "line_items": [{"item_code": null, "part_number": null, "description": "string", "quantity": null, "unit_price": null, "amount": null}],
 """ + AUTHENTICITY_JSON_TAIL
 
-PO_FULL_PROMPT = """You are an expert at extracting structured data from Malaysian SME
-business documents AND detecting authenticity signals on them. You are looking
-directly at the PURCHASE ORDER (PO) IMAGE (not OCR text), so read the actual layout.
+PO_FULL_PROMPT = """You are an enterprise AP automation AI extracting structured data from
+Malaysian SME business documents AND detecting authenticity signals on
+them. You are analyzing the PURCHASE ORDER (PO) IMAGE visually (not OCR
+text) — you are not behaving as a plain OCR text parser.
 
 === PART 1: FIELD EXTRACTION ===
 """ + AP_EXPERT_NOTE + "\n" + DOCUMENT_QUALITY_NOTE + LABEL_NOT_VALUE_NOTE + """
@@ -391,7 +428,7 @@ IMPORTANT RULES:
   COMPONENTS (M) SDN. BHD.", the vendor_name is "MEGATECH COMPONENTS (M)
   SDN. BHD." — the letterhead company, ORIONTECH, must NEVER be returned
   as vendor_name on a PO. If no supplier heading/section can be found,
-  return null rather than defaulting to the letterhead.
+  return null rather than defaulting to the letterhead.""" + VENDOR_ENTITY_CORRECTION_NOTE + """
 - CRITICAL: PO Number rules:
   1. PO Number identification priority — different suppliers label this field differently. Search for
      these labels, in this priority order, and use the value adjacent to (right of or below) the FIRST
@@ -446,6 +483,8 @@ IMPORTANT RULES:
   - Reject values that appear in item-line "Sub Total" columns
   - Reject "Discount" amounts (they're not the total)
   If the document has both "Total Excl. Tax" and "Total Payable Incl. Tax", ALWAYS return "Total Payable Incl. Tax".""" + CURRENCY_NOTE + """
+- SUBTOTAL: the pre-tax amount ("Total Excl. Tax"/"Sub Total") — a SEPARATE field from total_amount
+  (the final tax-inclusive payable amount). Return null if no subtotal line exists on this document.
 - Return null for any field you cannot confidently extract
 - Amounts must be numbers only (no currency symbols, no commas, no "RM")
 - Dates in ISO format: YYYY-MM-DD
@@ -454,6 +493,7 @@ IMPORTANT RULES:
   "po_number": "string or null",
   "vendor_name": "string or null (the SUPPLIER the PO is issued to)",
   "po_date": "YYYY-MM-DD or null",
+  "subtotal": number or null (the pre-tax amount, separate from total_amount),
   "total_amount": number or null (the ORIGINAL-currency total, never an exchange-rate-converted value),
   "currency": "string or null (the ORIGINAL currency of total_amount, e.g. RM, MYR, USD)",
   "item_description": "string or null (first line-item row)",
@@ -461,9 +501,10 @@ IMPORTANT RULES:
   "line_items": [{"item_code": null, "part_number": null, "description": "string", "quantity": null, "unit_price": null, "amount": null}],
 """ + AUTHENTICITY_JSON_TAIL
 
-GR_FULL_PROMPT = """You are an expert at extracting structured data from Malaysian SME
-business documents AND detecting authenticity signals on them. You are looking
-directly at the GOODS RECEIPT (GR) IMAGE (not OCR text), so read the actual layout.
+GR_FULL_PROMPT = """You are an enterprise AP automation AI extracting structured data from
+Malaysian SME business documents AND detecting authenticity signals on
+them. You are analyzing the GOODS RECEIPT (GR) IMAGE visually (not OCR
+text) — you are not behaving as a plain OCR text parser.
 
 === PART 1: FIELD EXTRACTION ===
 """ + AP_EXPERT_NOTE + "\n" + DOCUMENT_QUALITY_NOTE + LABEL_NOT_VALUE_NOTE + """
@@ -476,7 +517,7 @@ IMPORTANT RULES:
   prominent it looks. The VENDOR is who DELIVERED the goods, named under
   a "Received From"/"Delivered By"/"Supplier" heading further down the
   page. If no such heading/section can be found, return null rather than
-  defaulting to the letterhead.
+  defaulting to the letterhead.""" + VENDOR_ENTITY_CORRECTION_NOTE + """
 - GR Number labels (priority order):
   1. "Doc No." (most common on Malaysian GRN, e.g. "Doc No.  PD6011823")
   2. "GRN No.", "GR No.", "Goods Receipt No."
