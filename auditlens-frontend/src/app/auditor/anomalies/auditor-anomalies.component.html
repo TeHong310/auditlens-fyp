@@ -43,10 +43,20 @@
     <div class="skeleton-card" *ngFor="let i of [1,2]"></div>
   </div>
 
-  <!-- Empty state -->
-  <div class="empty-state" *ngIf="!isLoading && !errorMessage && anomalies.length === 0">
+  <!-- Empty state: no anomalies exist anywhere (stats.total is filter-
+       independent) vs. anomalies exist but the current filter combo
+       hides all of them — these need different messages so the auditor
+       isn't told "all normal" when anomalies actually exist. -->
+  <div class="empty-state" *ngIf="!isLoading && !errorMessage && anomalies.length === 0 && stats.total === 0">
     <p class="empty-icon"><i class="ph-duotone ph-confetti"></i></p>
-    <p class="empty-text">No anomalies detected — all records appear normal.</p>
+    <p class="empty-text empty-text-success">No anomalies detected.</p>
+    <p class="empty-subtext">No unusual transaction patterns were found.</p>
+  </div>
+
+  <div class="empty-state" *ngIf="!isLoading && !errorMessage && anomalies.length === 0 && stats.total > 0">
+    <p class="empty-icon"><i class="ph-duotone ph-funnel"></i></p>
+    <p class="empty-text empty-text-neutral">No anomalies match the selected filters.</p>
+    <p class="empty-subtext">Try adjusting the filters.</p>
   </div>
 
   <!-- Anomaly Cards -->
@@ -64,34 +74,50 @@
 
       <p class="card-vendor">Vendor: {{ a.vendor_name || 'Unknown vendor' }}</p>
 
+      <div class="card-meta-row" *ngIf="(a.amount !== null && a.amount !== undefined) || a.invoice_date">
+        <span class="meta-item" *ngIf="a.amount !== null && a.amount !== undefined">Amount: {{ formatAmount(a.amount) }}</span>
+        <span class="meta-item" *ngIf="a.invoice_date">Invoice Date: {{ a.invoice_date }}</span>
+      </div>
+
       <div class="pattern-box">
-        <p class="section-label"><i class="ph-duotone ph-chart-bar"></i> Detected Pattern</p>
-        <div class="pattern-line" *ngFor="let line of patternLines(a)">
-          <span class="pattern-label">{{ line.label }}:</span>
-          <span class="pattern-value">{{ line.value }}</span>
-        </div>
+        <p class="section-label"><i class="ph-duotone ph-chart-bar"></i> Evidence Found</p>
+        <ng-container *ngIf="a.anomaly_type === 'duplicate'">
+          <div class="evidence-check-line" *ngFor="let line of duplicateEvidenceLines(a)">
+            <i class="ph-duotone ph-check-circle"></i> {{ line }}
+          </div>
+        </ng-container>
+        <ng-container *ngIf="a.anomaly_type !== 'duplicate'">
+          <div class="pattern-line" *ngFor="let line of patternLines(a)">
+            <span class="pattern-label">{{ line.label }}:</span>
+            <span class="pattern-value">{{ line.value }}</span>
+          </div>
+        </ng-container>
       </div>
 
       <div class="ai-box">
-        <p class="section-label"><i class="ph-duotone ph-robot"></i> AI Analysis</p>
-        <p class="ai-text">"{{ a.ai_explanation }}"</p>
+        <p class="section-label"><i class="ph-duotone ph-robot"></i> AI Assessment</p>
+        <p class="ai-summary">{{ aiAssessmentSummary(a) }}</p>
+        <p class="ai-text" *ngIf="a.ai_explanation">{{ a.ai_explanation }}</p>
       </div>
 
       <div class="rec-box">
-        <p class="section-label"><i class="ph-duotone ph-lightbulb"></i> Recommendation</p>
-        <p class="rec-text">"{{ a.ai_recommendation }}"</p>
+        <p class="section-label"><i class="ph-duotone ph-lightbulb"></i> Suggested Checks</p>
+        <ul class="checks-list">
+          <li *ngFor="let c of suggestedChecks(a)">{{ c }}</li>
+        </ul>
+        <p class="rec-text" *ngIf="a.ai_recommendation">{{ a.ai_recommendation }}</p>
       </div>
 
       <div class="card-actions" *ngIf="a.status === 'pending'">
         <button class="btn-investigate" (click)="investigate(a)">Investigate →</button>
-        <button class="btn-reviewed" [disabled]="actionInFlight === a.anomaly_id" (click)="review(a, 'reviewed')"><i class="ph-duotone ph-check"></i> Mark Reviewed</button>
-        <button class="btn-dismiss" [disabled]="actionInFlight === a.anomaly_id" (click)="review(a, 'dismissed')"><i class="ph-duotone ph-x"></i> Dismiss</button>
+        <button class="btn-reviewed" [disabled]="actionInFlight === a.anomaly_id" (click)="review(a, 'reviewed')"><i class="ph-duotone ph-check"></i> Complete Review</button>
+        <button class="btn-dismiss" [disabled]="actionInFlight === a.anomaly_id" (click)="review(a, 'dismissed')"><i class="ph-duotone ph-x"></i> False Positive</button>
       </div>
       <div class="card-actions" *ngIf="a.status !== 'pending'">
         <button class="btn-investigate" (click)="investigate(a)">Investigate →</button>
         <span class="status-note">
           <i class="ph-duotone" [ngClass]="a.status === 'reviewed' ? 'ph-check' : 'ph-x'"></i>
-          {{ a.status === 'reviewed' ? 'Reviewed' : 'Dismissed' }}
+          {{ statusLabel(a.status) }}
         </span>
       </div>
 

@@ -155,7 +155,7 @@ export class AuditorAnomaliesComponent implements OnInit {
     if (type === 'amount') return 'Amount Anomaly';
     if (type === 'round') return 'Round Amount';
     if (type === 'weekend') return 'Weekend Transaction';
-    if (type === 'duplicate') return 'Duplicate Suspicion';
+    if (type === 'duplicate') return 'Possible Duplicate Invoice';
     return 'Anomaly';
   }
 
@@ -164,6 +164,10 @@ export class AuditorAnomaliesComponent implements OnInit {
     return 'RM ' + Number(v).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
+  // Non-duplicate types are comparative/statistical signals, not binary
+  // matches — kept as label/value rows (just relabeled "Evidence Found"
+  // in the template) rather than forced into a checklist that wouldn't
+  // fit the underlying data.
   patternLines(anomaly: any): { label: string; value: string }[] {
     const p = anomaly.detected_pattern || {};
     switch (anomaly.anomaly_type) {
@@ -185,16 +189,93 @@ export class AuditorAnomaliesComponent implements OnInit {
           { label: 'Invoice Date', value: p.date },
           { label: 'Day of Week', value: p.day_of_week },
         ];
-      case 'duplicate':
-        return [
-          { label: 'Matched Invoice', value: p.matched_invoice_no || 'Unknown' },
-          { label: 'Matched Date', value: p.matched_date },
-          { label: 'Days Apart', value: `${p.days_apart}` },
-          { label: 'Amount Diff', value: `${p.amount_diff_pct}%` },
-        ];
       default:
         return [];
     }
+  }
+
+  // Duplicate detection matches on same vendor + amount within 5% +
+  // date within a 7-day window (see helpers/anomaly_detector.py) — not
+  // necessarily an exact match, so each line reflects what the stored
+  // detected_pattern actually proves rather than overclaiming an exact
+  // match that wasn't checked.
+  duplicateEvidenceLines(anomaly: any): string[] {
+    const p = anomaly.detected_pattern || {};
+    const lines: string[] = [];
+    if (p.matched_invoice_no) {
+      lines.push(`Same vendor as invoice ${p.matched_invoice_no}`);
+    }
+    if (p.days_apart !== undefined && p.days_apart !== null) {
+      lines.push(p.days_apart === 0 ? 'Same invoice date' : `Invoice dates ${p.days_apart} day(s) apart`);
+    }
+    if (p.amount_diff_pct !== undefined && p.amount_diff_pct !== null) {
+      const diff = Math.abs(p.amount_diff_pct);
+      lines.push(diff < 0.01 ? 'Same amount' : `Amount differs by only ${diff}%`);
+    }
+    return lines;
+  }
+
+  // Short, professional, type-level summary shown as the primary AI
+  // Assessment line — frontend-only formatting (no AI call). The full
+  // original ai_explanation from the API is still shown underneath, so
+  // no AI-generated explanation is removed, only de-emphasized.
+  aiAssessmentSummary(anomaly: any): string {
+    switch (anomaly.anomaly_type) {
+      case 'duplicate':
+        return 'Possible duplicate invoice identified based on matching invoice details. Auditor verification required.';
+      case 'amount':
+        return "Invoice amount is significantly higher than this vendor's typical range. Auditor verification required.";
+      case 'round':
+        return 'Invoice amount is an unusually round figure. Auditor verification required.';
+      case 'weekend':
+        return 'Invoice is dated on a non-business day. Auditor verification required.';
+      default:
+        return 'Unusual transaction pattern detected. Auditor verification required.';
+    }
+  }
+
+  // Short, neutral checklist shown as the primary Suggested Checks
+  // content — frontend-only formatting (no AI call). The full original
+  // ai_recommendation from the API is still shown underneath.
+  suggestedChecks(anomaly: any): string[] {
+    switch (anomaly.anomaly_type) {
+      case 'duplicate':
+        return [
+          'Compare invoice records',
+          'Verify whether both records represent the same transaction',
+          'Confirm with Accounts Payable if required',
+        ];
+      case 'amount':
+        return [
+          "Compare against the vendor's historical invoice amounts",
+          'Verify the amount against a purchase order or quotation',
+          'Confirm with the vendor if required',
+        ];
+      case 'round':
+        return [
+          'Check for a detailed quotation or itemized breakdown',
+          'Confirm the amount was not estimated or rounded incorrectly',
+          'Verify with the vendor if required',
+        ];
+      case 'weekend':
+        return [
+          'Confirm the invoice date with the vendor',
+          'Check whether this reflects an actual transaction',
+          'Verify supporting documents if required',
+        ];
+      default:
+        return [
+          'Review the transaction details',
+          'Verify supporting documents',
+          'Confirm with the vendor if required',
+        ];
+    }
+  }
+
+  statusLabel(status: string): string {
+    if (status === 'reviewed') return 'Review Complete';
+    if (status === 'dismissed') return 'False Positive';
+    return status;
   }
 
   relativeTime(dateStr: string): string {

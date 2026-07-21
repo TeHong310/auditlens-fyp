@@ -6084,3 +6084,136 @@ Setup/config needed:
      the document-type-specific wording, a missing PO/GR supplier logo
      shows grey "Optional" (not red), and a missing signature shows
      grey "Not Required" (not red).
+
+----------------------------------------------------------------------
+
+Date: 2026-07-21
+What was changed:
+  Frontend only (auditlens-frontend/), UI/UX wording and layout only —
+  no backend, database, extraction, matching, or authenticity changes:
+    - auditor-anomalies.component.ts:
+        - typeLabel(): 'Duplicate Suspicion' -> 'Possible Duplicate
+          Invoice' (display label only; anomaly_type value 'duplicate'
+          in the API/DB is untouched).
+        - Added statusLabel(): 'reviewed' -> 'Review Complete',
+          'dismissed' -> 'False Positive' (display only; a.status
+          string values are untouched).
+        - Added duplicateEvidenceLines(): renders the duplicate
+          anomaly's existing detected_pattern fields (matched_invoice_
+          no, days_apart, amount_diff_pct — all already returned by
+          GET /anomalies) as a checkmark-style evidence list. Wording
+          reflects what the backend actually verified (same vendor +
+          amount within 5% + date within a 7-day window — see helpers/
+          anomaly_detector.py) rather than claiming an exact match the
+          detector doesn't check; when the underlying values genuinely
+          are identical (0 days apart / 0% diff) the line reads "Same
+          invoice date" / "Same amount".
+        - patternLines() unchanged in content, only in scope (now used
+          for the 3 non-duplicate types only, since those are
+          comparative/statistical signals rather than binary matches
+          and don't fit a checkmark list).
+        - Added aiAssessmentSummary() and suggestedChecks(): frontend-
+          only, static, per-anomaly-type short professional summaries
+          ("Possible duplicate invoice identified based on matching
+          invoice details. Auditor verification required." / a 3-item
+          checklist per type) shown as the PRIMARY text in the AI
+          Assessment / Suggested Checks cards. No AI API is called to
+          produce or rewrite this text.
+    - auditor-anomalies.component.html:
+        - Card field order changed to match the requested hierarchy:
+          Risk Level + Issue Type + Invoice Number (existing top bar,
+          unchanged) -> Vendor (existing) -> new Amount / Invoice Date
+          row (only rendered when the value is present) -> Evidence
+          Found (renamed from "Detected Pattern") -> AI Assessment
+          (renamed from "AI Analysis") -> Suggested Checks (renamed
+          from "Recommendation") -> Actions.
+        - AI Assessment card now shows the new short summary line
+          first, with the original a.ai_explanation kept underneath in
+          smaller, non-italic secondary text — not removed, only
+          de-emphasized, so the underlying AI Analysis is still fully
+          visible.
+        - Suggested Checks card now shows the new 3-item checklist
+          first, with the original a.ai_recommendation kept underneath
+          in the same secondary style — not removed.
+        - Action buttons relabeled: "Mark Reviewed" -> "Complete
+          Review", "Dismiss" -> "False Positive", "Investigate"
+          unchanged. Click handlers (review(a,'reviewed') /
+          review(a,'dismissed') / investigate(a)) are untouched — same
+          POST /anomalies/<id>/review calls, same status values sent.
+        - Empty state split into two distinct messages using
+          stats.total (filter-independent, from GET /anomalies/stats)
+          vs. anomalies.length (current filtered result): "No
+          anomalies detected. No unusual transaction patterns were
+          found." when stats.total === 0, vs. "No anomalies match the
+          selected filters. Try adjusting the filters." when
+          stats.total > 0 but the current filter combination returns
+          nothing. The old single message ("...all records appear
+          normal") no longer appears when anomalies actually exist.
+    - auditor-anomalies.component.css: added styles for the new
+      .card-meta-row/.meta-item (Amount/Invoice Date), .evidence-
+      check-line (duplicate checkmark list), .ai-summary/.checks-list
+      (primary short text), and .empty-text-success/.empty-text-
+      neutral/.empty-subtext (two-variant empty state). No existing
+      selectors were removed; .ai-text/.rec-text were restyled smaller
+      and non-italic to read as secondary detail text rather than the
+      primary message.
+  Untouched, confirmed via `git diff --stat`: everything under
+  auditlens-backend/ (anomaly_detector.py, routes/anomalies.py, and
+  every other extraction/matching/authenticity file), and every other
+  frontend file. No anomalies table row, detected_pattern/ai_
+  explanation/ai_recommendation content, or any other existing
+  database record was modified.
+
+Why:
+  The anomaly cards used internal/engineering terminology ("Detected
+  Pattern", "AI Analysis") and long AI-generated paragraphs that read
+  like a chatbot rather than a professional audit tool, and buried
+  Amount/Invoice Date (data the API already returns) inside the
+  Evidence box instead of surfacing them where an auditor scans first.
+
+Testing:
+  - Zero Claude API calls, zero Gemini API calls, zero new anomaly
+    generation — this change only touches display logic over already-
+    loaded `anomalies`/`stats` data; no code path here calls
+    run_anomaly_detection(), get_gemini_explanation(), or any AI
+    helper, and no new anomalies were triggered during testing.
+  - `npx ng build --configuration production` — clean build (same pre-
+    existing bundle-size budget warnings as before, unrelated to this
+    change).
+  - `npx ng test --watch=false` — 1/1 pre-existing unrelated failure in
+    app.spec.ts only (confirmed via `git diff --stat` — zero changes
+    to that file, a stale scaffold title assertion).
+  - `git status`/`git diff --stat` confirmed changes are scoped to
+    exactly 3 files (auditor-anomalies.component.ts/.html/.css) —
+    zero changes anywhere under auditlens-backend/.
+
+Assumptions:
+  - The task's Evidence Found example for duplicates ("Matching
+    invoice number" / "Matching invoice date" / "Same amount") implies
+    an exact match the duplicate detector doesn't actually check
+    (it matches on same vendor + amount within 5% + date within a
+    7-day window, not exact equality — see detect_duplicate_
+    suspicion() in helpers/anomaly_detector.py). Per this task's own
+    "do not add new detection logic, keep existing values from API"
+    instruction, the evidence lines describe what was actually
+    verified (falling back to "Same invoice date"/"Same amount"
+    wording only when the stored values are genuinely identical)
+    rather than overstating the match.
+  - "Currency" and "PO reference" (task step 6) are not present in the
+    existing GET /anomalies response (routes/anomalies.py only selects
+    invoice_number, vendor_name, invoice_date, total_amount) — per "do
+    NOT modify backend just to add new fields," these two are not
+    displayed. Amount and Invoice Date, which ARE already returned,
+    are now shown.
+  - The AI Assessment / Suggested Checks "short professional summary"
+    text is a static, frontend-only mapping keyed by anomaly_type (4
+    types), matching the task's own example wording style, rather than
+    an algorithmic shortening of the stored ai_explanation/ai_
+    recommendation strings (which are single run-on sentences with no
+    natural break point to truncate at). The original stored text
+    remains visible underneath in both cards, unchanged and un-
+    truncated.
+
+Setup/config needed:
+  1. Redeploy the Render FRONTEND only — no backend changes, no new
+     migration, no new environment variables.
