@@ -209,10 +209,15 @@ def _cross_document_authenticity_for(cursor, document_id):
         row), compared via routes/auditor.py's _vendor_match_all() — the
         same fuzzy, OCR-typo-tolerant comparator already trusted for
         Invoice/PO/GR vendor matching elsewhere.
-      - Document number references / item consistency / date order
-        ("Timeline"): routes/auditor.py's _build_comparison() — the same
-        3-way matching engine already powering the Record Detail
-        Field Comparison table.
+      - Document number references / item consistency: routes/auditor.
+        py's _build_comparison() — the same 3-way matching engine already
+        powering the Record Detail Field Comparison table.
+
+    v5: deliberately does NOT include the PO->GR->Invoice date sequence —
+    that is a WORKFLOW timing signal, not an authenticity/identity signal,
+    and is reported separately by _workflow_consistency_for() below so it
+    can never silently drag down (or prop up) an authenticity-focused
+    score.
 
     Returns {cross_document_score, issues} or None if fewer than 2
     document types have been checked yet (nothing to cross-compare).
@@ -245,9 +250,8 @@ def _cross_document_authenticity_for(cursor, document_id):
     if comparison:
         match = comparison['match_result']
         weighted_checks = (
-            ('po_reference_match', 'PO/Invoice/GR reference numbers do not all match', 20),
+            ('po_reference_match', 'PO/Invoice/GR reference numbers do not all match', 25),
             ('line_items_match',   'Part numbers/descriptions do not match across documents', 25),
-            ('date_order_valid',   'Document dates are out of expected order (PO before GR before Invoice)', 15),
         )
         for key, issue_text, weight in weighted_checks:
             value = match.get(key)
@@ -261,6 +265,36 @@ def _cross_document_authenticity_for(cursor, document_id):
 
     cross_document_score = round((points / max_points) * 100) if max_points > 0 else None
     return {'cross_document_score': cross_document_score, 'issues': issues}
+
+
+def _workflow_consistency_for(cursor, document_id):
+    """v5 spec objective 7: the PO -> GR -> Invoice date sequence is a
+    WORKFLOW timing signal (did receipt happen after ordering, did
+    billing happen after receipt), not an authenticity/tampering signal
+    — it must never be blended into authenticity_score or
+    cross_document_score (a document can be 100% genuine and visually
+    verified while still having an out-of-order workflow, e.g. an
+    invoice billed before goods were logged as received). Reported here
+    as its own score, reusing the existing date_order_valid check
+    already computed by routes/auditor.py's _build_comparison() rather
+    than recomputing it.
+
+    Returns {workflow_consistency_score, issues} or None if the date
+    order check isn't applicable (e.g. fewer than 2 of the 3 dates are
+    available to compare).
+    """
+    comparison = _build_comparison(cursor, document_id)
+    if not comparison:
+        return None
+    date_order_valid = comparison['match_result'].get('date_order_valid')
+    if date_order_valid is None:
+        return None
+    if date_order_valid:
+        return {'workflow_consistency_score': 100, 'issues': []}
+    return {
+        'workflow_consistency_score': 0,
+        'issues': ['Document dates are out of expected order (PO date should be <= GR date <= Invoice date)'],
+    }
 
 
 def _document_consistency_for(cursor, document_id):
@@ -349,10 +383,13 @@ def get_authenticity_check(document_id):
         # Computed AFTER sibling checks, on a fresh cursor, so it reflects
         # any sibling rows just created above — see
         # _cross_document_authenticity_for's docstring for why this is
-        # never stored, only computed at read time.
+        # never stored, only computed at read time. workflow_consistency
+        # is kept as a SEPARATE field (v5) — the PO->GR->Invoice date
+        # sequence is a timing signal, not an authenticity signal.
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         result['cross_document_authenticity'] = _cross_document_authenticity_for(cursor, document_id)
+        result['workflow_consistency'] = _workflow_consistency_for(cursor, document_id)
         conn.close()
 
         return jsonify(result), 200
@@ -512,6 +549,7 @@ def recheck_authenticity(document_id):
         row = cursor.fetchone()
         result = _with_authentication_score(row)
         result['cross_document_authenticity'] = _cross_document_authenticity_for(cursor, document_id)
+        result['workflow_consistency'] = _workflow_consistency_for(cursor, document_id)
         conn.close()
 
         return jsonify(result), 200

@@ -198,6 +198,74 @@ def run_case_cross_document_reference_mismatch_flagged():
           not any('out of expected order' in i for i in result['issues']), result)
 
 
+def run_case_cross_document_ignores_date_order():
+    print('Case (v5): cross_document_score excludes date_order_valid entirely — a bad date order')
+    print('           must not lower it, and must never produce a "dates out of order" issue there')
+    checked_rows = [
+        {'document_type': 'invoice', 'ai_visual_result': {'supplier_identity': {'supplier_name': 'X'}}},
+        {'document_type': 'po',      'ai_visual_result': {'supplier_identity': {'supplier_name': 'X'}}},
+    ]
+    cursor = _FakeCursor(checked_rows, None)
+    orig = ra._build_comparison
+    ra._build_comparison = lambda cur, doc_id: {
+        'match_result': {'po_reference_match': True, 'line_items_match': True, 'date_order_valid': False}
+    }
+    try:
+        result = ra._cross_document_authenticity_for(cursor, 1)
+    finally:
+        ra._build_comparison = orig
+    check('cross_document_score is 100 despite date_order_valid=False', result['cross_document_score'] == 100, result)
+    check('no date-related issue in cross_document_authenticity',
+          not any('out of expected order' in i for i in result['issues']), result)
+
+
+# ── _workflow_consistency_for (v5: separated from authenticity/cross-document score) ──
+
+def run_case_workflow_consistency_valid_order():
+    print('Case: date_order_valid=True -> workflow_consistency_score=100, no issues')
+    cursor = _FakeCursor([], None)
+    orig = ra._build_comparison
+    ra._build_comparison = lambda cur, doc_id: {'match_result': {'date_order_valid': True}}
+    try:
+        result = ra._workflow_consistency_for(cursor, 1)
+    finally:
+        ra._build_comparison = orig
+    check('workflow_consistency_score is 100', result['workflow_consistency_score'] == 100, result)
+    check('no issues', result['issues'] == [], result)
+
+
+def run_case_workflow_consistency_invalid_order():
+    print('Case: date_order_valid=False -> workflow_consistency_score=0, issue explains the date problem')
+    cursor = _FakeCursor([], None)
+    orig = ra._build_comparison
+    ra._build_comparison = lambda cur, doc_id: {'match_result': {'date_order_valid': False}}
+    try:
+        result = ra._workflow_consistency_for(cursor, 1)
+    finally:
+        ra._build_comparison = orig
+    check('workflow_consistency_score is 0', result['workflow_consistency_score'] == 0, result)
+    check('issue explains the date order problem', any('out of expected order' in i for i in result['issues']), result)
+
+
+def run_case_workflow_consistency_not_applicable():
+    print('Case: no comparison data or date_order_valid=None -> returns None (not applicable)')
+    cursor = _FakeCursor([], None)
+    orig = ra._build_comparison
+    ra._build_comparison = lambda cur, doc_id: None
+    try:
+        result_no_comparison = ra._workflow_consistency_for(cursor, 1)
+    finally:
+        ra._build_comparison = orig
+    check('None when no comparison data at all', result_no_comparison is None, result_no_comparison)
+
+    ra._build_comparison = lambda cur, doc_id: {'match_result': {'date_order_valid': None}}
+    try:
+        result_none_date = ra._workflow_consistency_for(cursor, 1)
+    finally:
+        ra._build_comparison = orig
+    check('None when date_order_valid itself is None', result_none_date is None, result_none_date)
+
+
 if __name__ == '__main__':
     run_case_score_high_approves()
     run_case_score_medium_reviews()
@@ -207,6 +275,10 @@ if __name__ == '__main__':
     run_case_cross_document_matching_suppliers_scores_well()
     run_case_cross_document_mismatched_supplier_flags_issue()
     run_case_cross_document_reference_mismatch_flagged()
+    run_case_cross_document_ignores_date_order()
+    run_case_workflow_consistency_valid_order()
+    run_case_workflow_consistency_invalid_order()
+    run_case_workflow_consistency_not_applicable()
 
     print()
     if FAILURES:

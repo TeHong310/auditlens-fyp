@@ -5707,3 +5707,107 @@ Setup/config needed:
   1. Redeploy the Render BACKEND — no new migration to wait on.
   2. Redeploy the Render FRONTEND — picks up the new dashboard sections.
   3. No new environment variables.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-21
+
+What was changed:
+  Backend (auditlens-backend/) only — Authenticity Vision v5 Precision
+  Improvement, tightening real-world accuracy issues found on actual
+  Coilcraft documents. No frontend changes this round (explicitly out
+  of scope per the request):
+    - helpers/claude_extractor.py: bumped CLAUDE_AUTHENTICITY_PROMPT_
+      VERSION to 'v5'. The prompt is no longer document-type-agnostic —
+      analyze_document_authenticity() now injects a
+      {document_type_block} tailored to what's being analyzed:
+        * Invoice: unchanged — the supplier issues an invoice, so its
+          own letterhead is normally the supplier.
+        * PO / GR (new): both are normally issued by the BUYER (a PO by
+          the buyer ordering; a GR by the buyer's own receiving desk),
+          so their own letterhead is the BUYER, not the supplier. Added
+          an explicit priority order for finding the real supplier on
+          these two types: (1) an explicit "Supplier Address"/"Vendor
+          Address" section, (2) an explicit "Supplier:"/"Vendor:" name
+          field, (3) the extraction hint cross-checked against a visible
+          supplier field, (4) a supplier logo ONLY if distinct from the
+          buyer's own header logo. This directly fixes the reported
+          issue where a PO/GR's prominent buyer letterhead (e.g. "EMITS
+          TECHNOLOGY SDN BHD") could get misread as the supplier.
+      Also tightened company_name box rules to max 1-2 lines excluding
+      ATTN/address/phone/email/any buyer info (previously it could drift
+      into grabbing the whole header block); reinforced logo/stamp
+      tightness wording; every evidence `reason` must now explain WHY
+      something belongs to supplier evidence, not just describe it;
+      added `source_section` to the supplier_address schema entry
+      ("supplier_address_label" / "near_supplier_name" / "").
+    - helpers/authenticity_check.py: _normalize_visual_result() carries
+      `source_section` through for both engines (Claude's own value, or
+      "" for Gemini/fallback which have no per-instance labeling).
+      _flatten_boxes() exposes it on the supplier_address box entry too.
+    - routes/authenticity.py: SEPARATED the PO->GR->Invoice date
+      sequence out of cross_document_score entirely — it's a workflow-
+      timing signal, not an authenticity/tampering signal, and blending
+      it in meant a 100% genuine, fully-verified document set could
+      still score lower for an unrelated timing quirk (e.g. an invoice
+      billed before goods were logged as received). Added
+      _workflow_consistency_for(cursor, document_id), returning its own
+      {workflow_consistency_score, issues} — reuses the existing
+      date_order_valid check from _build_comparison() rather than
+      recomputing it. Both GET /authenticity/<id> and POST recheck
+      responses now include a `workflow_consistency` field alongside
+      the (now date-free) `cross_document_authenticity`.
+    - tests: extended test_authenticity_ai.py (source_section
+      normalization on both engines, document-type-block prompt
+      injection, stamp_type box passthrough) and test_authenticity_
+      scoring.py (cross_document_score no longer moves on date order;
+      new _workflow_consistency_for cases for valid/invalid/not-
+      applicable date sequences).
+
+Why:
+  Real testing against actual Coilcraft Invoice/PO/GR documents
+  surfaced two precision problems: (1) the company_name box sometimes
+  captured the whole header block (name + ATTN + buyer info) instead of
+  just the legal name line, and supplier_address detection had no way
+  to say WHERE it found the address or reject a Ship To/Delivery
+  Address masquerading as one; (2) more importantly, the prior prompt
+  treated "letterhead = supplier" as a universal rule, which is only
+  true for Invoices — a PO/GR's own letterhead is normally the BUYER,
+  so a prominent buyer logo (EMITS) could get misclassified as the
+  supplier on those two document types specifically. Also, blending the
+  PO->GR->Invoice date sequence into cross_document_score conflated two
+  unrelated questions ("is this genuine and internally consistent?" vs
+  "did the workflow happen in the expected order?"), so they're now
+  reported separately. Per explicit instruction, extraction, Gemini
+  routing, matching, the database schema, and the frontend layout are
+  all untouched — only the Authenticity module's prompt/normalization/
+  scoring files changed.
+
+Testing:
+  - `python tests/extraction/run_all.py` — all 10 suites pass, zero
+    real Anthropic/Gemini API calls.
+  - `python -c "import app; print('APP IMPORT OK')"` — no schema change
+    this round, confirmed clean boot.
+  - Full end-to-end proof against the REAL dev Postgres DB (only the
+    Claude call mocked): confirmed the document_type_block actually
+    differs by type — direct inspection of
+    _DOCUMENT_TYPE_GUIDANCE['po'/'gr'] contains the priority-order list,
+    _DOCUMENT_TYPE_GUIDANCE['invoice'] does not; confirmed
+    source_section flows correctly from the mocked Claude response
+    through both the stored ai_visual_result and the flattened boxes
+    column for all three document types; confirmed
+    cross_document_authenticity and workflow_consistency are returned
+    as independent fields that don't influence each other.
+  - `git diff --stat` confirmed ZERO changes to any file under
+    auditlens-frontend/, plus zero changes to routes/documents.py,
+    routes/auditor.py, routes/matching.py, the extraction helpers,
+    entity_normalizer.py, auth_rules.py, and app.py (no new migration).
+  - Real box-tightness/supplier-resolution verification against the
+    actual Coilcraft/EMITS PDFs needs a live ANTHROPIC_API_KEY, not
+    present in this sandbox — same disclosed caveat as every prior
+    round; for the user to verify post-deploy.
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND only — no new migration, no frontend
+     changes this round.
+  2. No new environment variables.

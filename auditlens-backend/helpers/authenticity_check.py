@@ -310,6 +310,8 @@ def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=N
             }
             if key == 'stamp':
                 entry['type'] = item.get('type') or ''
+            if key == 'supplier_address':
+                entry['source_section'] = item.get('source_section') or ''
             evidence[key] = entry
 
         supplier_status, vendor_name_matches_extraction = _resolve_supplier_status(
@@ -367,6 +369,9 @@ def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=N
     stamp_entry = _entry('stamp', chop, _box('has_company_chop'))
     stamp_entry['type'] = ''
 
+    address_entry = _entry('supplier_address', False, None)
+    address_entry['source_section'] = ''
+
     return {
         'supplier_identity': {
             'status':                          'verified' if name else 'not_found',
@@ -381,7 +386,7 @@ def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=N
         'document_visual_evidence': {
             'company_logo':     _entry('company_logo', logo, _box('has_company_logo')),
             'company_name':     _entry('company_name', name, _box('has_company_name')),
-            'supplier_address': _entry('supplier_address', False, None),
+            'supplier_address': address_entry,
             'stamp':             stamp_entry,
             'signature':          _entry('signature', sig, _box('has_signature')),
         },
@@ -434,6 +439,8 @@ def _flatten_boxes(evidence):
         }
         if key == 'stamp':
             entry['stamp_type'] = item.get('type') or ''
+        if key == 'supplier_address':
+            entry['source_section'] = item.get('source_section') or ''
         boxes.append(entry)
     return boxes
 

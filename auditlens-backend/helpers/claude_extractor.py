@@ -241,7 +241,7 @@ extract_with_claude_test = extract_with_claude
 # Bumped whenever this prompt/schema changes meaningfully — part of the
 # authenticity cache key (helpers/authenticity_cache.py) so a stale
 # cached result shaped for an older prompt version is never served.
-CLAUDE_AUTHENTICITY_PROMPT_VERSION = 'v4'
+CLAUDE_AUTHENTICITY_PROMPT_VERSION = 'v5'
 
 CLAUDE_AUTHENTICITY_PROMPT = """You are an enterprise AP (Accounts Payable) audit AI performing VISUAL
 document authenticity verification. You are NOT doing OCR/field
@@ -251,27 +251,23 @@ present and where EXACTLY, and whether anything looks visually
 tampered with.
 
 SUPPLIER IDENTITY — the single most common mistake to avoid is
-confusing the BUYER for the SUPPLIER:
-- Identify the SUPPLIER issuing this document (the seller/biller) using
-  its letterhead, logo, and address block — the letterhead at the very
-  top of the document (or the company the document is FROM) is almost
-  always the supplier.
+confusing the BUYER for the SUPPLIER. Which company counts as the
+supplier depends on the document type — see DOCUMENT TYPE GUIDANCE
+below for the exact priority order to use for THIS document:
 - NEVER treat the Bill To / Ship To / Buyer / Customer / Purchaser /
   Receiver company's name, logo, or address as supplier evidence, even
   if it is printed larger, higher on the page, or more prominently than
-  the actual supplier's letterhead.
+  the actual supplier's information.
   Example: a Purchase Order's letterhead reads "EMITS TECHNOLOGY SDN
   BHD" because EMITS is the BUYER issuing the PO — on THIS document
-  EMITS is the buyer's own header, not supplier evidence. The supplier
-  is whichever company the PO is addressed TO / ordering FROM (e.g.
-  "Coilcraft Singapore Pte Ltd" printed as the vendor/supplier field).
-  Conversely, on Coilcraft's own Invoice, Coilcraft's letterhead IS the
-  supplier, and a "Ship To: EMITS TECHNOLOGY SDN BHD" block further down
-  is only the receiving party — EMITS must NOT become the detected
-  supplier_name/logo on that document.
-  In short: which company is the supplier depends on WHOSE document
-  this is (who issued it), not which company's name/logo is largest or
-  most prominent.
+  EMITS is the buyer's own header, not supplier evidence, even though
+  it is the biggest, most prominent logo on the page. The supplier is
+  whichever company appears in the PO's own Supplier/Vendor name or
+  address field (e.g. "Coilcraft Singapore Pte Ltd"). Conversely, on
+  Coilcraft's own Invoice, Coilcraft's letterhead IS the supplier, and
+  a "Ship To: EMITS TECHNOLOGY SDN BHD" block further down is only the
+  receiving party — EMITS must NOT become the detected supplier_name/
+  logo/address on that document either.
 - Correct obvious OCR/scan spelling noise in the supplier name using
   context — e.g. "COLCRAFT", "COILCRAF", "COILCRAFTT" should all resolve
   to the one real, most plausible full name (e.g. "COILCRAFT SINGAPORE
@@ -280,50 +276,76 @@ confusing the BUYER for the SUPPLIER:
   "not_found" if there's no discernible supplier identity at all on the
   document, "uncertain" if something is present but ambiguous (e.g.
   multiple plausible company names, or the identity block is illegible).
-{vendor_hint_block}
+{document_type_block}{vendor_hint_block}
 
 VISUAL EVIDENCE — for EACH of company_logo, company_name,
 supplier_address, stamp, signature, report a status ("detected" or
 "not_detected"), your confidence (0-100), a short `label` describing
 specifically what you found (e.g. "Coilcraft red logo mark", "COILCRAFT
-SINGAPORE PTE LTD header line"), a `reason` (one short phrase for why
-you classified it that way, e.g. "supplier letterhead graphic, top-left
-of page" or "printed inside Ship To block, this is the buyer not the
-supplier"), and a bounding box IF you can locate it (even when a signal
-is not_detected but there's a plausible location for it, e.g. a blank
-signature line).
+SINGAPORE PTE LTD header line"), and a `reason` that explains WHY this
+specifically belongs to the SUPPLIER (not just what it looks like) —
+e.g. "explicit Supplier Address label, matches extraction hint",
+"letterhead logo — this Invoice's own header, issued by the supplier",
+or, when something was deliberately rejected because it belongs to the
+buyer instead, say so explicitly, e.g. "this is the buyer's own header
+logo on this PO, not supplier evidence". Also include a bounding box IF
+you can locate it (even when a signal is not_detected but there's a
+plausible location for it, e.g. a blank signature line).
 - company_logo / supplier_address: MUST belong to the SUPPLIER
   identified above — a logo or address block that belongs to the Ship
   To / Buyer / Customer company must be reported as not_detected here
   (it is not supplier evidence), never substituted in just because it's
   the most visible logo/address on the page.
+- supplier_address additionally reports `source_section` — exactly one
+  of: "supplier_address_label" (an address block explicitly labeled
+  "Supplier Address"/"Vendor Address"), "near_supplier_name" (an address
+  immediately next to/below the already-identified supplier name, with
+  no explicit label), or "" if not_detected. If genuinely ambiguous
+  between two candidate addresses, prefer reporting not_detected over
+  guessing.
 
 STRICT BOUNDING BOX RULES — every box must be TIGHT to only that one
 element, never a region that also happens to contain other things:
 
-1. company_logo — ONLY the graphical logo/brand symbol itself.
-   DO NOT include the company name text, the address, registration
-   number, or surrounding whitespace in this box, even if they sit
-   right next to the logo.
+1. company_logo — ONLY the graphical logo/brand symbol itself, nothing
+   else — not the company name text, not the address, not a
+   registration number, not surrounding whitespace, even if they sit
+   right next to the logo. This applies even when the SUPPLIER's logo
+   is small and the BUYER's own header logo is much larger/more
+   prominent elsewhere on the page — box only the supplier's mark, or
+   report not_detected if the supplier has no distinct logo at all;
+   never substitute the buyer's logo in.
    Wrong:  a box spanning [logo + "COILCRAFT SINGAPORE PTE LTD" + address]
    Correct: a box tightly around just the red Coilcraft mark/icon.
 
-2. company_name — ONLY the single legal supplier name line (e.g.
-   "COILCRAFT SINGAPORE PTE LTD").
-   DO NOT include "ATTN", the address, phone, email, "Customer:",
-   "Ship To:", or "Bill To:" labels/values in this box, even on an
-   adjacent line.
+2. company_name — ONLY the single legal supplier name line, at most one
+   or two text lines total (e.g. just "COILCRAFT SINGAPORE PTE LTD", or
+   that plus an immediately-adjacent line if the legal name itself
+   genuinely wraps onto a second line).
+   DO NOT include, even on an adjacent line: "ATTN", any address line,
+   phone, email, or ANY buyer/customer/ship-to/bill-to information.
+   Wrong:  a box spanning ["COILCRAFT SINGAPORE PTE LTD" + "ATTN:" +
+           "EMITS TECHNOLOGY" + address line] — this bundles the
+           buyer's name into supplier evidence and is never correct.
+   Correct: a box around only the "COILCRAFT SINGAPORE PTE LTD" line.
 
-3. supplier_address — ONLY the supplier's own registered address block.
-   DO NOT box the Bill To or Ship To address — those belong to the
-   buyer, not the supplier, and must not be reported as supplier_address
-   evidence at all.
+3. supplier_address — ONLY the supplier's own registered address block,
+   found per the priority order described above (an explicitly-labeled
+   Supplier Address section first, otherwise an address block sitting
+   directly next to the already-identified supplier name).
+   DO NOT box the Bill To, Ship To, Delivery Address, or Customer
+   address — those belong to the buyer, not the supplier, and must
+   never be reported as supplier_address evidence at all, regardless of
+   how prominent or well-formatted they are.
 
-4. stamp — ONLY the actual ink/stamp area itself: a physical chop,
-   received stamp, QC stamp, or official seal.
+4. stamp — ONLY the actual ink/stamp area itself: a physical chop, a
+   received stamp, or an official seal (this includes QC/inspection and
+   approval-style stamps — see the `type` classification below).
    DO NOT box: printed text, item/part codes in a table, the printed
-   abbreviation "CHP" as text, or nearby handwritten AP reviewer notes —
-   none of these are a stamp even if they sit close to one.
+   abbreviation "CHP" as text, any other printed word, or nearby
+   handwritten AP reviewer notes — none of these are a stamp even if
+   they sit close to one; the box must tightly surround only the actual
+   ink/stamp mark.
    Classify the stamp's `type` as exactly one of: "company_chop"
    (a general round/square company chop), "received_stamp" (a
    "RECEIVED" stamp confirming receipt), "qc_stamp" (a quality-control/
@@ -388,7 +410,7 @@ exactly this structure:
   "document_visual_evidence": {{
     "company_logo":     {{"status": "detected" or "not_detected", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},
     "company_name":      {{"status": "detected" or "not_detected", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},
-    "supplier_address":  {{"status": "detected" or "not_detected", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},
+    "supplier_address":  {{"status": "detected" or "not_detected", "source_section": "supplier_address_label" or "near_supplier_name" or "", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},
     "stamp":             {{"status": "detected" or "not_detected", "type": "company_chop" or "received_stamp" or "qc_stamp" or "approval_stamp" or "", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},
     "signature":         {{"status": "detected" or "not_detected", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}}
   }},
@@ -407,6 +429,52 @@ exactly this structure:
 }}"""
 
 
+# v5: document-type-specific supplier-identification priority order,
+# injected into {document_type_block} above. An Invoice is ISSUED BY the
+# supplier (letterhead = supplier), but a PO is issued BY the buyer and a
+# GR is normally issued/stamped by the buyer's own receiving department
+# (letterhead = buyer/receiver on both) — treating "the letterhead is the
+# supplier" as a universal rule (the pre-v5 prompt's wording) is exactly
+# what caused a PO/GR's buyer letterhead (e.g. "EMITS TECHNOLOGY SDN
+# BHD") to occasionally get misread as the supplier. PO and GR share the
+# same priority order since both need the same buyer-letterhead-is-not-
+# supplier correction.
+_PO_GR_SUPPLIER_PRIORITY = """
+To find the actual supplier on THIS document, use this priority order
+(do NOT default to the letterhead/logo at the top of the page — that is
+virtually always the BUYER on this document type):
+1. An explicit "Supplier Address" / "Vendor Address" section.
+2. An explicit "Supplier:" / "Vendor:" name field.
+3. The extraction hint below (if provided), cross-checked against any
+   supplier name/address field actually visible on the document.
+4. A supplier logo — ONLY if a logo distinct from the buyer's own
+   top-of-page header logo is visible near the supplier's name/address
+   block; never the buyer's own header logo, even if it is the only
+   logo on the page.
+"""
+
+_DOCUMENT_TYPE_GUIDANCE = {
+    'invoice': (
+        '\nDOCUMENT TYPE: INVOICE. The supplier ISSUES this document (it is a bill '
+        'FROM the supplier TO the buyer) — the letterhead/logo at the very top of '
+        'THIS document is normally the supplier. A "Ship To:"/"Bill To:"/"Customer:" '
+        'block further down the page is the buyer and must never be used as '
+        'supplier evidence.\n'
+    ),
+    'po': (
+        '\nDOCUMENT TYPE: PURCHASE ORDER. The BUYER issues a PO, so the letterhead/'
+        'logo at the top of THIS document is virtually always the BUYER, not the '
+        'supplier.\n' + _PO_GR_SUPPLIER_PRIORITY
+    ),
+    'gr': (
+        "\nDOCUMENT TYPE: GOODS RECEIPT. Like a PO, a GR is normally issued/stamped "
+        "by the BUYER's own receiving department confirming goods arrived — the "
+        "letterhead at the top of THIS document is virtually always the BUYER/"
+        "receiver, not the supplier.\n" + _PO_GR_SUPPLIER_PRIORITY
+    ),
+}
+
+
 def analyze_document_authenticity(image, document_type, extracted_vendor_name=None):
     """Claude Vision visual authenticity check. Makes ONE real Anthropic
     API call. Same fail-soft contract as extract_with_claude(): returns
@@ -415,9 +483,12 @@ def analyze_document_authenticity(image, document_type, extracted_vendor_name=No
     are responsible for falling back to Gemini when this returns None.
 
     image: (mime_type, raw_bytes) tuple from prepare_gemini_image_payload().
-    document_type: 'invoice' | 'po' | 'gr' — for logging only; the prompt
-      itself is document-type-agnostic (visual verification applies the
-      same way to all three).
+    document_type: 'invoice' | 'po' | 'gr' — selects the document-type-
+      specific supplier-identification priority order injected into the
+      prompt (see _DOCUMENT_TYPE_GUIDANCE): an Invoice's own letterhead
+      is normally the supplier, but a PO/GR's own letterhead is normally
+      the BUYER, so those two need a different priority order to find
+      the actual supplier rather than defaulting to the page header.
     extracted_vendor_name: the vendor_name the (separate, already-run)
       extraction pipeline identified for this document, if any — passed
       through as a hint so Claude can cross-check its own visual
@@ -440,7 +511,9 @@ def analyze_document_authenticity(image, document_type, extracted_vendor_name=No
         )
     else:
         vendor_hint_block = ''
-    system_prompt = CLAUDE_AUTHENTICITY_PROMPT.format(vendor_hint_block=vendor_hint_block)
+    document_type_block = _DOCUMENT_TYPE_GUIDANCE.get(document_type, '')
+    system_prompt = CLAUDE_AUTHENTICITY_PROMPT.format(
+        document_type_block=document_type_block, vendor_hint_block=vendor_hint_block)
 
     mime_type, image_bytes = image
     user_text = "Analyze this document image for authenticity per the schema in your instructions."

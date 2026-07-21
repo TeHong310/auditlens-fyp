@@ -20,6 +20,7 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import helpers.authenticity_check as ac
+import helpers.claude_extractor as ce
 
 FAILURES = []
 
@@ -45,7 +46,7 @@ CLAUDE_RAW = {
                               'reason': 'supplier letterhead graphic, top-left', 'confidence': 95, 'boxes': [10, 10, 60, 200]},
         'company_name':      {'status': 'detected', 'label': 'COILCRAFT SINGAPORE PTE LTD header line',
                               'reason': 'legal supplier name in letterhead', 'confidence': 95, 'boxes': [70, 10, 100, 300]},
-        'supplier_address': {'status': 'detected', 'confidence': 90, 'boxes': None},
+        'supplier_address': {'status': 'detected', 'source_section': 'supplier_address_label', 'confidence': 90, 'boxes': None},
         'stamp':              {'status': 'detected', 'type': 'RECEIVED',
                               'label': 'RECEIVED ink stamp', 'reason': 'red ink stamp, bottom-right',
                               'confidence': 88, 'boxes': [800, 700, 900, 950]},
@@ -57,6 +58,29 @@ CLAUDE_RAW = {
     },
     'overall_result': {'status': 'PASS', 'risk_level': 'LOW', 'reasons': []},
 }
+
+
+# ── v5: document-type-aware prompt guidance ─────────────────────────────
+
+def run_case_document_type_guidance_differs_po_gr_vs_invoice():
+    print('Case: PO/GR get a "supplier priority order" block Invoice does not (letterhead != supplier on PO/GR)')
+    check('prompt version bumped to v5', ce.CLAUDE_AUTHENTICITY_PROMPT_VERSION == 'v5', ce.CLAUDE_AUTHENTICITY_PROMPT_VERSION)
+    check('PO guidance includes the priority order', 'priority order' in ce._DOCUMENT_TYPE_GUIDANCE['po'])
+    check('GR guidance includes the priority order', 'priority order' in ce._DOCUMENT_TYPE_GUIDANCE['gr'])
+    check('Invoice guidance does NOT include a priority order (letterhead IS the supplier there)',
+          'priority order' not in ce._DOCUMENT_TYPE_GUIDANCE['invoice'])
+    check('unknown document_type falls back to no extra guidance', ce._DOCUMENT_TYPE_GUIDANCE.get('unknown', '') == '')
+
+
+def run_case_prompt_formats_cleanly_for_every_document_type():
+    print('Case: CLAUDE_AUTHENTICITY_PROMPT.format() succeeds for every document type, with/without a vendor hint')
+    for doc_type in ('invoice', 'po', 'gr'):
+        block = ce._DOCUMENT_TYPE_GUIDANCE.get(doc_type, '')
+        try:
+            rendered = ce.CLAUDE_AUTHENTICITY_PROMPT.format(document_type_block=block, vendor_hint_block='')
+            check(f'{doc_type}: renders without KeyError, schema intact', 'source_section' in rendered and '"boxes"' in rendered)
+        except (KeyError, IndexError) as e:
+            check(f'{doc_type}: renders without KeyError', False, f'{type(e).__name__}: {e}')
 
 
 # ── Pure-function tests: schema normalization / box flattening ──────────
@@ -80,6 +104,16 @@ def run_case_normalize_claude_trusts_shape():
     check('address entry falls back to static label/empty reason when Claude omits them',
           visual['document_visual_evidence']['supplier_address']['label'] == 'Supplier Address'
           and visual['document_visual_evidence']['supplier_address']['reason'] == '')
+    check('address source_section (v5) carried through from Claude',
+          visual['document_visual_evidence']['supplier_address']['source_section'] == 'supplier_address_label')
+
+
+def run_case_normalize_gemini_supplier_address_source_section_defaults_empty():
+    print('Case: _normalize_visual_result(gemini, ...) defaults source_section to "" (no per-instance data on this engine)')
+    old = {'has_company_name': True, 'has_company_logo': True, 'has_company_chop': False, 'has_signature': False}
+    visual = ac._normalize_visual_result('gemini', old, 'invoice')
+    check('source_section defaults to empty string', visual['document_visual_evidence']['supplier_address']['source_section'] == '',
+          visual['document_visual_evidence']['supplier_address'])
 
 
 def run_case_normalize_claude_stamp_not_required_on_po():
@@ -141,6 +175,8 @@ def run_case_flatten_boxes():
           by_type.get('supplier_logo'))
     check('company_stamp box present with confidence normalized to 0-1',
           by_type.get('company_stamp', {}).get('confidence') == 0.88, by_type.get('company_stamp'))
+    check('company_stamp box carries stamp_type through', by_type.get('company_stamp', {}).get('stamp_type') == 'RECEIVED',
+          by_type.get('company_stamp'))
 
 
 def run_case_authenticity_is_complete():
@@ -410,10 +446,13 @@ def run_case_use_cache_false_bypasses_lookup():
 
 
 if __name__ == '__main__':
+    run_case_document_type_guidance_differs_po_gr_vs_invoice()
+    run_case_prompt_formats_cleanly_for_every_document_type()
     run_case_normalize_claude_trusts_shape()
     run_case_normalize_claude_stamp_not_required_on_po()
     run_case_normalize_claude_legacy_boolean_defensive()
     run_case_normalize_gemini_maps_old_schema()
+    run_case_normalize_gemini_supplier_address_source_section_defaults_empty()
     run_case_flatten_boxes()
     run_case_authenticity_is_complete()
     run_case_stamp_required()
