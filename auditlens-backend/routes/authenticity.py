@@ -9,6 +9,7 @@ from helpers.authenticity_check import (
     run_authenticity_check, save_rendered_authenticity_image, AUTHENTICITY_IMAGE_DIR
 )
 from helpers.auth_rules import compute_authentication
+from routes.auditor import _build_comparison
 
 authenticity_bp = Blueprint('authenticity', __name__)
 
@@ -60,7 +61,9 @@ _SELECT_WITH_JOINS = '''
            po.po_id, gr.gr_id,
            ac.document_type, ac.has_company_chop, ac.has_company_logo,
            ac.has_company_name, ac.has_signature, ac.upload_source,
-           ac.authenticity_status, ac.ai_notes, ac.signal_boxes, ac.created_at
+           ac.authenticity_status, ac.ai_notes, ac.signal_boxes, ac.created_at,
+           ac.ai_engine_used, ac.ai_visual_result, ac.document_consistency,
+           ac.risk_level, ac.boxes
     FROM authenticity_checks ac
     LEFT JOIN extracted_fields ef ON ac.document_type = 'invoice' AND ac.document_id = ef.document_id
     LEFT JOIN purchase_orders po ON ac.document_type = 'po' AND ac.document_id = po.document_id
@@ -122,6 +125,26 @@ def _lookup_file_info(cursor, document_id, document_type):
     }
 
 
+def _document_consistency_for(cursor, document_id):
+    """Document Consistency Verification (spec section 3) — reuses the
+    EXISTING 3-way matching engine (routes/auditor.py::_build_comparison,
+    already used by GET /auditor/record/<id>/comparison) instead of
+    asking Claude to reason across Invoice/PO/GR itself. Returns None if
+    the parent `documents` row doesn't exist at all (comparison has
+    nothing to build against)."""
+    comparison = _build_comparison(cursor, document_id)
+    if not comparison:
+        return None
+    match = comparison['match_result']
+    return {
+        'vendor_match':   match['vendor_match'],
+        'po_match':       match['po_reference_match'],
+        'item_match':     match['line_items_match'],
+        'amount_match':   match['amount_match'],
+        'overall_status': match['overall_status'],
+    }
+
+
 # ------------------------------------------------------------
 # GET SINGLE AUTHENTICITY CHECK
 # GET /authenticity/<document_id>?document_type=invoice|po|gr (default invoice)
@@ -149,11 +172,32 @@ def get_authenticity_check(document_id):
             (document_id, document_type)
         )
         row = cursor.fetchone()
-        conn.close()
 
+        # On-demand: no check has ever run for this document/type yet —
+        # run the Claude-first-then-Gemini-fallback engine now (instead
+        # of the old automatic upload-time call) and cache the result,
+        # same "compute on first read" pattern already used below by
+        # GET /authenticity/<id>/image for the rendered PNG.
         if not row:
-            return jsonify({'error': 'No authenticity check for this document'}), 404
+            info = _lookup_file_info(cursor, document_id, document_type)
+            if not info or not info['file_bytes']:
+                conn.close()
+                return jsonify({'error': 'No authenticity check for this document'}), 404
 
+            document_consistency = _document_consistency_for(cursor, document_id)
+            conn.close()
+
+            check_id = run_authenticity_check(document_id, info['file_bytes'], info['file_name'],
+                                                document_type, document_consistency=document_consistency)
+            if check_id is None:
+                return jsonify({'error': 'Authenticity check failed — see server logs'}), 502
+
+            conn   = get_db_connection()
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cursor.execute(_SELECT_WITH_JOINS + ' WHERE ac.check_id = %s', (check_id,))
+            row = cursor.fetchone()
+
+        conn.close()
         return jsonify(_with_authentication_score(row)), 200
 
     except Exception as e:
@@ -258,10 +302,13 @@ def get_authenticity_checks():
 
 
 # ------------------------------------------------------------
-# RE-CHECK: re-run Gemini Vision for one document and force-update
-# the cached row (including signal_boxes).
+# RE-CHECK: force re-run the authenticity engine (Claude primary, Gemini
+# fallback) for one document and update the cached row. GET /<id> above
+# also triggers this engine on-demand (first view of a never-checked
+# document) — this route is for an already-checked document the auditor
+# wants re-verified.
 # POST /authenticity/<document_id>/recheck?document_type=invoice|po|gr
-# Auditor only. THE ONLY CODE PATH THAT CALLS GEMINI AFTER UPLOAD.
+# Auditor only.
 # ------------------------------------------------------------
 @authenticity_bp.route('/<int:document_id>/recheck', methods=['POST'])
 @jwt_required()
@@ -280,14 +327,18 @@ def recheck_authenticity(document_id):
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         info = _lookup_file_info(cursor, document_id, document_type)
-        conn.close()
 
         if not info or not info['file_bytes']:
+            conn.close()
             return jsonify({'error': 'No file found for this document/document_type'}), 404
 
-        check_id = run_authenticity_check(document_id, info['file_bytes'], info['file_name'], document_type)
+        document_consistency = _document_consistency_for(cursor, document_id)
+        conn.close()
+
+        check_id = run_authenticity_check(document_id, info['file_bytes'], info['file_name'],
+                                            document_type, document_consistency=document_consistency)
         if check_id is None:
-            return jsonify({'error': 'Re-check failed (Gemini call unsuccessful) — see server logs'}), 502
+            return jsonify({'error': 'Re-check failed (Claude/Gemini call unsuccessful) — see server logs'}), 502
 
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)

@@ -35,6 +35,50 @@ const SIGNAL_LABELS: Record<SignalKey, string> = {
   has_company_logo: 'Company Logo',
 };
 
+// New named-box overlay (check.boxes, populated once a document has been
+// checked by the upgraded Claude/Gemini authentication engine) — 5-color
+// legend per spec: Blue=Supplier Logo, Green=Company Name,
+// Purple=Supplier Address, Red=Stamp/Chop, Orange=Signature.
+interface NamedBox {
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface NewOverlayMarker extends NamedBox {
+  colorClass: string;
+  left: number;
+  top: number;
+}
+
+const BOX_COLOR_CLASS: Record<string, string> = {
+  'Supplier Logo':    'box-blue',
+  'Company Name':     'box-green',
+  'Supplier Address': 'box-purple',
+  'Stamp/Chop':       'box-red',
+  'Signature':        'box-orange',
+};
+
+const EVIDENCE_KEYS = ['company_logo', 'company_name', 'supplier_address', 'stamp', 'signature'] as const;
+type EvidenceKey = typeof EVIDENCE_KEYS[number];
+
+const EVIDENCE_LABELS: Record<EvidenceKey, string> = {
+  company_logo:     'Company Logo',
+  company_name:     'Company Name',
+  supplier_address: 'Supplier Address',
+  stamp:            'Stamp / Chop',
+  signature:        'Signature',
+};
+
+const CONSISTENCY_LABELS: Record<string, string> = {
+  vendor_match: 'Vendor',
+  po_match:     'PO Reference',
+  item_match:   'Items',
+  amount_match: 'Amount',
+};
+
 @Component({
   selector: 'app-auditor-authenticity-detail',
   standalone: true,
@@ -63,6 +107,16 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
 
   signalKeys: SignalKey[] = ['has_company_name', 'has_company_chop', 'has_signature', 'has_company_logo'];
   signalLabels = SIGNAL_LABELS;
+
+  // New engine overlay/dashboard state — only populated once check.boxes /
+  // check.ai_visual_result exist (a document checked by the upgraded
+  // Claude/Gemini engine). Older, not-yet-rechecked rows fall back to the
+  // markers/signalKeys checklist above.
+  newMarkers: NewOverlayMarker[] = [];
+  selectedBoxName: string | null = null;
+  evidenceKeys = EVIDENCE_KEYS;
+  evidenceLabels = EVIDENCE_LABELS;
+  consistencyLabels = CONSISTENCY_LABELS;
 
   private resizeObserver: ResizeObserver | null = null;
   private rawBlobUrl: string | null = null;
@@ -171,9 +225,15 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   // Scales each [ymin,xmin,ymax,xmax] (normalized 0-1000) to the image's
   // actual rendered pixel size. Re-run on ResizeObserver so markers stay
   // correct across window resize / sidebar toggle / responsive reflow.
+  //
+  // Also builds newMarkers from check.boxes (already x/y/width/height,
+  // same 0-1000 normalization — see helpers/authenticity_check.py's
+  // _flatten_boxes) using the identical scaleX/scaleY math, just without
+  // the corner-to-width/height conversion the legacy path needs.
   recomputeMarkers() {
-    if (!this.docImageRef || !this.check?.signal_boxes) {
+    if (!this.docImageRef) {
       this.markers = [];
+      this.newMarkers = [];
       this.cdr.detectChanges();
       return;
     }
@@ -190,22 +250,102 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     // missing signal can still have a plausible location, e.g. a blank
     // signature line). check[key] is the presence boolean.
     const markers: OverlayMarker[] = [];
-    for (const key of this.signalKeys) {
-      const box = this.check.signal_boxes[key];
-      if (!Array.isArray(box) || box.length !== 4) continue;
-      const [ymin, xmin, ymax, xmax] = box;
-      markers.push({
-        key,
-        shape: SHAPE_MAP[key],
-        present: !!this.check[key],
-        left: xmin * scaleX,
-        top: ymin * scaleY,
-        width: (xmax - xmin) * scaleX,
-        height: (ymax - ymin) * scaleY,
-      });
+    if (this.check?.signal_boxes) {
+      for (const key of this.signalKeys) {
+        const box = this.check.signal_boxes[key];
+        if (!Array.isArray(box) || box.length !== 4) continue;
+        const [ymin, xmin, ymax, xmax] = box;
+        markers.push({
+          key,
+          shape: SHAPE_MAP[key],
+          present: !!this.check[key],
+          left: xmin * scaleX,
+          top: ymin * scaleY,
+          width: (xmax - xmin) * scaleX,
+          height: (ymax - ymin) * scaleY,
+        });
+      }
     }
     this.markers = markers;
+
+    const newMarkers: NewOverlayMarker[] = [];
+    if (Array.isArray(this.check?.boxes)) {
+      for (const box of this.check.boxes as NamedBox[]) {
+        newMarkers.push({
+          ...box,
+          colorClass: BOX_COLOR_CLASS[box.name] || 'box-blue',
+          left: box.x * scaleX,
+          top: box.y * scaleY,
+          width: box.width * scaleX,
+          height: box.height * scaleY,
+        });
+      }
+    }
+    this.newMarkers = newMarkers;
+
     this.cdr.detectChanges();
+  }
+
+  // ── New engine dashboard/overlay helpers ──
+
+  get hasNewResult(): boolean {
+    return !!this.check?.ai_visual_result;
+  }
+
+  get supplierIdentity(): any {
+    return this.check?.ai_visual_result?.supplier_identity || null;
+  }
+
+  get visualEvidence(): any {
+    return this.check?.ai_visual_result?.document_visual_evidence || null;
+  }
+
+  get integrityCheck(): any {
+    return this.check?.ai_visual_result?.integrity_check || null;
+  }
+
+  get overallResult(): any {
+    return this.check?.ai_visual_result?.overall_result || null;
+  }
+
+  get documentConsistency(): any {
+    return this.check?.document_consistency || null;
+  }
+
+  get consistencyKeys(): string[] {
+    return Object.keys(CONSISTENCY_LABELS);
+  }
+
+  evidenceEntry(key: EvidenceKey): any {
+    return this.visualEvidence?.[key] || null;
+  }
+
+  riskLevelClass(level: string): string {
+    if (level === 'HIGH') return 'risk-high';
+    if (level === 'MEDIUM') return 'risk-medium';
+    return 'risk-low';
+  }
+
+  matchLabel(value: boolean | null | undefined): string {
+    if (value === true) return 'Matched';
+    if (value === false) return 'Mismatch';
+    return 'N/A';
+  }
+
+  matchClass(value: boolean | null | undefined): string {
+    if (value === true) return 'icon-yes';
+    if (value === false) return 'icon-no';
+    return 'icon-na';
+  }
+
+  // Click a sidebar evidence row (section 8: interactive highlight) —
+  // pulses/highlights the matching box on the image, if one was located.
+  selectBox(name: string) {
+    this.selectedBoxName = this.selectedBoxName === name ? null : name;
+  }
+
+  boxLabelFor(key: EvidenceKey): string {
+    return EVIDENCE_LABELS[key];
   }
 
   // ── Re-check: the only action on this page that calls Gemini ──
@@ -267,6 +407,7 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   }
 
   get hasAnyBoxes(): boolean {
+    if (Array.isArray(this.check?.boxes) && this.check.boxes.length > 0) return true;
     return !!this.check?.signal_boxes && Object.keys(this.check.signal_boxes).length > 0;
   }
 }

@@ -114,6 +114,31 @@ def _ensure_authenticity_v2_columns():
         print(f'WARNING: could not migrate authenticity_checks to v2: {type(e).__name__}: {e}')
 
 
+def _ensure_authenticity_v3_columns():
+    """AI-powered authentication upgrade: adds columns for the new
+    Claude-first-then-Gemini-fallback visual verification engine
+    (helpers/authenticity_check.py) alongside the existing v2 columns —
+    purely additive, nothing existing is touched. Same auto-create-on-
+    startup pattern as every other _ensure_ function (no migration
+    runner in this repo)."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            ALTER TABLE authenticity_checks
+              ADD COLUMN IF NOT EXISTS ai_engine_used VARCHAR(10),
+              ADD COLUMN IF NOT EXISTS ai_visual_result JSONB,
+              ADD COLUMN IF NOT EXISTS document_consistency JSONB,
+              ADD COLUMN IF NOT EXISTS risk_level VARCHAR(10),
+              ADD COLUMN IF NOT EXISTS boxes JSONB
+        ''')
+        conn.commit()
+        conn.close()
+        print('Authenticity checks v3 columns ready')
+    except Exception as e:
+        print(f'WARNING: could not migrate authenticity_checks to v3: {type(e).__name__}: {e}')
+
+
 def _ensure_file_bytes_columns():
     """Render's free tier filesystem is ephemeral (wiped on every redeploy/
     restart) — uploaded files can no longer live only on local disk.
@@ -323,6 +348,7 @@ app.register_blueprint(authenticity_bp, url_prefix='/authenticity')
 _ensure_anomalies_table()
 _ensure_authenticity_checks_table()
 _ensure_authenticity_v2_columns()
+_ensure_authenticity_v3_columns()
 _ensure_file_bytes_columns()
 _ensure_3way_comparison_columns()
 _ensure_invoice_currency_column()

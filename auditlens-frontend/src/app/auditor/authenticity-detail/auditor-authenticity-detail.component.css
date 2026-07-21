@@ -123,6 +123,40 @@
   background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
+/* New engine named-box overlay — 5-color legend (spec section 7):
+   Blue=Supplier Logo, Green=Company Name, Purple=Supplier Address,
+   Red=Stamp/Chop, Orange=Signature. */
+.box-marker {
+  border-radius: 6px;
+  border-width: 3px;
+  border-style: solid;
+  transition: box-shadow .2s ease;
+}
+
+.box-blue    { border-color: #2563EB; background: color-mix(in srgb, #2563EB 10%, transparent); }
+.box-green   { border-color: var(--success); background: color-mix(in srgb, var(--success) 10%, transparent); }
+.box-purple  { border-color: #7C3AED; background: color-mix(in srgb, #7C3AED 10%, transparent); }
+.box-red     { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.box-orange  { border-color: #F59E0B; background: color-mix(in srgb, #F59E0B 10%, transparent); }
+
+.marker-active {
+  box-shadow: 0 0 0 3px rgba(0,0,0,0.15), 0 0 16px rgba(0,0,0,0.25);
+}
+
+.box-label {
+  position: absolute;
+  top: -20px;
+  left: 0;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #111827;
+  background: rgba(255,255,255,0.9);
+  padding: 1px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 /* Sits on the white .image-panel above, so stays light-on-white rather
    than following the dark accent tokens — see .image-panel comment. */
 .image-hint {
@@ -274,6 +308,21 @@
 
 .icon-yes { background: var(--success-bg); color: var(--success); }
 .icon-no  { background: var(--danger-bg); color: var(--danger); }
+.icon-na  { background: var(--bg-hover); color: var(--text-secondary); }
+
+.evidence-row { cursor: pointer; border-radius: 6px; }
+.evidence-row:hover { background: var(--bg-hover); }
+.evidence-row-active { background: var(--accent-bg); }
+
+.risk-line {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.risk-low    { color: var(--success); }
+.risk-medium { color: var(--warning); }
+.risk-high   { color: var(--danger); }
 
 .checklist-label {
   font-size: 13px;

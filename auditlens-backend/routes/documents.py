@@ -13,7 +13,6 @@ from helpers.ocr_helper import (
     normalize_line_item_code,
 )
 from helpers.anomaly_detector import run_anomaly_detection
-from helpers.authenticity_check import run_authenticity_check
 from helpers.gemini_extractor import (
     gemini_extract_invoice_full, gemini_extract_po_full, gemini_extract_gr_full,
     prepare_gemini_image_payload,
@@ -431,30 +430,11 @@ def upload_document():
         except Exception as e:
             print(f"DEBUG anomaly detection error: {type(e).__name__}: {e}")
 
-        try:
-            # Claude's schema has NO authenticity fields at all (a
-            # different prompt entirely — it was never asked for chop/
-            # logo/signature detection), so its result must never be
-            # passed as precomputed_result: every signal would silently
-            # read as absent/False instead of falling back to the
-            # OCR-text heuristic. provider_used == 'GEMINI' covers both
-            # "GEMINI was the configured provider" and "GEMINI ran as the
-            # fallback" — in both cases ai_result IS (or would have been)
-            # the merged call's result, so reusing it here costs zero
-            # extra Gemini calls and preserves the exact skip_gemini=not
-            # ai_result contract this already had (a failed Gemini call
-            # is never retried a second time just for authenticity).
-            # When Claude wins outright, no Gemini call was made at all —
-            # authenticity checking makes its own fresh one.
-            if provider_used == 'GEMINI':
-                run_authenticity_check(document_id, file_bytes_data, safe_name, 'invoice', ocr_text,
-                                        precomputed_result=ai_result, skip_gemini=not ai_result)
-            else:
-                run_authenticity_check(document_id, file_bytes_data, safe_name, 'invoice', ocr_text,
-                                        precomputed_result=None, skip_gemini=False)
-        except Exception as e:
-            print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
-        _debug_log_memory('6_after_authentication_check')  # TEMP-DEBUG-MEM
+        # Authentication check no longer runs automatically here — it's
+        # on-demand only (GET /authenticity/<id> on first view, or
+        # POST /authenticity/<id>/recheck), so upload cost/latency is
+        # unaffected by the new Claude-powered authenticity engine.
+        _debug_log_memory('6_after_upload_flow')  # TEMP-DEBUG-MEM
 
         log_audit(user['user_id'], 'UPLOAD_DOCUMENT', 'documents', document_id,
                   f'Document uploaded and OCR processed: {safe_name}')
@@ -644,18 +624,8 @@ def upload_purchase_order(document_id):
         conn.commit()
         conn.close()
 
-        try:
-            # See upload_document()'s invoice endpoint for why this
-            # branches on provider_used — Claude's schema has no
-            # authenticity fields at all.
-            if provider_used == 'GEMINI':
-                run_authenticity_check(document_id, file_bytes_data, safe_name, 'po', ocr_text,
-                                        precomputed_result=ai_result, skip_gemini=not ai_result)
-            else:
-                run_authenticity_check(document_id, file_bytes_data, safe_name, 'po', ocr_text,
-                                        precomputed_result=None, skip_gemini=False)
-        except Exception as e:
-            print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
+        # Authentication check no longer runs automatically here — it's
+        # on-demand only (see upload_document()'s invoice endpoint for why).
 
         log_audit(user['user_id'], 'UPLOAD_PO', 'purchase_orders', po_id,
                   f'PO uploaded for document {document_id}: {safe_name}')
@@ -839,18 +809,8 @@ def upload_goods_receipt(document_id):
         conn.commit()
         conn.close()
 
-        try:
-            # See upload_document()'s invoice endpoint for why this
-            # branches on provider_used — Claude's schema has no
-            # authenticity fields at all.
-            if provider_used == 'GEMINI':
-                run_authenticity_check(document_id, file_bytes_data, safe_name, 'gr', ocr_text,
-                                        precomputed_result=ai_result, skip_gemini=not ai_result)
-            else:
-                run_authenticity_check(document_id, file_bytes_data, safe_name, 'gr', ocr_text,
-                                        precomputed_result=None, skip_gemini=False)
-        except Exception as e:
-            print(f"DEBUG authenticity check error: {type(e).__name__}: {e}")
+        # Authentication check no longer runs automatically here — it's
+        # on-demand only (see upload_document()'s invoice endpoint for why).
 
         log_audit(user['user_id'], 'UPLOAD_GR', 'goods_receipts', gr_id,
                   f'GR uploaded for document {document_id}: {safe_name}')

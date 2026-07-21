@@ -7,6 +7,8 @@ from helpers.gemini_extractor import (
     call_gemini_sdk, prepare_gemini_image_payload, GEMINI_VISION_TIMEOUT_MS,
     GeminiRateLimitError,
 )
+from helpers.claude_extractor import analyze_document_authenticity
+from helpers.auth_rules import AUTH_RULES, _normalize_doc_type
 
 # Where a PDF's rendered first page (the same image sent to Gemini vision)
 # gets saved so the frontend can display it and draw the overlay markers —
@@ -184,6 +186,153 @@ def _compute_authenticity_status(document_type, signals):
     return 'passed' if passed else 'warning'
 
 
+# Display labels for the new named bounding-box list (spec section 6/7) —
+# also the frontend's 5-color legend keys (Blue=logo, Green=name,
+# Purple=address, Red=stamp, Orange=signature).
+_BOX_LABELS = {
+    'company_logo':     'Supplier Logo',
+    'company_name':     'Company Name',
+    'supplier_address':  'Supplier Address',
+    'stamp':             'Stamp/Chop',
+    'signature':          'Signature',
+}
+
+
+def _stamp_required(document_type):
+    """Whether a stamp/chop is normally expected for this document type —
+    derived from helpers/auth_rules.py's AUTH_RULES (required/important
+    tiers) instead of asking the model to guess, since that config
+    already encodes exactly this per-doc-type domain knowledge (e.g. a
+    Goods Receipt's chop matters far more than a PO's)."""
+    doc_type = _normalize_doc_type(document_type)
+    rules = AUTH_RULES.get(doc_type)
+    if not rules:
+        return False
+    return 'company_chop' in rules.get('required', []) or 'company_chop' in rules.get('important', [])
+
+
+def _normalize_visual_result(engine, raw):
+    """Maps either engine's raw output onto ONE unified schema (the
+    section-1 JSON shape) so DB storage and the frontend never need to
+    branch on which engine produced the result.
+
+    engine == 'claude': raw is already close to the target shape —
+      still defensively defaulted in case a sub-object is missing.
+    engine in ('gemini', 'fallback'): raw is the OLD 4-signal schema
+      (has_company_chop/logo/name/signature + signal_boxes) — mapped
+      into the same shape with tampering/address/contact left
+      "not assessed" (neither older path evaluates those)."""
+    raw = raw or {}
+
+    if engine == 'claude':
+        supplier = raw.get('supplier_identity') or {}
+        evidence_raw = raw.get('document_visual_evidence') or {}
+        integrity = raw.get('integrity_check') or {}
+        overall = raw.get('overall_result') or {}
+
+        evidence = {}
+        for key in _BOX_LABELS:
+            item = evidence_raw.get(key) or {}
+            box = item.get('boxes')
+            entry = {
+                'detected':   bool(item.get('detected', False)),
+                'confidence': item.get('confidence') or 0,
+                'boxes':      box if isinstance(box, list) and len(box) == 4 else None,
+            }
+            if key == 'stamp':
+                entry['type'] = item.get('type') or ''
+            evidence[key] = entry
+
+        return {
+            'supplier_identity': {
+                'supplier_name_detected': bool(supplier.get('supplier_name_detected', False)),
+                'supplier_name':          supplier.get('supplier_name'),
+                'logo_detected':          bool(supplier.get('logo_detected', False)),
+                'address_detected':       bool(supplier.get('address_detected', False)),
+                'contact_block_detected': bool(supplier.get('contact_block_detected', False)),
+            },
+            'document_visual_evidence': evidence,
+            'integrity_check': {
+                'suspicious_edit':    bool(integrity.get('suspicious_edit', False)),
+                'inconsistent_font':  bool(integrity.get('inconsistent_font', False)),
+                'abnormal_alignment': bool(integrity.get('abnormal_alignment', False)),
+                'suspicious_overlay': bool(integrity.get('suspicious_overlay', False)),
+                'confidence':         integrity.get('confidence') or 0,
+            },
+            'overall_result': {
+                'status':     overall.get('status') or 'REVIEW',
+                'risk_level': overall.get('risk_level') or 'LOW',
+                'reasons':    overall.get('reasons') or [],
+            },
+        }
+
+    # 'gemini' (old AUTHENTICITY_PROMPT fallback) or 'fallback' (OCR-text-only)
+    old_boxes = raw.get('signal_boxes') or {}
+
+    def _box(old_key):
+        box = old_boxes.get(old_key)
+        return box if isinstance(box, list) and len(box) == 4 else None
+
+    name = bool(raw.get('has_company_name', False))
+    logo = bool(raw.get('has_company_logo', False))
+    chop = bool(raw.get('has_company_chop', False))
+    sig = bool(raw.get('has_signature', False))
+
+    return {
+        'supplier_identity': {
+            'supplier_name_detected': name,
+            'supplier_name':          None,
+            'logo_detected':          logo,
+            'address_detected':       False,
+            'contact_block_detected': False,
+        },
+        'document_visual_evidence': {
+            'company_logo':     {'detected': logo, 'confidence': 70 if logo else 0, 'boxes': _box('has_company_logo')},
+            'company_name':     {'detected': name, 'confidence': 70 if name else 0, 'boxes': _box('has_company_name')},
+            'supplier_address': {'detected': False, 'confidence': 0, 'boxes': None},
+            'stamp':             {'detected': chop, 'type': '', 'confidence': 70 if chop else 0, 'boxes': _box('has_company_chop')},
+            'signature':          {'detected': sig, 'confidence': 70 if sig else 0, 'boxes': _box('has_signature')},
+        },
+        'integrity_check': {
+            'suspicious_edit': False, 'inconsistent_font': False,
+            'abnormal_alignment': False, 'suspicious_overlay': False,
+            'confidence': 0,
+        },
+        'overall_result': {
+            'status':     'PASS' if name else 'REVIEW',
+            'risk_level': 'LOW',
+            'reasons':    [raw['notes']] if raw.get('notes') else [],
+        },
+    }
+
+
+def _flatten_boxes(evidence):
+    """Converts the unified schema's per-category boxes into the flat
+    named list the frontend overlay draws (spec section 6):
+    [{"name": "...", "x": ..., "y": ..., "width": ..., "height": ...}].
+    Box coordinates are the same 0-1000-normalized scale already used by
+    the legacy signal_boxes column — only the shape (corner pair vs.
+    x/y/width/height) differs, so no new coordinate system is introduced."""
+    boxes = []
+    for key, label in _BOX_LABELS.items():
+        box = (evidence.get(key) or {}).get('boxes')
+        if not (isinstance(box, list) and len(box) == 4):
+            continue
+        ymin, xmin, ymax, xmax = box
+        boxes.append({'name': label, 'x': xmin, 'y': ymin, 'width': xmax - xmin, 'height': ymax - ymin})
+    return boxes
+
+
+def _authenticity_is_complete(result):
+    """Fallback-worthiness check for Claude's authenticity result —
+    mirrors ai_extractor_router.py's _completeness_check but for this
+    schema: a None/empty result, or one missing the core visual-evidence
+    object entirely (malformed response), is not usable."""
+    if not result:
+        return False
+    return isinstance(result.get('document_visual_evidence'), dict) and bool(result.get('document_visual_evidence'))
+
+
 def save_rendered_authenticity_image(document_id, document_type, file_bytes, file_name):
     """
     If file_name is a PDF, render its first page from file_bytes (the
@@ -215,79 +364,68 @@ def save_rendered_authenticity_image(document_id, document_type, file_bytes, fil
         print(f"DEBUG Authenticity: failed to save rendered PDF image: {type(e).__name__}: {e}")
 
 
-def run_authenticity_check(document_id, file_bytes, file_name, document_type, ocr_text=None,
-                            precomputed_result=None, skip_gemini=False):
+def run_authenticity_check(document_id, file_bytes, file_name, document_type, document_consistency=None):
     """
-    Main entry. NEVER raises — pipeline safe.
-    document_type: 'invoice' | 'po' | 'gr' (from upload endpoint, required)
+    Main entry — Claude Vision primary, Gemini fallback, OCR-text-only as
+    the last-resort safety net. NEVER raises — pipeline safe. Called
+    on-demand only (GET /authenticity/<id> on first view, or
+    POST /authenticity/<id>/recheck) — NOT automatically at upload time
+    (see routes/documents.py, which no longer calls this).
+
+    document_type: 'invoice' | 'po' | 'gr' (required)
     file_bytes/file_name: the raw bytes of the uploaded document (from
       DB, not a disk path) and its original filename (used to detect
       PDF vs image) — Render's disk is ephemeral, so bytes are always
       the source of truth here.
-    Always writes/updates an authenticity_checks row, using Gemini vision
-    when available and falling back to OCR-text heuristics when it isn't
-    (429/timeout/network/parse failure) — Gemini is best-effort, not a
-    hard dependency.
-
-    precomputed_result: authenticity signals already obtained from a Gemini
-      vision call made elsewhere (e.g. the merged invoice extraction +
-      authenticity call) — skips calling Gemini again here.
-    skip_gemini: the caller already tried a Gemini vision call for this
-      document and it failed — go straight to the OCR-text fallback
-      instead of retrying Gemini (a retry would likely just hit the same
-      429/timeout again and spend a call for nothing).
+    document_consistency: the already-computed {vendor_match, po_match,
+      item_match, amount_match, overall_status} dict from
+      routes/auditor.py's _build_comparison() — this function only
+      stores it, it does not compute cross-document consistency itself
+      (Claude is not asked to reason across Invoice/PO/GR).
 
     Returns check_id on success, None on failure (e.g. document doesn't exist).
     """
     try:
         save_rendered_authenticity_image(document_id, document_type, file_bytes, file_name)
+        image = prepare_gemini_image_payload(file_bytes, file_name)
 
-        if precomputed_result:
-            result = precomputed_result
-            engine = 'gemini'
-            print("DEBUG Authenticity: engine=gemini (merged call)")
+        claude_result = analyze_document_authenticity(image, document_type)
+        if _authenticity_is_complete(claude_result):
+            engine = 'claude'
+            raw_result = claude_result
+            print("DEBUG Authenticity: engine=claude")
         else:
             rate_limited = False
-            result = None
-            if not skip_gemini:
-                try:
-                    result = _call_gemini_vision(file_bytes, file_name)
-                except GeminiRateLimitError:
-                    rate_limited = True
-            if result:
+            gemini_result = None
+            try:
+                gemini_result = _call_gemini_vision(file_bytes, file_name)
+            except GeminiRateLimitError:
+                rate_limited = True
+            if gemini_result:
                 engine = 'gemini'
-                print("DEBUG Authenticity: engine=gemini")
+                raw_result = gemini_result
+                print("DEBUG Authenticity: engine=gemini (Claude fallback)")
             else:
                 engine = 'fallback'
-                print("DEBUG Authenticity: gemini failed (no result — see error above, "
-                      "or GEMINI_API_KEY unset), using fallback"
+                raw_result = _fallback_from_ocr_text(None, rate_limited=rate_limited)
+                print("DEBUG Authenticity: Claude and Gemini both unavailable, using OCR-text fallback"
                       + (" (rate-limited)" if rate_limited else ""))
-                result = _fallback_from_ocr_text(ocr_text, rate_limited=rate_limited)
 
-        chop = bool(result.get('has_company_chop', False))
-        logo = bool(result.get('has_company_logo', False))
-        name = bool(result.get('has_company_name', False))
-        sig = bool(result.get('has_signature', False))
-        upload_source = result.get('upload_source')
-        notes = result.get('notes', '')
+        visual = _normalize_visual_result(engine, raw_result)
+        evidence = visual['document_visual_evidence']
+        evidence['stamp']['stamp_required'] = _stamp_required(document_type)
 
-        status = _compute_authenticity_status(document_type, result)
+        chop = evidence['stamp']['detected']
+        logo = evidence['company_logo']['detected']
+        name = evidence['company_name']['detected']
+        sig = evidence['signature']['detected']
+        risk_level = visual['overall_result'].get('risk_level') or 'LOW'
+        notes = '; '.join(visual['overall_result'].get('reasons') or []) or None
 
-        # Keep any well-formed [ymin,xmin,ymax,xmax] Gemini returned, for
-        # a PRESENT signal or a MISSING one — a missing signal can still
-        # have a plausible location (e.g. a blank signature line, an
-        # empty area where a chop would go), and the frontend now draws
-        # those as a red marker (vs. green for present) so the auditor
-        # can see exactly where to look. Only requirement is a
-        # well-formed box; presence/absence is decided separately by the
-        # has_company_chop/logo/name/signature booleans above.
-        raw_boxes = result.get('signal_boxes') or {}
-        signal_box_keys = ('has_company_chop', 'has_company_logo', 'has_company_name', 'has_signature')
-        signal_boxes = {
-            key: raw_boxes[key]
-            for key in signal_box_keys
-            if isinstance(raw_boxes.get(key), list) and len(raw_boxes[key]) == 4
-        }
+        status = _compute_authenticity_status(document_type, {
+            'has_company_name': name, 'has_company_chop': chop, 'has_signature': sig,
+        })
+        boxes = _flatten_boxes(evidence)
 
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -295,29 +433,34 @@ def run_authenticity_check(document_id, file_bytes, file_name, document_type, oc
             cursor.execute('''
                 INSERT INTO authenticity_checks
                 (document_id, has_company_chop, has_company_logo, has_company_name,
-                 has_signature, document_type, upload_source, authenticity_status,
-                 ai_notes, signal_boxes)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 has_signature, document_type, authenticity_status, ai_notes,
+                 ai_engine_used, ai_visual_result, document_consistency, risk_level, boxes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (document_id, document_type) DO UPDATE SET
                     has_company_chop = EXCLUDED.has_company_chop,
                     has_company_logo = EXCLUDED.has_company_logo,
                     has_company_name = EXCLUDED.has_company_name,
                     has_signature = EXCLUDED.has_signature,
-                    upload_source = EXCLUDED.upload_source,
                     authenticity_status = EXCLUDED.authenticity_status,
                     ai_notes = EXCLUDED.ai_notes,
-                    signal_boxes = EXCLUDED.signal_boxes,
+                    ai_engine_used = EXCLUDED.ai_engine_used,
+                    ai_visual_result = EXCLUDED.ai_visual_result,
+                    document_consistency = EXCLUDED.document_consistency,
+                    risk_level = EXCLUDED.risk_level,
+                    boxes = EXCLUDED.boxes,
                     created_at = NOW()
                 RETURNING check_id
-            ''', (document_id, chop, logo, name, sig,
-                  document_type, upload_source, status, notes, json.dumps(signal_boxes)))
+            ''', (document_id, chop, logo, name, sig, document_type, status, notes,
+                  engine, json.dumps(visual),
+                  json.dumps(document_consistency) if document_consistency else None,
+                  risk_level, json.dumps(boxes)))
             check_id = cursor.fetchone()[0]
             conn.commit()
-            print(f"DEBUG Authenticity: doc={document_id} type={document_type} "
-                  f"chop={chop} sig={sig} logo={logo} name={name} "
-                  f"source={upload_source} status={status} boxes={list(signal_boxes.keys())}")
-            print(f"DEBUG Authenticity: saved row for doc={document_id} "
-                  f"status={status} engine={engine}")
+            print(f"DEBUG AUTH AI RESULT\n"
+                  f"vendor={visual['supplier_identity'].get('supplier_name')}\n"
+                  f"logo={logo}\nstamp={chop}\nsignature={sig}\ntampering={risk_level}")
+            print(f"DEBUG Authenticity: saved row for doc={document_id} type={document_type} "
+                  f"status={status} engine={engine} risk={risk_level} boxes={len(boxes)}")
             return check_id
         finally:
             conn.close()

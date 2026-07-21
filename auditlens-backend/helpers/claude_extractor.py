@@ -228,6 +228,167 @@ extract_with_claude_test = extract_with_claude
 
 
 # ============================================================
+# AUTHENTICATION / VISUAL VERIFICATION
+#
+# Separate prompt+schema from CLAUDE_SYSTEM_PROMPT above — this is a
+# visual authenticity inspection (supplier identity, tampering,
+# stamps/signatures, bounding boxes), not field extraction. Reuses the
+# same client/call/parsing plumbing (_get_claude_client, messages.create
+# shape, _strip_markdown_fences) so there is only one place that knows
+# how to talk to the Anthropic Messages API.
+# ============================================================
+
+CLAUDE_AUTHENTICITY_PROMPT = """You are an enterprise AP (Accounts Payable) audit AI performing VISUAL
+document authenticity verification. You are NOT doing OCR/field
+extraction — you are inspecting the document image itself: who issued
+it, whether the expected visual marks (logo, stamp, signature) are
+present and where, and whether anything looks visually tampered with.
+
+SUPPLIER IDENTITY:
+- Identify the SUPPLIER issuing this document (the seller/biller) using
+  its letterhead, logo, and address block — NEVER the Bill To / Ship To
+  / Buyer / Customer / Purchaser / Receiver company. Example: if the
+  letterhead reads "Coilcraft Singapore Pte Ltd" and a "Ship To:" block
+  further down reads "EMITS TECHNOLOGY SDN BHD", the supplier is
+  Coilcraft — EMITS is only the receiving party.
+- Correct obvious OCR/scan spelling noise in the supplier name using
+  context — e.g. "COLCRAFT", "COILCRAF", "COILCRAFTT" should all resolve
+  to the one real, most plausible full name (e.g. "COILCRAFT SINGAPORE
+  PTE LTD"), not be returned verbatim.
+
+VISUAL EVIDENCE — for EACH of company_logo, company_name,
+supplier_address, stamp, signature, report whether it is visually
+present, your confidence (0-100), and a tight bounding box IF you can
+locate it (even when a signal is absent but there's a plausible location
+for it, e.g. a blank signature line).
+- stamp: a round/square physical chop/stamp mark (e.g. "RECEIVED", "QC
+  PASSED", a company chop) — not a printed logo.
+- signature: a handwritten mark/signature — NOT every AP document needs
+  one; a missing signature on an Invoice or PO is normal, not a sign of
+  fraud.
+- Bounding boxes: normalized to a 0-1000 scale relative to the full
+  image, top-left = [0,0], bottom-right = [1000,1000], format
+  [ymin, xmin, ymax, xmax] (same convention used elsewhere in this
+  system). Omit the box only if no plausible location exists at all.
+
+INTEGRITY / TAMPERING:
+- Look for abnormal font changes, copied/pasted text blocks, white
+  rectangles covering original content, inconsistent spacing, numbers
+  that look overwritten, misaligned text, or other visually suspicious
+  edits.
+- Do NOT declare a document "fake" or "forged" — only report a risk
+  level (LOW/MEDIUM/HIGH) and the specific visual reasons behind it. Most
+  documents are legitimate; only flag MEDIUM/HIGH when something is
+  visually concrete, not merely low scan quality.
+
+Return null/false/0/empty-array defaults for anything you cannot
+confidently determine — never guess.
+
+Return ONLY valid JSON, no markdown, no code fences, no explanation —
+exactly this structure:
+{
+  "supplier_identity": {
+    "supplier_name_detected": true or false,
+    "supplier_name": "string or null",
+    "logo_detected": true or false,
+    "address_detected": true or false,
+    "contact_block_detected": true or false
+  },
+  "document_visual_evidence": {
+    "company_logo":     {"detected": true or false, "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null},
+    "company_name":      {"detected": true or false, "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null},
+    "supplier_address":  {"detected": true or false, "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null},
+    "stamp":             {"detected": true or false, "type": "string or empty", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null},
+    "signature":         {"detected": true or false, "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}
+  },
+  "integrity_check": {
+    "suspicious_edit": true or false,
+    "inconsistent_font": true or false,
+    "abnormal_alignment": true or false,
+    "suspicious_overlay": true or false,
+    "confidence": 0-100
+  },
+  "overall_result": {
+    "status": "PASS" or "REVIEW" or "FAIL",
+    "risk_level": "LOW" or "MEDIUM" or "HIGH",
+    "reasons": ["string", ...]
+  }
+}"""
+
+
+def analyze_document_authenticity(image, document_type):
+    """Claude Vision visual authenticity check. Makes ONE real Anthropic
+    API call. Same fail-soft contract as extract_with_claude(): returns
+    the parsed dict on success, or None on any failure (no API key,
+    network, timeout, bad JSON) — callers (helpers/authenticity_check.py)
+    are responsible for falling back to Gemini when this returns None.
+
+    image: (mime_type, raw_bytes) tuple from prepare_gemini_image_payload().
+    document_type: 'invoice' | 'po' | 'gr' — for logging only; the prompt
+      itself is document-type-agnostic (visual verification applies the
+      same way to all three).
+    """
+    client = _get_claude_client()
+    if client is None:
+        print("DEBUG AUTHENTICATION AI | skipped: ANTHROPIC_API_KEY not set")
+        return None
+
+    mime_type, image_bytes = image
+    user_text = "Analyze this document image for authenticity per the schema in your instructions."
+
+    print(f"DEBUG AUTHENTICATION AI | request | model={Config.CLAUDE_MODEL!r} | "
+          f"document_type={document_type!r} | mime={mime_type} | "
+          f"image_size_kb={len(image_bytes) / 1024:.1f}")
+
+    try:
+        response = client.messages.create(
+            model=Config.CLAUDE_MODEL,
+            max_tokens=2048,
+            system=CLAUDE_AUTHENTICITY_PROMPT,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime_type,
+                            "data": base64.b64encode(image_bytes).decode('utf-8'),
+                        },
+                    },
+                    {"type": "text", "text": user_text},
+                ],
+            }],
+            timeout=CLAUDE_TIMEOUT_S,
+        )
+    except Exception as e:
+        print(f"DEBUG AUTHENTICATION AI request error: {type(e).__name__}: {e}")
+        return None
+
+    text = "".join(block.text for block in response.content if getattr(block, 'type', None) == 'text')
+    _raw_preview = text if len(text) <= 3000 else text[:3000] + '...<truncated>'
+    print(f"DEBUG AUTHENTICATION AI response | document_type={document_type} | text={_raw_preview!r}")
+
+    try:
+        result = json.loads(_strip_markdown_fences(text))
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"DEBUG AUTHENTICATION AI response parse error: {type(e).__name__}: {e}")
+        return None
+
+    supplier = result.get('supplier_identity') or {}
+    evidence = result.get('document_visual_evidence') or {}
+    overall = result.get('overall_result') or {}
+    print("DEBUG AUTH AI RESULT\n"
+          f"vendor={supplier.get('supplier_name')}\n"
+          f"logo={(evidence.get('company_logo') or {}).get('detected')}\n"
+          f"stamp={(evidence.get('stamp') or {}).get('detected')}\n"
+          f"signature={(evidence.get('signature') or {}).get('detected')}\n"
+          f"tampering={overall.get('risk_level')}")
+
+    return result
+
+
+# ============================================================
 # TEST-ONLY local cache — prevents re-spending a real API call when the
 # manual test script is run again against the same file. File-based
 # (not a DB table): this is a developer-run script, single process, no

@@ -5228,3 +5228,123 @@ Setup/config needed:
   2. `npm install` picks up the new @phosphor-icons/web dependency
      automatically from package.json/package-lock.json on the next
      Render build — no manual step needed.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-21
+What was changed:
+  Backend (auditlens-backend/) — Authentication module upgraded from a
+  4-signal Gemini-only checklist to an AI-powered visual verification
+  engine (Claude Vision primary, Gemini fallback):
+    - helpers/claude_extractor.py: added CLAUDE_AUTHENTICITY_PROMPT and
+      analyze_document_authenticity(image, document_type) — a separate
+      Claude Vision call (not OCR) that identifies the true supplier
+      (ignoring Bill To/Ship To/Buyer), normalizes OCR-typo'd supplier
+      names, and detects company logo/name/supplier address/stamp/
+      signature each with confidence + a bounding box, plus a
+      tampering/integrity risk assessment (LOW/MEDIUM/HIGH, never
+      declares a document "fake"). Same fail-soft contract as the
+      existing extract_with_claude() (returns None on any failure).
+    - helpers/authenticity_check.py: rewrote run_authenticity_check() to
+      call Claude first, fall back to the existing Gemini
+      AUTHENTICITY_PROMPT if Claude fails, and fall back to the existing
+      OCR-text heuristic as a last resort. Added
+      _normalize_visual_result() so both engines' output lands in ONE
+      unified schema (new _flatten_boxes() converts it into a named
+      [{name,x,y,width,height}] list for the frontend overlay).
+      stamp_required is derived from helpers/auth_rules.py's existing
+      per-document-type config rather than asked of the model. Dropped
+      the now-unused precomputed_result/skip_gemini parameters (the
+      "reuse extraction's Gemini call" optimization no longer applies —
+      see below).
+    - app.py: added _ensure_authenticity_v3_columns() (ai_engine_used,
+      ai_visual_result, document_consistency, risk_level, boxes — all
+      new, purely additive columns on authenticity_checks).
+    - routes/documents.py: REMOVED the 3 automatic run_authenticity_check
+      calls from the invoice/PO/GR upload endpoints. The authentication
+      check is now on-demand only (see below) — upload cost/latency and
+      the extraction pipeline itself are completely unchanged.
+    - routes/authenticity.py: GET /authenticity/<id> now runs the check
+      on-demand the first time a document is viewed (instead of 404ing),
+      mirroring the existing lazy PNG-render pattern used by
+      GET /authenticity/<id>/image. Both this route and
+      POST /authenticity/<id>/recheck now compute a "Document Consistency"
+      result (vendor/PO-reference/line-items/amount match) by reusing the
+      EXISTING 3-way matching engine (routes/auditor.py::_build_comparison,
+      already used by the record-detail comparison view) rather than
+      asking Claude to reason across Invoice/PO/GR itself.
+    - tests/extraction/test_authenticity_ai.py (new): schema-
+      normalization, box-flattening, and Claude-primary/Gemini-fallback/
+      OCR-fallback engine-selection tests — no real API calls, no real
+      DB writes (fake DB connection + monkey-patched call functions).
+      Wired into tests/extraction/run_all.py.
+
+  Frontend (auditlens-frontend/) — auditor-authenticity-detail component
+  only:
+    - New named-box overlay with a 5-color legend (Blue=Supplier Logo,
+      Green=Company Name, Purple=Supplier Address, Red=Stamp/Chop,
+      Orange=Signature) and a [Label] tag on each box, driven by the
+      new check.boxes field.
+    - Click a "Visual Evidence" row in the sidebar to highlight
+      (pulse-outline) its matching box on the document image.
+    - New 4-section results dashboard (Supplier Identity / Document
+      Consistency / Visual Evidence / Integrity Risk) reading
+      check.ai_visual_result / check.document_consistency.
+    - The OLD 4-marker overlay and 4-signal checklist are kept as a
+      fallback and still render exactly as before for any document that
+      hasn't been re-checked yet under the new engine
+      (check.ai_visual_result is null) — nothing breaks for existing
+      authenticity_checks rows until they're re-checked.
+
+Why:
+  The Authentication page only checked 4 fixed booleans (chop/logo/
+  name/signature) via a single Gemini prompt — too shallow for
+  enterprise AP audit: it couldn't tell which party was the actual
+  supplier (vs. Bill To/Ship To noise), couldn't cross-check Invoice/PO/
+  GR consistency, couldn't flag tampering, and only ever returned 4
+  fixed bounding boxes. Requested upgrade to an AI-powered verification
+  system built on the same Claude-primary/Gemini-fallback pattern
+  already used for field extraction. Per explicit direction, the new
+  (heavier) check runs on-demand only rather than automatically at
+  upload time, so upload cost/latency is unaffected and the existing
+  Claude/Gemini extraction pipeline, OCR, and matching engine are
+  completely untouched.
+
+Testing:
+  - `python tests/extraction/run_all.py` — all 8 suites pass (7
+    pre-existing + the new test_authenticity_ai.py), zero real
+    Anthropic/Gemini API calls (Claude/Gemini call functions and the DB
+    connection are mocked/faked).
+  - `python -c "import app; print('APP IMPORT OK')"` against the dev DB
+    — confirms _ensure_authenticity_v3_columns() runs cleanly alongside
+    every existing migration; verified the 5 new columns exist via a
+    direct information_schema query.
+  - `git diff --stat -- routes/documents.py` reviewed line-by-line —
+    confirms ONLY the 3 authenticity call sites were removed; extraction,
+    OCR, caching, and merge logic are byte-for-byte unchanged. Confirmed
+    zero diff on helpers/gemini_extractor.py, extraction_engine.py,
+    ocr_helper.py, entity_normalizer.py, extraction_validator.py,
+    gemini_cache.py, claude_cache.py, ai_extractor_router.py, and
+    routes/matching.py.
+  - `npx ng build --configuration development` — builds cleanly with no
+    TypeScript/template errors.
+  - No live Claude/Gemini API key is configured in this sandbox, so
+    real-document testing (the Coilcraft Invoice/PO/GR set) could not be
+    run end-to-end here — same caveat as prior Claude-integration work
+    this project; needs verification against real documents after
+    deploy.
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND — picks up the new
+     _ensure_authenticity_v3_columns() migration automatically on next
+     boot (same auto-migrate-on-startup pattern as every other schema
+     change in this project, no manual SQL needed) and the new
+     analyze_document_authenticity()/run_authenticity_check() code path.
+  2. Redeploy the Render FRONTEND — picks up the new authenticity-detail
+     overlay/dashboard.
+  3. No new environment variables — reuses the existing
+     ANTHROPIC_API_KEY/GEMINI_API_KEY already configured for extraction.
+  4. After deploy, open an existing (already-checked) document's
+     Authentication detail page to confirm the old overlay/checklist
+     still renders, then click Re-check (or open a never-checked
+     document) to exercise the new Claude-first engine end-to-end.

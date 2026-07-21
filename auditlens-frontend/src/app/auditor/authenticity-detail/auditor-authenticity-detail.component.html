@@ -21,11 +21,26 @@
 
       <div class="image-wrap" *ngIf="imageLoadState === 'image'">
         <img #docImage [src]="imageBlobUrl" (load)="onImageLoad()" class="doc-image" alt="Document" />
-        <div class="marker" *ngFor="let m of markers"
-             [ngClass]="[m.shape === 'circle' ? 'marker-circle' : 'marker-rect', m.present ? 'marker-present' : 'marker-missing']"
-             [style.left.px]="m.left" [style.top.px]="m.top"
-             [style.width.px]="m.width" [style.height.px]="m.height">
-        </div>
+
+        <!-- New engine: named boxes, 5-color legend, click-to-highlight -->
+        <ng-container *ngIf="hasNewResult">
+          <div class="marker box-marker" *ngFor="let m of newMarkers"
+               [ngClass]="[m.colorClass, m.name === selectedBoxName ? 'marker-active' : '']"
+               [style.left.px]="m.left" [style.top.px]="m.top"
+               [style.width.px]="m.width" [style.height.px]="m.height">
+            <span class="box-label">[{{ m.name }}]</span>
+          </div>
+        </ng-container>
+
+        <!-- Legacy 4-signal overlay — only shown for documents not yet
+             re-checked by the new engine (ai_visual_result is null). -->
+        <ng-container *ngIf="!hasNewResult">
+          <div class="marker" *ngFor="let m of markers"
+               [ngClass]="[m.shape === 'circle' ? 'marker-circle' : 'marker-rect', m.present ? 'marker-present' : 'marker-missing']"
+               [style.left.px]="m.left" [style.top.px]="m.top"
+               [style.width.px]="m.width" [style.height.px]="m.height">
+          </div>
+        </ng-container>
       </div>
 
       <div class="image-hint" *ngIf="imageLoadState === 'image' && !hasAnyBoxes">
@@ -42,7 +57,15 @@
         <p>Could not load the document file.</p>
       </div>
 
-      <div class="legend" *ngIf="imageLoadState === 'image'">
+      <div class="legend" *ngIf="imageLoadState === 'image' && hasNewResult">
+        <span class="legend-item"><span class="legend-swatch box-blue"></span> Supplier Logo</span>
+        <span class="legend-item"><span class="legend-swatch box-green"></span> Company Name</span>
+        <span class="legend-item"><span class="legend-swatch box-purple"></span> Supplier Address</span>
+        <span class="legend-item"><span class="legend-swatch box-red"></span> Stamp / Chop</span>
+        <span class="legend-item"><span class="legend-swatch box-orange"></span> Signature</span>
+      </div>
+
+      <div class="legend" *ngIf="imageLoadState === 'image' && !hasNewResult">
         <span class="legend-item"><span class="legend-swatch legend-green"></span> Present &amp; located</span>
         <span class="legend-item"><span class="legend-swatch legend-red"></span> Missing &amp; located</span>
       </div>
@@ -62,9 +85,69 @@
         </div>
       </div>
 
-      <p class="vendor-line">Vendor: {{ check.vendor_name || 'Unknown vendor' }}</p>
+      <p class="vendor-line">Vendor: {{ (hasNewResult ? supplierIdentity?.supplier_name : null) || check.vendor_name || 'Unknown vendor' }}</p>
 
-      <div class="checklist-box">
+      <!-- New engine dashboard (spec section 9): Supplier Identity /
+           Document Consistency / Visual Evidence / Integrity Risk. -->
+      <ng-container *ngIf="hasNewResult">
+
+        <div class="checklist-box">
+          <p class="section-label">Supplier Identity</p>
+          <div class="checklist-row">
+            <span class="checklist-icon" [ngClass]="supplierIdentity?.supplier_name_detected ? 'icon-yes' : 'icon-no'">
+              <i class="ph-duotone" [ngClass]="supplierIdentity?.supplier_name_detected ? 'ph-check' : 'ph-x'"></i>
+            </span>
+            <span class="checklist-label">Supplier Name Verified</span>
+          </div>
+          <div class="checklist-row">
+            <span class="checklist-icon" [ngClass]="supplierIdentity?.logo_detected ? 'icon-yes' : 'icon-no'">
+              <i class="ph-duotone" [ngClass]="supplierIdentity?.logo_detected ? 'ph-check' : 'ph-x'"></i>
+            </span>
+            <span class="checklist-label">Supplier Logo Detected</span>
+          </div>
+          <div class="checklist-row">
+            <span class="checklist-icon" [ngClass]="supplierIdentity?.address_detected ? 'icon-yes' : 'icon-no'">
+              <i class="ph-duotone" [ngClass]="supplierIdentity?.address_detected ? 'ph-check' : 'ph-x'"></i>
+            </span>
+            <span class="checklist-label">Address Verified</span>
+          </div>
+        </div>
+
+        <div class="checklist-box" *ngIf="documentConsistency">
+          <p class="section-label">Document Consistency</p>
+          <div class="checklist-row" *ngFor="let key of consistencyKeys">
+            <span class="checklist-icon" [ngClass]="matchClass(documentConsistency[key])">
+              <i class="ph-duotone" [ngClass]="documentConsistency[key] === false ? 'ph-x' : 'ph-check'"></i>
+            </span>
+            <span class="checklist-label">{{ consistencyLabels[key] }}</span>
+            <span class="checklist-located">{{ matchLabel(documentConsistency[key]) }}</span>
+          </div>
+        </div>
+
+        <div class="checklist-box">
+          <p class="section-label">Visual Evidence</p>
+          <div class="checklist-row evidence-row" *ngFor="let key of evidenceKeys"
+               (click)="selectBox(boxLabelFor(key))"
+               [ngClass]="{'evidence-row-active': selectedBoxName === boxLabelFor(key)}">
+            <span class="checklist-icon" [ngClass]="evidenceEntry(key)?.detected ? 'icon-yes' : 'icon-no'">
+              <i class="ph-duotone" [ngClass]="evidenceEntry(key)?.detected ? 'ph-check' : 'ph-x'"></i>
+            </span>
+            <span class="checklist-label">{{ evidenceLabels[key] }}</span>
+            <span class="checklist-located" *ngIf="evidenceEntry(key)?.boxes"><i class="ph-duotone ph-map-pin"></i> located</span>
+          </div>
+        </div>
+
+        <div class="checklist-box" *ngIf="overallResult">
+          <p class="section-label">Integrity Risk</p>
+          <p class="risk-line" [ngClass]="riskLevelClass(overallResult.risk_level)">{{ overallResult.risk_level || 'LOW' }}</p>
+          <p class="checklist-label" *ngFor="let reason of overallResult.reasons">{{ reason }}</p>
+        </div>
+
+      </ng-container>
+
+      <!-- Legacy checklist — only for documents not yet re-checked by the
+           new engine (ai_visual_result is null). -->
+      <div class="checklist-box" *ngIf="!hasNewResult">
         <p class="section-label">Signals Checklist</p>
         <div class="checklist-row" *ngFor="let key of signalKeys">
           <span class="checklist-icon" [ngClass]="check[key] ? 'icon-yes' : 'icon-no'">
