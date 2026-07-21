@@ -385,6 +385,59 @@
 .risk-chip.risk-medium { background: var(--warning-bg); color: var(--warning); }
 .risk-chip.risk-high   { background: var(--danger-bg); color: var(--danger); }
 
+/* Final Risk Assessment (v4) */
+.final-assessment {
+  background: var(--accent-bg);
+  border: 1px solid var(--border-hover);
+}
+
+.score-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.score-value {
+  font-size: 26px;
+  font-weight: 800;
+}
+
+.score-max {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.decision-badge {
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 12px;
+  border-radius: 8px;
+  letter-spacing: 0.03em;
+}
+
+.decision-approve { background: var(--success-bg); color: var(--success); }
+.decision-review  { background: var(--warning-bg); color: var(--warning); }
+.decision-reject  { background: var(--danger-bg);  color: var(--danger); }
+
+.reason-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.reason-sign {
+  font-weight: 800;
+  font-size: 13px;
+  width: 14px;
+  flex-shrink: 0;
+}
+
+.reason-positive { color: var(--success); }
+.reason-negative { color: var(--text-secondary); }
+
 .meta-box {
   background: var(--bg-card);
   border-radius: 12px;

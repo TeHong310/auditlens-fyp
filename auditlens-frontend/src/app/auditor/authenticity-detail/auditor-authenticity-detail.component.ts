@@ -95,9 +95,10 @@ const CONSISTENCY_LABELS: Record<string, string> = {
 };
 
 const RISK_LABELS: Record<string, string> = {
-  copy_paste_risk:   'Copy/Paste Risk',
-  font_consistency:  'Font Consistency',
-  alteration_risk:   'Alteration Risk',
+  copy_paste_risk:        'Copy/Paste Risk',
+  font_consistency:       'Font Consistency',
+  alignment_consistency:  'Alignment Consistency',
+  alteration_risk:        'Alteration Risk',
 };
 
 @Component({
@@ -335,6 +336,33 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return this.check?.document_consistency || null;
   }
 
+  // v4: deterministic auditor score/decision — see helpers/
+  // authenticity_check.py::_compute_auditor_score(). Computed at check
+  // time, stored inside ai_visual_result.
+  get auditorScore(): any {
+    return this.check?.ai_visual_result?.auditor_score || null;
+  }
+
+  // v4: cross-document comparison (Invoice/PO/GR supplier identity +
+  // reference numbers + items + date order) — computed fresh on every
+  // load, not stored; null until at least 2 of the 3 document types
+  // have been checked.
+  get crossDocumentAuthenticity(): any {
+    return this.check?.cross_document_authenticity || null;
+  }
+
+  decisionClass(decision: string): string {
+    if (decision === 'APPROVE') return 'decision-approve';
+    if (decision === 'REVIEW') return 'decision-review';
+    return 'decision-reject';
+  }
+
+  scoreClass(score: number): string {
+    if (score >= 85) return 'risk-low';
+    if (score >= 60) return 'risk-medium';
+    return 'risk-high';
+  }
+
   get consistencyKeys(): string[] {
     return Object.keys(CONSISTENCY_LABELS);
   }
@@ -371,6 +399,14 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     if (entry.status === 'detected' || entry.detected) return 'icon-yes';
     if (entry.required === false) return 'icon-na';
     return 'icon-no';
+  }
+
+  // v4: stamp classification (company_chop/received_stamp/qc_stamp/
+  // approval_stamp) — shown alongside the Stamp/Chop evidence row.
+  stampTypeLabel(): string {
+    const type = this.evidenceEntry('stamp')?.type;
+    if (!type) return '';
+    return type.split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
   }
 
   evidenceStatusLabel(key: EvidenceKey): string {

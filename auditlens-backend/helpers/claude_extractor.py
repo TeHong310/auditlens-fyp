@@ -241,7 +241,7 @@ extract_with_claude_test = extract_with_claude
 # Bumped whenever this prompt/schema changes meaningfully — part of the
 # authenticity cache key (helpers/authenticity_cache.py) so a stale
 # cached result shaped for an older prompt version is never served.
-CLAUDE_AUTHENTICITY_PROMPT_VERSION = 'v3'
+CLAUDE_AUTHENTICITY_PROMPT_VERSION = 'v4'
 
 CLAUDE_AUTHENTICITY_PROMPT = """You are an enterprise AP (Accounts Payable) audit AI performing VISUAL
 document authenticity verification. You are NOT doing OCR/field
@@ -324,6 +324,12 @@ element, never a region that also happens to contain other things:
    DO NOT box: printed text, item/part codes in a table, the printed
    abbreviation "CHP" as text, or nearby handwritten AP reviewer notes —
    none of these are a stamp even if they sit close to one.
+   Classify the stamp's `type` as exactly one of: "company_chop"
+   (a general round/square company chop), "received_stamp" (a
+   "RECEIVED" stamp confirming receipt), "qc_stamp" (a quality-control/
+   inspection-passed stamp), "approval_stamp" (an approval/authorized
+   stamp) — or "" if not_detected. If a stamp doesn't clearly fit one of
+   the four types, pick the closest one rather than leaving it empty.
 
 5. signature — same tightness principle: bound only the handwritten ink
    mark itself, not surrounding labels or whitespace.
@@ -337,23 +343,34 @@ element, never a region that also happens to contain other things:
   fraud — just report status "not_detected", do not treat it as
   suspicious on its own.
 
-INTEGRITY / TAMPERING — assess three independent risk axes, each
+INTEGRITY / TAMPERING — assess four independent risk axes, each
 "low", "medium", or "high":
 - copy_paste_risk: does any region look like a pasted-in block from a
   different source (mismatched resolution/compression, a rectangle that
-  doesn't align with the surrounding layout)?
+  doesn't align with the surrounding layout)? Includes suspicious white
+  boxes covering original content and altered totals/dates that look
+  pasted over.
 - font_consistency: do all text blocks that should share one font
   (e.g. all amounts, all header text) actually look visually
   consistent, or does something stand out as a different font/weight/
   size than its surroundings?
-- alteration_risk: any sign of an overwritten number, a white rectangle
-  covering original content, or misaligned/re-typed text?
+- alignment_consistency: is spacing/alignment consistent with a normal
+  printed or scanned document (rows aligned, consistent margins,
+  consistent line spacing), or is there abnormal spacing/misalignment
+  suggesting a field was re-typed or inserted afterward (e.g. a total or
+  date that sits slightly off-baseline from the rest of the row)?
+- alteration_risk: any sign of an overwritten number, an altered total
+  or date, or re-typed text that doesn't match the surrounding print
+  quality?
 - reason: one short sentence explaining the overall integrity
   assessment (what you looked at, why it's low/medium/high).
-- Do NOT declare a document "fake" or "forged" — only report the three
-  risk axes and the reason. Most documents are legitimate; only flag
-  medium/high when something is visually concrete, not merely low scan
-  quality.
+- Do NOT declare a document "fake" or "forged" — only report the four
+  risk axes and the reason. Most documents are legitimate, including
+  normal scanned/photographed copies with ordinary scan noise, slight
+  skew, or compression artifacts — do NOT mark a normal scanned document
+  as suspicious for that alone. Only flag medium/high when something is
+  visually concrete (a real pasted block, a real overwritten value), not
+  merely low scan quality.
 
 Return null/false/0/empty-array defaults for anything you cannot
 confidently determine — never guess.
@@ -372,12 +389,13 @@ exactly this structure:
     "company_logo":     {{"status": "detected" or "not_detected", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},
     "company_name":      {{"status": "detected" or "not_detected", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},
     "supplier_address":  {{"status": "detected" or "not_detected", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},
-    "stamp":             {{"status": "detected" or "not_detected", "type": "string or empty", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},
+    "stamp":             {{"status": "detected" or "not_detected", "type": "company_chop" or "received_stamp" or "qc_stamp" or "approval_stamp" or "", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},
     "signature":         {{"status": "detected" or "not_detected", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}}
   }},
   "integrity_check": {{
     "copy_paste_risk": "low" or "medium" or "high",
     "font_consistency": "low" or "medium" or "high",
+    "alignment_consistency": "low" or "medium" or "high",
     "alteration_risk": "low" or "medium" or "high",
     "reason": "string"
   }},

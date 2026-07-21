@@ -328,10 +328,11 @@ def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=N
             },
             'document_visual_evidence': evidence,
             'integrity_check': {
-                'copy_paste_risk':  integrity.get('copy_paste_risk') or 'low',
-                'font_consistency': integrity.get('font_consistency') or 'low',
-                'alteration_risk':  integrity.get('alteration_risk') or 'low',
-                'reason':           integrity.get('reason') or '',
+                'copy_paste_risk':       integrity.get('copy_paste_risk') or 'low',
+                'font_consistency':      integrity.get('font_consistency') or 'low',
+                'alignment_consistency': integrity.get('alignment_consistency') or 'low',
+                'alteration_risk':       integrity.get('alteration_risk') or 'low',
+                'reason':                integrity.get('reason') or '',
             },
             'overall_result': {
                 'status':     overall.get('status') or 'REVIEW',
@@ -385,10 +386,11 @@ def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=N
             'signature':          _entry('signature', sig, _box('has_signature')),
         },
         'integrity_check': {
-            'copy_paste_risk':  'low',
-            'font_consistency': 'low',
-            'alteration_risk':  'low',
-            'reason':           'Not assessed — this document was checked by the fallback engine, not Claude Vision.',
+            'copy_paste_risk':       'low',
+            'font_consistency':      'low',
+            'alignment_consistency': 'low',
+            'alteration_risk':       'low',
+            'reason':                'Not assessed — this document was checked by the fallback engine, not Claude Vision.',
         },
         'overall_result': {
             'status':     'PASS' if name else 'REVIEW',
@@ -420,7 +422,7 @@ def _flatten_boxes(evidence):
         if not (isinstance(box, list) and len(box) == 4):
             continue
         ymin, xmin, ymax, xmax = box
-        boxes.append({
+        entry = {
             'type':       box_type,
             'label':      item.get('label') or static_label,
             'reason':     item.get('reason') or '',
@@ -429,8 +431,118 @@ def _flatten_boxes(evidence):
             'width':      xmax - xmin,
             'height':     ymax - ymin,
             'confidence': round((item.get('confidence') or 0) / 100, 2),
-        })
+        }
+        if key == 'stamp':
+            entry['stamp_type'] = item.get('type') or ''
+        boxes.append(entry)
     return boxes
+
+
+_SUPPLIER_SCORE = {'verified': 40, 'uncertain': 15, 'not_found': 0}
+_EVIDENCE_WEIGHTS = {'company_name': 15, 'company_logo': 10, 'supplier_address': 5, 'stamp': 10}
+_INTEGRITY_PENALTY = {'low': 0, 'medium': 5, 'high': 10}
+_SIGNATURE_BONUS = 5
+_APPROVE_THRESHOLD, _REVIEW_THRESHOLD = 85, 60
+
+
+def _compute_auditor_score(visual):
+    """Deterministic, explainable 0-100 authenticity score + APPROVE/
+    REVIEW/REJECT decision (v4 spec objectives 1 and 6) — computed
+    server-side from signals already detected/normalized above, NOT
+    self-reported by Claude: an LLM's own numeric self-rating isn't
+    reliably consistent enough to build an audit decision on, whereas a
+    fixed formula is deterministic, free (no extra tokens), and
+    testable. Composition:
+      - Supplier identity (0-40): verified=40, uncertain=15, not_found=0.
+      - Visual evidence (0-30): weighted sum of REQUIRED evidence keys
+        that were detected, normalized to 30 — a key not required for
+        this document type (e.g. stamp on a PO) is excluded from both
+        the earned points and the max, same "don't penalize what isn't
+        expected" principle as helpers/auth_rules.py's
+        compute_authentication().
+      - Integrity (0-30): starts at 30, -5 per axis at "medium", -10 per
+        axis at "high" (4 axes), floored at 0.
+      - Signature bonus (+5): only ever adds, never subtracts — a
+        missing signature is never a penalty (signature is always
+        optional).
+
+    Returns {authenticity_score, risk_level, reasons: {positive,
+    negative}, decision, decision_reason}.
+    """
+    supplier = visual['supplier_identity']
+    evidence = visual['document_visual_evidence']
+    integrity = visual['integrity_check']
+
+    positive, negative = [], []
+
+    supplier_status = supplier.get('status') or 'not_found'
+    supplier_points = _SUPPLIER_SCORE.get(supplier_status, 0)
+    if supplier_status == 'verified':
+        positive.append('Supplier identity verified')
+    elif supplier_status == 'uncertain':
+        negative.append('Supplier identity uncertain — worth a second look')
+    else:
+        negative.append('Supplier identity not found')
+
+    evidence_earned, evidence_max = 0, 0
+    for key, weight in _EVIDENCE_WEIGHTS.items():
+        entry = evidence.get(key) or {}
+        if not entry.get('required', True):
+            continue
+        evidence_max += weight
+        label = entry.get('label') or key.replace('_', ' ').title()
+        if entry.get('detected'):
+            evidence_earned += weight
+            if key == 'company_logo':
+                positive.append('Supplier logo matches vendor')
+            elif key == 'stamp':
+                positive.append(f'Official stamp detected ({label})' if label else 'Official stamp detected')
+            else:
+                positive.append(f'{label} verified')
+        else:
+            negative.append(f'{label} not detected')
+    evidence_points = round((evidence_earned / evidence_max) * 30) if evidence_max else 0
+
+    integrity_points = 30
+    for axis in ('copy_paste_risk', 'font_consistency', 'alignment_consistency', 'alteration_risk'):
+        level = integrity.get(axis) or 'low'
+        penalty = _INTEGRITY_PENALTY.get(level, 0)
+        integrity_points -= penalty
+        if penalty:
+            negative.append(f"Elevated {axis.replace('_', ' ')} ({level})")
+    integrity_points = max(0, integrity_points)
+
+    signature_bonus = 0
+    if (evidence.get('signature') or {}).get('detected'):
+        signature_bonus = _SIGNATURE_BONUS
+        positive.append('Signature detected')
+    else:
+        negative.append('No signature detected (not required)')
+
+    score = min(100, supplier_points + evidence_points + integrity_points + signature_bonus)
+
+    if score >= _APPROVE_THRESHOLD:
+        decision, risk_level = 'APPROVE', 'LOW'
+    elif score >= _REVIEW_THRESHOLD:
+        decision, risk_level = 'REVIEW', 'MEDIUM'
+    else:
+        decision, risk_level = 'REJECT', 'HIGH'
+
+    # The decision's one-line reason favors a REAL penalty over the
+    # always-present-but-usually-zero-weight "no signature" note, so it
+    # doesn't read as the cause of a REVIEW/REJECT when it never
+    # actually cost any points.
+    real_negatives = [n for n in negative if 'not required' not in n]
+    top_reason = real_negatives[0] if real_negatives else 'all checks passed'
+    decision_reason = f'Score {score}/100 — {top_reason}.'
+
+    return {
+        'authenticity_score': score,
+        'risk_level':         risk_level,
+        'reasons':            {'positive': positive, 'negative': negative},
+        'decision':           decision,
+        'decision_reason':    decision_reason,
+    }
 
 
 def _authenticity_is_complete(result):
@@ -556,11 +668,20 @@ def run_authenticity_check(document_id, file_bytes, file_name, document_type, do
         visual = _normalize_visual_result(engine, raw_result, document_type, extracted_vendor_name)
         evidence = visual['document_visual_evidence']
 
+        # Deterministic auditor score/decision (v4 spec objectives 1+6) —
+        # computed from the signals just normalized above, stored inside
+        # ai_visual_result (no schema change needed). This SUPERSEDES
+        # Claude's own self-reported overall_result.risk_level for the
+        # flat `risk_level` column: the stored column should reflect the
+        # actual scoring decision an auditor sees, not a separate
+        # unscored self-assessment that could disagree with it.
+        visual['auditor_score'] = _compute_auditor_score(visual)
+
         chop = evidence['stamp']['detected']
         logo = evidence['company_logo']['detected']
         name = evidence['company_name']['detected']
         sig = evidence['signature']['detected']
-        risk_level = visual['overall_result'].get('risk_level') or 'LOW'
+        risk_level = visual['auditor_score']['risk_level']
         notes = '; '.join(visual['overall_result'].get('reasons') or []) or None
 
         status = _compute_authenticity_status(document_type, {

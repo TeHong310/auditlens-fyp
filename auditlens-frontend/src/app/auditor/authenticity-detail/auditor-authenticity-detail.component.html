@@ -136,7 +136,9 @@
                 <i class="ph-duotone"
                    [ngClass]="evidenceStatusClass(key) === 'icon-yes' ? 'ph-check' : (evidenceStatusClass(key) === 'icon-na' ? 'ph-minus' : 'ph-x')"></i>
               </span>
-              <span class="checklist-label">{{ evidenceLabels[key] }}</span>
+              <span class="checklist-label">
+                {{ evidenceLabels[key] }}<span *ngIf="key === 'stamp' && stampTypeLabel()"> — {{ stampTypeLabel() }}</span>
+              </span>
               <span class="checklist-located" [ngClass]="{'located-na': evidenceStatusClass(key) === 'icon-na'}">{{ evidenceStatusLabel(key) }}</span>
             </div>
             <p class="evidence-reason" *ngIf="evidenceEntry(key)?.reason">{{ evidenceEntry(key).reason }}</p>
@@ -144,7 +146,7 @@
         </div>
 
         <div class="checklist-box" *ngIf="overallResult">
-          <p class="section-label">Integrity Risk</p>
+          <p class="section-label">Document Integrity</p>
           <p class="risk-line" [ngClass]="riskLevelClass(overallResult.risk_level)">{{ overallResult.risk_level || 'LOW' }}</p>
           <div class="checklist-row" *ngFor="let key of riskKeys">
             <span class="checklist-label">{{ riskLabels[key] }}</span>
@@ -152,6 +154,37 @@
           </div>
           <p class="ai-text" *ngIf="integrityCheck?.reason">{{ integrityCheck.reason }}</p>
           <p class="checklist-label" *ngFor="let reason of overallResult.reasons">{{ reason }}</p>
+        </div>
+
+        <div class="checklist-box" *ngIf="crossDocumentAuthenticity">
+          <p class="section-label">Cross Document Verification</p>
+          <p class="risk-line" *ngIf="crossDocumentAuthenticity.cross_document_score !== null"
+             [ngClass]="scoreClass(crossDocumentAuthenticity.cross_document_score)">
+            {{ crossDocumentAuthenticity.cross_document_score }}/100
+          </p>
+          <div *ngIf="crossDocumentAuthenticity.issues.length === 0" class="checklist-row">
+            <span class="checklist-icon icon-yes"><i class="ph-duotone ph-check"></i></span>
+            <span class="checklist-label">No cross-document issues found</span>
+          </div>
+          <div class="checklist-row" *ngFor="let issue of crossDocumentAuthenticity.issues">
+            <span class="checklist-icon icon-no"><i class="ph-duotone ph-x"></i></span>
+            <span class="checklist-label">{{ issue }}</span>
+          </div>
+        </div>
+
+        <div class="checklist-box final-assessment" *ngIf="auditorScore">
+          <p class="section-label">Final Risk Assessment</p>
+          <div class="score-row">
+            <p class="score-value" [ngClass]="scoreClass(auditorScore.authenticity_score)">{{ auditorScore.authenticity_score }}<span class="score-max">/100</span></p>
+            <p class="decision-badge" [ngClass]="decisionClass(auditorScore.decision)">{{ auditorScore.decision }}</p>
+          </div>
+          <p class="ai-text">{{ auditorScore.decision_reason }}</p>
+          <div class="reason-row" *ngFor="let reason of auditorScore.reasons.positive">
+            <span class="reason-sign reason-positive">+</span><span class="checklist-label">{{ reason }}</span>
+          </div>
+          <div class="reason-row" *ngFor="let reason of auditorScore.reasons.negative">
+            <span class="reason-sign reason-negative">−</span><span class="checklist-label">{{ reason }}</span>
+          </div>
         </div>
 
       </ng-container>

@@ -12,7 +12,7 @@ import os
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 SUITES = ['test_invoice.py', 'test_po.py', 'test_gr.py', 'test_currency.py', 'test_ap_upgrade.py',
           'test_entity_and_line_items.py', 'test_ai_router.py', 'test_authenticity_ai.py',
-          'test_authenticity_siblings.py']
+          'test_authenticity_siblings.py', 'test_authenticity_scoring.py']
 
 if __name__ == '__main__':
     results = {}

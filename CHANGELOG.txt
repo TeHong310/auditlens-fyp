@@ -5587,3 +5587,123 @@ Setup/config needed:
   2. Redeploy the Render FRONTEND — picks up the reason/vendor-match-note
      display additions.
   3. No new environment variables.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-21
+
+What was changed:
+  Backend (auditlens-backend/) — Authenticity Vision v4: upgrades the
+  Authenticity module from a visual-detection tool into an auditor
+  decision engine:
+    - helpers/claude_extractor.py: bumped
+      CLAUDE_AUTHENTICITY_PROMPT_VERSION to 'v4'. Added a 4th integrity
+      axis, alignment_consistency (abnormal spacing/misalignment
+      suggesting a re-typed/inserted field, distinct from font
+      mismatches), and reinforced "do not mark a normal scanned document
+      as suspicious for ordinary scan noise/skew alone". Constrained the
+      stamp's `type` field to an enum (company_chop / received_stamp /
+      qc_stamp / approval_stamp / "" for not-detected) instead of free
+      text, with explicit classification instructions.
+    - helpers/authenticity_check.py: added
+      _compute_auditor_score(visual) — a deterministic, explainable 0-100
+      authenticity_score computed SERVER-SIDE from already-detected
+      signals (not self-reported by Claude — an LLM's own numeric rating
+      isn't reliably consistent enough to build an audit decision on,
+      whereas a fixed formula is deterministic, free, and testable).
+      Composition: supplier identity (0-40) + weighted required visual
+      evidence (0-30, a key not required for this document type is
+      excluded from both earned points and the max) + integrity
+      (0-30, penalized per risk axis) + a signature-detected bonus
+      (+5, never a penalty — signature stays always-optional). Derives
+      risk_level and an APPROVE (>=85) / REVIEW (60-84) / REJECT (<60)
+      decision with a one-line reason, plus itemized +/- reason bullets.
+      Stored inside ai_visual_result.auditor_score at check time (no
+      schema change) and now SUPERSEDES Claude's own self-reported
+      risk_level for the stored `risk_level` column, so what's on disk
+      matches what the auditor sees. _flatten_boxes() now includes
+      stamp_type on the stamp box entry.
+    - routes/authenticity.py: added
+      _cross_document_authenticity_for(cursor, document_id) — v4's Cross
+      Document Authenticity (objective 3). Computed FRESH at read time
+      (never stored — it depends on sibling documents that can be
+      re-checked independently after this was last computed), reusing
+      EXISTING engines rather than re-implementing cross-document
+      reasoning: supplier identity across Invoice/PO/GR is compared via
+      routes/auditor.py's _vendor_match_all() (the same fuzzy, OCR-typo-
+      tolerant comparator already trusted for vendor matching
+      elsewhere); document number references, item consistency, and
+      date-order ("Timeline") reuse _build_comparison() — the same
+      3-way matching engine already powering the Record Detail Field
+      Comparison table. Returns {cross_document_score, issues} or None
+      until at least 2 document types have been checked. Attached to
+      both GET /authenticity/<id> and POST /authenticity/<id>/recheck
+      responses as a new `cross_document_authenticity` field.
+    - tests/extraction/test_authenticity_scoring.py (new): covers the
+      score engine's APPROVE/REVIEW/REJECT bands, the "not-required
+      evidence is excluded from the denominator, not penalized" rule,
+      and the cross-document function's 2-type minimum, matching
+      suppliers, mismatched suppliers, and reference-number-mismatch
+      cases. Wired into run_all.py.
+
+  Frontend (auditlens-frontend/) — auditor-authenticity-detail component
+  only:
+    - "Integrity Risk" section renamed "Document Integrity", now shows
+      the 4th Alignment Consistency axis.
+    - Stamp/Chop evidence row shows its classified type (e.g. "Stamp /
+      Chop — Received Stamp").
+    - New "Cross Document Verification" section: cross_document_score
+      plus a plain-language issues list (or "No cross-document issues
+      found").
+    - New "Final Risk Assessment" section: the authenticity_score (with
+      color-coded value), an APPROVE/REVIEW/REJECT decision badge, the
+      one-line decision reason, and the full +/- reasons list.
+
+Why:
+  The prior rounds could detect and locate evidence but gave an auditor
+  no single number or recommendation to act on, no way to see whether a
+  stamp was a real chop vs. a QC/received/approval stamp, and no way to
+  check Invoice/PO/GR consistency beyond the existing raw match/mismatch
+  booleans. This round turns the detected signals into an actual
+  decision (score + APPROVE/REVIEW/REJECT + reasons an auditor can read
+  in seconds), reusing the app's existing matching/fuzzy-comparison
+  engines wherever possible instead of asking Claude to do cross-
+  document reasoning it has no reliable way to verify. Per explicit
+  instruction, extraction and the matching engine are untouched — only
+  the Authenticity module's own files changed (confirmed via
+  `git diff --stat` showing zero changes to routes/documents.py,
+  routes/auditor.py, routes/matching.py, the extractor helpers, and
+  app.py).
+
+Testing:
+  - `python tests/extraction/run_all.py` — all 10 suites pass (9 prior +
+    the new test_authenticity_scoring.py), zero real Anthropic/Gemini
+    API calls.
+  - `python -c "import app; print('APP IMPORT OK')"` — no new migration
+    this round (auditor_score lives inside the existing ai_visual_result
+    JSONB column).
+  - Full end-to-end proof against the REAL dev Postgres DB (only the
+    Claude call mocked): created a synthetic document_id with an Invoice
+    (Coilcraft) and a PO whose OWN letterhead is EMITS (the buyer) but
+    whose extracted vendor_name field was deliberately set to "EMITS
+    TECHNOLOGY SDN BHD" to simulate a plausible extraction bug. Result:
+    Claude correctly resolved the true supplier as Coilcraft on every
+    document (buyer/supplier fix from the prior round holding up), so
+    Cross Document Verification correctly scored 100/no issues across
+    all three — while the PO's OWN per-document score dropped to
+    75/REVIEW ("Supplier identity uncertain") specifically because that
+    document's extracted vendor_name (EMITS) disagreed with what Claude
+    saw (Coilcraft) — two distinct signals, both behaving correctly.
+    Invoice/GR both scored 100/APPROVE with their RECEIVED stamp
+    correctly classified as stamp_type='received_stamp'. Then deleted
+    every synthetic row.
+  - `npx ng build --configuration development` — builds cleanly.
+  - Real-document verification against the actual Coilcraft/EMITS PDFs
+    (score accuracy, stamp classification) needs a live
+    ANTHROPIC_API_KEY, not present in this sandbox — same disclosed
+    caveat as prior rounds; for the user to verify post-deploy.
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND — no new migration to wait on.
+  2. Redeploy the Render FRONTEND — picks up the new dashboard sections.
+  3. No new environment variables.

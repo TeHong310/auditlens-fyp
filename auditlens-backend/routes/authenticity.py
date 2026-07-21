@@ -9,7 +9,7 @@ from helpers.authenticity_check import (
     run_authenticity_check, save_rendered_authenticity_image, AUTHENTICITY_IMAGE_DIR
 )
 from helpers.auth_rules import compute_authentication
-from routes.auditor import _build_comparison
+from routes.auditor import _build_comparison, _vendor_match_all
 
 authenticity_bp = Blueprint('authenticity', __name__)
 
@@ -195,6 +195,74 @@ def _extracted_vendor_name_for(cursor, document_id, document_type):
     return row['vendor_name'] if row else None
 
 
+def _cross_document_authenticity_for(cursor, document_id):
+    """v4 spec objective 3: Cross Document Authenticity. Computed fresh
+    at READ time (not stored — see helpers/authenticity_check.py's
+    per-document score for why) since it depends on whichever of
+    Invoice/PO/GR have been checked so far, and any one of them could be
+    re-checked independently after this was last computed.
+
+    Reuses existing engines rather than asking Claude to reason across
+    documents itself:
+      - Supplier identity across documents: each already-checked type's
+        own supplier_identity.supplier_name (from its authenticity_checks
+        row), compared via routes/auditor.py's _vendor_match_all() — the
+        same fuzzy, OCR-typo-tolerant comparator already trusted for
+        Invoice/PO/GR vendor matching elsewhere.
+      - Document number references / item consistency / date order
+        ("Timeline"): routes/auditor.py's _build_comparison() — the same
+        3-way matching engine already powering the Record Detail
+        Field Comparison table.
+
+    Returns {cross_document_score, issues} or None if fewer than 2
+    document types have been checked yet (nothing to cross-compare).
+    """
+    cursor.execute(
+        'SELECT document_type, ai_visual_result FROM authenticity_checks WHERE document_id = %s',
+        (document_id,)
+    )
+    checked = {row['document_type']: row['ai_visual_result'] for row in cursor.fetchall()}
+    if len(checked) < 2:
+        return None
+
+    issues = []
+    points = 0
+    max_points = 0
+
+    named_suppliers = [
+        (f'{doc_type.upper()} supplier', (visual or {}).get('supplier_identity', {}).get('supplier_name'))
+        for doc_type, visual in checked.items()
+    ]
+    identity_match = _vendor_match_all(named_suppliers)
+    if identity_match is not None:
+        max_points += 40
+        if identity_match:
+            points += 40
+        else:
+            issues.append('Supplier identity differs across Invoice/PO/GR')
+
+    comparison = _build_comparison(cursor, document_id)
+    if comparison:
+        match = comparison['match_result']
+        weighted_checks = (
+            ('po_reference_match', 'PO/Invoice/GR reference numbers do not all match', 20),
+            ('line_items_match',   'Part numbers/descriptions do not match across documents', 25),
+            ('date_order_valid',   'Document dates are out of expected order (PO before GR before Invoice)', 15),
+        )
+        for key, issue_text, weight in weighted_checks:
+            value = match.get(key)
+            if value is None:
+                continue
+            max_points += weight
+            if value:
+                points += weight
+            else:
+                issues.append(issue_text)
+
+    cross_document_score = round((points / max_points) * 100) if max_points > 0 else None
+    return {'cross_document_score': cross_document_score, 'issues': issues}
+
+
 def _document_consistency_for(cursor, document_id):
     """Document Consistency Verification (spec section 3) — reuses the
     EXISTING 3-way matching engine (routes/auditor.py::_build_comparison,
@@ -277,7 +345,17 @@ def get_authenticity_check(document_id):
         # fix for "only Invoice shows up on the Authenticity page".
         _ensure_sibling_checks(document_id, document_type)
 
-        return jsonify(_with_authentication_score(row)), 200
+        result = _with_authentication_score(row)
+        # Computed AFTER sibling checks, on a fresh cursor, so it reflects
+        # any sibling rows just created above — see
+        # _cross_document_authenticity_for's docstring for why this is
+        # never stored, only computed at read time.
+        conn   = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        result['cross_document_authenticity'] = _cross_document_authenticity_for(cursor, document_id)
+        conn.close()
+
+        return jsonify(result), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -432,9 +510,11 @@ def recheck_authenticity(document_id):
             (check_id,)
         )
         row = cursor.fetchone()
+        result = _with_authentication_score(row)
+        result['cross_document_authenticity'] = _cross_document_authenticity_for(cursor, document_id)
         conn.close()
 
-        return jsonify(_with_authentication_score(row)), 200
+        return jsonify(result), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
