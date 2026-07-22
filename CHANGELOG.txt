@@ -8541,3 +8541,210 @@ available: correct — its function body is byte-for-byte unchanged, it
 is still directly callable, and it is the unconditional fallback
 whenever V2 is disabled, an invoice has no explicit relationships, or
 V2 raises any exception.
+
+====================================================================
+
+Date: 2026-07-22 (later same day)
+
+What was changed:
+  Backend (auditlens-backend/) — Enterprise V3 Phase 3: Add Enterprise
+  Matching Shadow Validation. Observation-only: no matching table, no
+  workflow status, no auditor decision, and no user-facing result is
+  ever modified. 1 new file, additive-only changes to 3 existing files.
+    - routes/auditor.py: added _shape_shadow_comparison() (pure
+      formatting, no DB access — turns an already-computed legacy_
+      result/v2_result pair into the structured {document_id, legacy:
+      {status, matching_summary}, enterprise_v2: {status, matching_
+      summary}, differences: [{field, legacy_value, v2_value, reason}]}
+      shape), build_shadow_comparison() (the public, self-contained
+      entry point used by the new debug endpoint — computes legacy via
+      the untouched _build_comparison(), and V2 via _build_comparison_
+      v2() only when the invoice has explicit document_relationships
+      rows), and _log_shadow_comparison() (prints ONLY document_id,
+      timestamp, legacy status, enterprise status, and difference
+      field-name TYPES — never a reason string, never a matched
+      quantity/amount, never a vendor name or any other extracted
+      field). build_comparison()'s existing shadow-mode branch (from
+      Phase 2) was refactored to call _shape_shadow_comparison() on the
+      legacy/V2 results it already computes for its own dispatch
+      purposes, instead of the previous ad-hoc one-line diff print —
+      this is a pure refactor with no added DB calls (STEP 6: "avoid
+      repeated expensive queries" — confirmed via git diff that this
+      only replaced the old print block, no new query was introduced
+      to the per-request dispatch path). _build_comparison() and
+      _build_comparison_v2() themselves are byte-for-byte unchanged
+      (confirmed via git diff — zero lines removed from either).
+    - routes/document_relationships.py: added GET /documents/<id>/
+      matching-comparison (STEP 4) — returns build_shadow_comparison()'s
+      full structured result, working regardless of the current
+      feature-flag state (so an auditor can inspect a comparison
+      without needing shadow mode enabled first). New _require_auditor_
+      only() access check — deliberately stricter than this file's
+      existing _require_node_access() (which allows Finance for a
+      document they own): the shadow-comparison debug endpoint excludes
+      Finance entirely, since it's an internal engine-validation tool,
+      not a document-review feature.
+    - tests/extraction/test_shadow_comparison.py (new, 21 checks): the
+      5 scenarios named by the task — (1) simple 1 PO/1 invoice/1 GR
+      case where legacy and V2 agree with zero recorded differences;
+      (2) the PO3006231-style 1 PO/2 invoices/2 GR case, verified live
+      against the real dev DB — legacy reports FAIL (it can only ever
+      compare an invoice's total against the PO's FULL amount, with no
+      concept of "this invoice covers half the PO"), V2 correctly
+      reports PASS, and a matching_status difference is recorded with a
+      reason naming the actual cause ("Enterprise engine detected
+      multiple related invoices") — a concrete demonstration of
+      exactly the gap V2 exists to close; (3) an invoice with zero
+      document_relationships rows resolves via the legacy fallback with
+      no error and enterprise_v2/differences empty; (4) a genuinely
+      multi-PO invoice is calculated correctly end-to-end through both
+      _build_comparison_v2() directly and the shadow comparison; (5)
+      every Claude/Gemini/AI-assistant call function is monkey-patched
+      to raise if invoked, then shadow mode is run through both build_
+      comparison() and build_shadow_comparison() — confirming neither
+      code path ever touches an AI helper. Plus a pure (no DB) test
+      that captures _log_shadow_comparison()'s actual stdout output and
+      asserts a real amount value from the input never appears in it.
+      Registered in tests/extraction/run_all.py.
+
+  Untouched, verified via `git diff --stat`: routes/matching.py,
+  routes/documents.py (OCR/upload pipeline), helpers/claude_extractor.py,
+  helpers/gemini_extractor.py, helpers/anomaly_detector.py, helpers/
+  authenticity_check.py, config.py (both feature flags already existed
+  from Phase 2, still default false, no changes needed), every frontend
+  file — zero lines changed in any of them.
+
+Why it was changed:
+  Phase 3 of the Enterprise V3 upgrade — before ENTERPRISE_MATCHING_V2_
+  ENABLED can ever be safely flipped on in production, there needs to
+  be a way to observe how the V2 engine's results would actually differ
+  from the live legacy engine's results, on real data, with zero risk
+  to what auditors currently see — shadow mode already existed
+  structurally from Phase 2, but only produced a single unstructured
+  debug print line with no way to inspect a specific comparison on
+  demand. This phase makes that comparison a first-class, structured,
+  safely-loggable object, and adds an on-demand debug endpoint so an
+  auditor doesn't have to grep server logs to validate the engine.
+
+Shadow flow diagram:
+  Request for invoice X (any of: Record Detail comparison, Exception
+  page, Report, AI Assistant, Workflow Timeline)
+    -> routes/*.py calls build_comparison(cursor, X)
+         -> both flags false (default): _build_comparison(X) -> return
+            legacy result. [V2 code path never runs.]
+         -> SHADOW_MODE=true: _build_comparison(X) -> legacy_result
+                               (if X has document_relationships rows)
+                               _build_comparison_v2(X) -> v2_result
+                               _shape_shadow_comparison(...) -> comparison
+                               _log_shadow_comparison(comparison) -> DEBUG log
+                               return legacy_result  [ALWAYS legacy — the
+                               response the browser receives is identical
+                               to shadow mode being off.]
+         -> V2_ENABLED=true (X has relationships): _build_comparison_v2(X)
+                               -> v2_result, with an exception-safe
+                               fallback to legacy_result if V2 raises.
+
+  On-demand inspection (independent of the flags):
+    Auditor calls GET /documents/<id>/matching-comparison
+      -> _require_auditor_only() (Finance always 403, even for an owned doc)
+      -> build_shadow_comparison(cursor, id) -> {legacy, enterprise_v2, differences}
+      -> JSON response (never touches build_comparison()'s dispatch/flags)
+
+Test results:
+  - `python tests/extraction/run_all.py` — all 22 suites pass (1 new:
+    test_shadow_comparison.py 21/21; zero regressions in any
+    pre-existing suite, including test_ai_assistant.py and test_
+    document_relationships.py which needed no further changes this
+    phase since Phase 2 already updated them for the build_comparison
+    rename).
+  - `npx ng build --configuration production` — succeeded (exit 0,
+    same pre-existing bundle-size budget warnings, zero frontend files
+    changed).
+  - Live verification against the real local Postgres dev DB (rows
+    created and cleaned up, DB left exactly as found): the PO3006231-
+    style scenario end-to-end through build_shadow_comparison(),
+    confirming the exact JSON shape and a genuinely meaningful
+    difference reason (see the example below).
+  - `git diff --stat` confirms the change is additive-only: 1 new file,
+    purely-additive edits to 3 existing files (new functions, a
+    refactor that replaces an old print block, and one new endpoint) —
+    zero changes to routes/matching.py, routes/documents.py, OCR, the
+    Claude/Gemini extraction/authenticity/anomaly modules, config.py's
+    existing flags, or any frontend file.
+
+Example comparison output (from the live PO3006231-style verification):
+  {
+    "document_id": 134,
+    "relationship_mode": true,
+    "legacy": {
+      "status": "FAIL",
+      "matching_summary": {
+        "vendor_match": true, "amount_match": false,
+        "po_reference_match": true, "line_items_match": null,
+        "po_present": true, "gr_present": true
+      }
+    },
+    "enterprise_v2": {
+      "status": "PASS",
+      "matching_summary": {
+        "matched_po_count": 1, "matched_gr_count": 1,
+        "allocated_quantity": 15000.0, "allocated_amount": 3855.0,
+        "related_invoice_count": 1
+      }
+    },
+    "differences": [
+      {
+        "field": "matching_status", "legacy_value": "FAIL", "v2_value": "PASS",
+        "reason": "Enterprise engine detected multiple related invoices"
+      },
+      {
+        "field": "related_invoices", "legacy_value": 0, "v2_value": 1,
+        "reason": "Enterprise engine detected multiple related invoices sharing a purchase order"
+      }
+    ]
+  }
+
+API usage confirmation:
+  Number of Claude calls added: 0. Number of Gemini calls added: 0.
+  Confirmed both by code inspection (no import of claude_extractor/
+  gemini_extractor/ai_assistant anywhere in this phase's new/changed
+  code) and by test (Scenario 5 monkey-patches every AI call function
+  to raise if invoked, then runs both build_comparison() and build_
+  shadow_comparison() through shadow mode — zero exceptions raised).
+
+Known limitations:
+  - _log_shadow_comparison() only fires from build_comparison()'s
+    dispatch path when SHADOW_MODE is actually enabled — with both
+    flags at their default false, the new logging code exists but
+    never executes on a live request, by design (shadow mode is opt-in
+    diagnostics, not always-on overhead).
+  - The debug endpoint (GET /documents/<id>/matching-comparison) always
+    computes both engines live on each call (no caching) — acceptable
+    at this app's current invoice volume (same reasoning already
+    documented for /auditor/report/summary's own per-request
+    recomputation), flagged for a real cache if volume grows.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND — no schema change, no new
+     environment variables (both feature flags already existed from
+     Phase 2 and keep their current values unless explicitly changed).
+  2. No Render FRONTEND redeploy needed — zero frontend files changed.
+  3. Recommended validation sequence before ever enabling V2: set
+     ENTERPRISE_MATCHING_V2_SHADOW_MODE=true, watch Render logs for
+     "DEBUG Matching Shadow Comparison" lines on invoices with
+     document_relationships rows, and/or have an auditor hit GET
+     /documents/<id>/matching-comparison directly for specific
+     invoices of interest — legacy stays user-facing throughout. Only
+     after that comparison looks correct, set ENTERPRISE_MATCHING_V2_
+     ENABLED=true (per Phase 2's own deployment instructions).
+
+Rollback instructions:
+  Set ENTERPRISE_MATCHING_V2_SHADOW_MODE=false (already the default)
+  and redeploy — the new logging/comparison code simply stops running
+  on the dispatch path; the debug endpoint remains available (it's
+  read-only and flag-independent) but can be ignored. No data was ever
+  written by this phase, so there is nothing to clean up.
+
+Both feature flags remain at their safe defaults after this phase:
+  ENTERPRISE_MATCHING_V2_ENABLED=false
+  ENTERPRISE_MATCHING_V2_SHADOW_MODE=false

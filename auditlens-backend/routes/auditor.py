@@ -899,6 +899,130 @@ def _build_comparison_v2(cursor, invoice_document_id):
     }
 
 
+def _shape_shadow_comparison(invoice_document_id, legacy_result, v2_result, has_relationships):
+    """Enterprise V3 Phase 3 (STEP 2) — pure formatting only, no DB
+    access: turns an already-computed legacy_result/v2_result pair into
+    the structured side-by-side comparison shape. Factored out of
+    build_shadow_comparison() below so build_comparison()'s shadow-mode
+    branch can reuse it on results it already computed for its own
+    purposes, instead of computing legacy/V2 a second time (STEP 6:
+    "avoid repeated expensive queries")."""
+    legacy_mr = legacy_result['match_result']
+    legacy_status = legacy_mr['overall_status']
+    legacy_summary = {
+        'vendor_match':       legacy_mr['vendor_match'],
+        'amount_match':       legacy_mr['amount_match'],
+        'po_reference_match': legacy_mr['po_reference_match'],
+        'line_items_match':   legacy_mr['line_items_match'],
+        'po_present':         legacy_result['po'] is not None,
+        'gr_present':         legacy_result['gr'] is not None,
+    }
+
+    enterprise_v2 = None
+    differences = []
+    if v2_result is not None:
+        inv_result = v2_result['invoice_result']
+        v2_status = inv_result['status']
+        v2_summary = {
+            'matched_po_count':   inv_result['matched_po_count'],
+            'matched_gr_count':   inv_result['matched_gr_count'],
+            'allocated_quantity': inv_result['allocated_quantity'],
+            'allocated_amount':   inv_result['allocated_amount'],
+            'related_invoice_count': len(v2_result['related_invoices']),
+        }
+        enterprise_v2 = {'status': v2_status, 'matching_summary': v2_summary}
+
+        legacy_po_count = 1 if legacy_summary['po_present'] else 0
+        if (legacy_status == 'PASS') != (v2_status == 'PASS') or legacy_status != v2_status:
+            if v2_summary['related_invoice_count'] > 0:
+                reason = 'Enterprise engine detected multiple related invoices'
+            elif v2_summary['matched_po_count'] > legacy_po_count:
+                reason = 'Enterprise engine detected multiple related purchase orders'
+            elif legacy_status != 'PASS' and v2_status == 'PASS':
+                reason = 'Enterprise engine found cumulative allocation evidence the legacy one-to-one engine could not see'
+            else:
+                reason = 'Legacy and Enterprise engines disagree on overall matching status'
+            differences.append({
+                'field':        'matching_status',
+                'legacy_value': legacy_status,
+                'v2_value':     v2_status,
+                'reason':       reason,
+            })
+
+        if v2_summary['matched_po_count'] > legacy_po_count:
+            differences.append({
+                'field':        'matched_po_count',
+                'legacy_value': legacy_po_count,
+                'v2_value':     v2_summary['matched_po_count'],
+                'reason':       'Enterprise engine detected additional related purchase orders',
+            })
+
+        if v2_summary['related_invoice_count'] > 0:
+            differences.append({
+                'field':        'related_invoices',
+                'legacy_value': 0,
+                'v2_value':     v2_summary['related_invoice_count'],
+                'reason':       'Enterprise engine detected multiple related invoices sharing a purchase order',
+            })
+
+    return {
+        'document_id':       invoice_document_id,
+        'relationship_mode': has_relationships,
+        'legacy':        {'status': legacy_status, 'matching_summary': legacy_summary},
+        'enterprise_v2': enterprise_v2,
+        'differences':   differences,
+    }
+
+
+def build_shadow_comparison(cursor, invoice_document_id):
+    """Enterprise V3 Phase 3 (STEP 2) — a structured, side-by-side
+    legacy-vs-V2 comparison for ONE invoice, computed independently of
+    build_comparison()'s own dispatch flow. Used by the read-only debug
+    endpoint (routes/document_relationships.py::get_matching_
+    comparison) so an auditor can inspect a comparison on demand
+    regardless of the current feature-flag state. Purely observational:
+    computes both results, never writes anything, never calls
+    _classify_exception, never touches any workflow/status table, never
+    calls Claude/Gemini. Returns None if the invoice doesn't exist.
+
+    V2 is only computed when this invoice has explicit document_
+    relationships rows — otherwise V2 would just re-derive the
+    identical legacy-shaped result via Phase 1's fallback helpers,
+    which is not an interesting comparison; enterprise_v2 is None and
+    differences is empty in that case.
+    """
+    legacy_result = _build_comparison(cursor, invoice_document_id)
+    if legacy_result is None:
+        return None
+
+    has_relationships = bool(get_related_documents('invoice', invoice_document_id))
+    v2_result = None
+    if has_relationships:
+        try:
+            v2_result = _build_comparison_v2(cursor, invoice_document_id)
+        except Exception as e:
+            print(f"WARNING shadow comparison V2 computation failed for doc={invoice_document_id}: {type(e).__name__}: {e}")
+
+    return _shape_shadow_comparison(invoice_document_id, legacy_result, v2_result, has_relationships)
+
+
+def _log_shadow_comparison(comparison):
+    """Enterprise V3 Phase 3 (STEP 3) — logs ONLY document_id, timestamp,
+    legacy status, V2 status, and difference TYPES (field names, never
+    the reason text or actual values, which is already non-sensitive
+    but kept out of logs anyway as the stricter reading of "do not log
+    ... full extracted fields"). No invoice content, no vendor name, no
+    amounts, ever."""
+    if comparison is None or comparison['enterprise_v2'] is None:
+        return
+    diff_types = [d['field'] for d in comparison['differences']]
+    print(f"DEBUG Matching Shadow Comparison: document={comparison['document_id']} "
+          f"timestamp={datetime.utcnow().isoformat()} "
+          f"legacy={comparison['legacy']['status']} "
+          f"enterprise={comparison['enterprise_v2']['status']} "
+          f"differences={diff_types if diff_types else 'none'}")
+
+
 def build_comparison(cursor, invoice_document_id):
     """Single shared entry point every matching-result consumer in this
     app should call instead of _build_comparison() directly — this IS
@@ -911,9 +1035,10 @@ def build_comparison(cursor, invoice_document_id):
       - ENTERPRISE_MATCHING_V2_SHADOW_MODE on: legacy result is what's
         returned (user-facing behavior never changes); V2 is ALSO
         computed (only when this invoice has explicit document_
-        relationships rows) purely to log a concise diff for
-        comparison — no AI calls, no duplicate exceptions, no logging
-        of full document content.
+        relationships rows) purely to log a structured, safe comparison
+        (see _shape_shadow_comparison/_log_shadow_comparison below) —
+        no AI calls, no duplicate exceptions, no logging of full
+        document content.
       - ENTERPRISE_MATCHING_V2_ENABLED on: V2 is used when this invoice
         has explicit relationships; any exception during V2 computation
         is caught and logged, falling back to legacy rather than ever
@@ -937,13 +1062,9 @@ def build_comparison(cursor, invoice_document_id):
     except Exception as e:
         print(f"WARNING V2 matching failed for doc={invoice_document_id}, falling back to legacy: {type(e).__name__}: {e}")
 
-    if shadow_on and legacy_result and v2_result:
-        print(f"DEBUG shadow-mode diff doc={invoice_document_id}: "
-              f"legacy_overall={legacy_result['match_result']['overall_status']} "
-              f"v2_overall={v2_result['match_result']['overall_status']} "
-              f"v2_invoice_status={v2_result['invoice_result']['status']} "
-              f"v2_po_count={len(v2_result['related_purchase_orders'])} "
-              f"v2_gr_count={len(v2_result['related_goods_receipts'])}")
+    if shadow_on and legacy_result is not None:
+        comparison = _shape_shadow_comparison(invoice_document_id, legacy_result, v2_result, has_relationships)
+        _log_shadow_comparison(comparison)
 
     if v2_on and v2_result is not None:
         return v2_result

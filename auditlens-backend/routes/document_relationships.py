@@ -17,7 +17,7 @@ from helpers.document_relationships import (
     get_related_documents, get_related_invoices, get_related_purchase_orders,
     get_related_goods_receipts,
 )
-from routes.auditor import build_comparison
+from routes.auditor import build_comparison, build_shadow_comparison
 
 document_relationships_bp = Blueprint('document_relationships', __name__)
 
@@ -55,6 +55,46 @@ def _require_node_access(doc_type, doc_id):
             return None, (jsonify({'error': 'Access denied'}), 403)
 
     return user, None
+
+
+def _require_auditor_only():
+    """Stricter than _require_node_access() above — Enterprise V3 Phase
+    3's shadow-comparison debug endpoint deliberately excludes Finance
+    (even for a document they own), since it's an internal engine-
+    validation tool, not a document-review feature. Returns (user, None)
+    on success, or (None, (response, status))."""
+    user_id = get_jwt_identity()
+    user = get_user_by_id(user_id)
+    if user['role'] != 'auditor':
+        return None, (jsonify({'error': 'Access denied. Auditor only.'}), 403)
+    return user, None
+
+
+@document_relationships_bp.route('/<int:document_id>/matching-comparison', methods=['GET'])
+@jwt_required()
+def get_matching_comparison(document_id):
+    """Enterprise V3 Phase 3 (STEP 4) — read-only debug endpoint: legacy
+    vs Enterprise V2 matching results side by side, plus the differences
+    between them. Auditor only (see _require_auditor_only — Finance is
+    excluded even for a document they own). Works regardless of the
+    current feature-flag state, since it calls build_shadow_comparison()
+    directly rather than going through build_comparison()'s dispatch —
+    an auditor can inspect a comparison without needing shadow mode
+    enabled first. Never writes anything, never calls Claude/Gemini."""
+    _, err = _require_auditor_only()
+    if err:
+        return err
+
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        comparison = build_shadow_comparison(cursor, document_id)
+    finally:
+        conn.close()
+
+    if comparison is None:
+        return jsonify({'error': 'Invoice document not found'}), 404
+    return jsonify(comparison), 200
 
 
 @document_relationships_bp.route('/<int:document_id>/relationships', methods=['GET'])
