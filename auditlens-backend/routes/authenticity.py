@@ -318,6 +318,75 @@ def _document_consistency_for(cursor, document_id):
 
 
 # ------------------------------------------------------------
+# AUTO-TRIGGER: called from routes/documents.py right after a successful
+# invoice extraction, so the Authenticity page has a result the first
+# time an auditor looks — instead of only after someone has separately
+# opened Record Detail for that specific document (the old on-demand-
+# only behavior). PO/GR uploads and manual Re-check are UNCHANGED — this
+# only adds a new call site for the invoice-upload moment; nothing about
+# how/when PO/GR checks or _ensure_sibling_checks() run is touched.
+#
+# Reuses the EXACT SAME existing pieces GET /authenticity/<id> already
+# uses on-demand: the same run_authenticity_check() engine (Claude
+# primary -> Gemini fallback -> OCR-text-only, unchanged), the same
+# authenticity_result_cache (via run_authenticity_check's own
+# use_cache=True default — nothing extra needed here), and the same
+# document_consistency/extracted_vendor_name helpers. No new AI
+# provider, no new engine, no new cache.
+# ------------------------------------------------------------
+def generate_invoice_authenticity_if_missing(document_id, file_bytes, file_name):
+    """Idempotent: if authenticity_checks already has a row for
+    (document_id, document_type='invoice') — the exact same
+    UNIQUE(document_id, document_type) constraint the table already
+    enforces — this is a no-op and NO AI call is made. Otherwise runs
+    the existing engine once and lets it persist its own row exactly as
+    it always has (this function does not insert into authenticity_checks
+    itself).
+
+    Never raises: any failure (DB error, engine error) is logged and
+    swallowed so a problem here can never break the upload response —
+    the caller in routes/documents.py wraps this in its own try/except
+    too, matching the existing run_anomaly_detection(document_id) call
+    immediately above it in that file.
+
+    Returns the new check_id, or None if skipped/failed (nothing reads
+    this return value today; kept for parity with run_authenticity_check
+    and for tests).
+    """
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        cursor.execute(
+            'SELECT 1 FROM authenticity_checks WHERE document_id = %s AND document_type = %s',
+            (document_id, 'invoice')
+        )
+        if cursor.fetchone():
+            conn.close()
+            print(f"DEBUG Authenticity auto-trigger: document_id={document_id} already has an "
+                  f"invoice authenticity check — skipped (no AI call)")
+            return None
+
+        document_consistency  = _document_consistency_for(cursor, document_id)
+        extracted_vendor_name = _extracted_vendor_name_for(cursor, document_id, 'invoice')
+        conn.close()
+
+        check_id = run_authenticity_check(document_id, file_bytes, file_name, 'invoice',
+                                            document_consistency=document_consistency,
+                                            extracted_vendor_name=extracted_vendor_name)
+        if check_id is None:
+            print(f"DEBUG Authenticity auto-trigger: run_authenticity_check returned None "
+                  f"for document_id={document_id} — engine failure, see prior logs; upload is unaffected")
+        else:
+            print(f"DEBUG Authenticity auto-trigger: check_id={check_id} created for document_id={document_id}")
+        return check_id
+
+    except Exception as e:
+        print(f"DEBUG Authenticity auto-trigger error for document_id={document_id}: {type(e).__name__}: {e}")
+        return None
+
+
+# ------------------------------------------------------------
 # GET SINGLE AUTHENTICITY CHECK
 # GET /authenticity/<document_id>?document_type=invoice|po|gr (default invoice)
 # Auditor only

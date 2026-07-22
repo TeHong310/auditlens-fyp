@@ -23,6 +23,7 @@ from helpers.claude_cache import get_cached_claude_result, save_claude_result_to
 from helpers.ai_extractor_router import route_ai_extraction
 from helpers.confidence_engine import compute_field_confidence, compute_line_items_confidence, log_field_confidence
 from helpers.extraction_validator import validate_extraction
+from routes.authenticity import generate_invoice_authenticity_if_missing
 from config import Config
 
 documents_bp = Blueprint('documents', __name__)
@@ -430,10 +431,21 @@ def upload_document():
         except Exception as e:
             print(f"DEBUG anomaly detection error: {type(e).__name__}: {e}")
 
-        # Authentication check no longer runs automatically here — it's
-        # on-demand only (GET /authenticity/<id> on first view, or
-        # POST /authenticity/<id>/recheck), so upload cost/latency is
-        # unaffected by the new Claude-powered authenticity engine.
+        # Auto-trigger the EXISTING authenticity engine right after a
+        # successful invoice extraction, so the Authenticity page has a
+        # result the first time an auditor looks — rather than only
+        # after someone separately opens Record Detail for this exact
+        # document (the old on-demand-only path, still unchanged for
+        # PO/GR and for manual Re-check). Idempotent (skips if a row
+        # already exists) and never raises — see
+        # generate_invoice_authenticity_if_missing's docstring in
+        # routes/authenticity.py. Wrapped the same defensive way as
+        # run_anomaly_detection() directly above: any failure here must
+        # never break the upload response.
+        try:
+            generate_invoice_authenticity_if_missing(document_id, file_bytes_data, safe_name)
+        except Exception as e:
+            print(f"DEBUG authenticity auto-trigger error: {type(e).__name__}: {e}")
         _debug_log_memory('6_after_upload_flow')  # TEMP-DEBUG-MEM
 
         log_audit(user['user_id'], 'UPLOAD_DOCUMENT', 'documents', document_id,

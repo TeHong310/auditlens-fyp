@@ -6420,3 +6420,108 @@ Setup/config needed:
      correct reason/instruction, submit a Finance response and
      resubmit, and confirm the auditor sees the Finance Response panel
      and History timeline correctly on the next review.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-22
+What was changed:
+  Backend only (auditlens-backend/) — no frontend changes:
+    - routes/authenticity.py: added generate_invoice_authenticity_if_
+      missing(document_id, file_bytes, file_name) — a new function, NOT
+      a new engine. It reuses the exact same pieces GET /authenticity/
+      <id> already calls on-demand: SELECT 1 FROM authenticity_checks
+      WHERE document_id=%s AND document_type='invoice' (the same
+      UNIQUE(document_id, document_type) constraint the table already
+      enforces) to decide skip-vs-run, then the EXISTING
+      _document_consistency_for()/_extracted_vendor_name_for() helpers
+      and the EXISTING helpers/authenticity_check.py::
+      run_authenticity_check() (unchanged: Claude primary -> Gemini
+      fallback -> OCR-text-only, unchanged AI provider selection,
+      unchanged scoring). run_authenticity_check()'s own use_cache=True
+      default means the existing authenticity_result_cache (file_hash +
+      document_type + prompt version) is inherited automatically — no
+      new cache was built. Never raises: every failure (DB error,
+      engine error, missing dependency) is caught, logged via
+      `print(...)`, and returns None.
+    - routes/documents.py: added ONE new call site, immediately after
+      the existing `run_anomaly_detection(document_id)` call in the
+      invoice upload handler (upload_document()) — wrapped in the same
+      try/except pattern already used for anomaly detection, so an
+      authenticity failure can never break the upload response, exactly
+      like an anomaly-detection failure already couldn't. Passes the
+      SAME file_bytes_data/safe_name already in scope from the upload
+      itself (no extra DB read). PO/GR upload handlers (upload_po/
+      upload_gr) and the manual Re-check endpoint are UNTOUCHED — this
+      only adds the invoice-at-upload trigger the bug report and task
+      scope asked for.
+    - tests/extraction/test_authenticity_auto_trigger.py (new, 6 cases,
+      15 checks): missing row -> engine called exactly once with the
+      right args; existing row -> engine is NEVER called (zero AI
+      calls, proving the skip-regeneration guarantee); standalone
+      invoice with document_consistency=None (no PO/GR) still triggers
+      correctly; engine returning None doesn't raise; engine raising an
+      exception is caught; the existence-check DB query itself failing
+      is caught. Added to tests/extraction/run_all.py's suite list.
+  Untouched, confirmed via `git diff --stat`: helpers/claude_extractor.
+  py, helpers/gemini_extractor.py, helpers/ocr_helper.py, helpers/
+  extraction_engine.py, helpers/extraction_validator.py, helpers/
+  entity_normalizer.py, helpers/anomaly_detector.py, helpers/
+  authenticity_check.py (the engine itself — its internal AI-provider
+  selection, fallback order, and scoring rules are all unchanged),
+  helpers/auth_rules.py, routes/matching.py, routes/auditor.py, and
+  requirements.txt. No new AI provider, no new authenticity engine, no
+  new cache.
+
+Why:
+  documents 68-74 (7 standalone invoices, no PO/GR) had successful
+  extraction but zero authenticity_checks rows, because the engine only
+  ran the first time an auditor happened to open that specific
+  document's Record Detail page — a queue of freshly-uploaded, not-yet-
+  opened invoices had no trigger event at all, so the Authenticity page
+  looked artificially empty for them. This closes that gap by adding
+  the missing trigger at the one point in the pipeline where it's
+  actually known extraction just succeeded — without touching the
+  engine, its cache, or its provider fallback order in any way.
+
+Cache / repeated-call protection (API cost):
+  1. Idempotency check first: `SELECT 1 FROM authenticity_checks WHERE
+     document_id=%s AND document_type='invoice'` — if a row already
+     exists, the function returns immediately with ZERO further queries
+     and ZERO calls to run_authenticity_check(). This is enforced twice
+     over: by this explicit check, AND independently by the table's own
+     UNIQUE(document_id, document_type) constraint, so even a
+     hypothetical race can't produce a duplicate row.
+  2. The existing authenticity_result_cache (helpers/authenticity_
+     cache.py, keyed by file_hash + document_type + prompt version) is
+     inherited for free via run_authenticity_check()'s own
+     use_cache=True default — nothing new was added to reuse it.
+  3. Only ONE new call site exists (invoice upload), so a single upload
+     can trigger at most one authenticity attempt for that document;
+     nothing loops, retries, or polls. The frontend was not touched —
+     no page-refresh or repeated-view call was added anywhere.
+
+Tests run and results:
+  - `python tests/extraction/run_all.py`: 13/13 suites PASS, including
+    all 3 that failed in the prior investigation session
+    (test_authenticity_ai.py, test_authenticity_siblings.py,
+    test_authenticity_scoring.py) — that failure was a missing local-
+    venv dependency (PyMuPDF/`fitz`), not a code issue; installing the
+    already-declared requirements.txt packages (psutil, PyMuPDF,
+    google-genai, anthropic, etc. — all pre-existing entries, nothing
+    added to requirements.txt) fixed the environment and confirmed
+    everything, including the new suite, passes cleanly.
+  - `npx ng build --configuration production`: clean build (same pre-
+    existing bundle-size budget warnings as before, unrelated — no
+    frontend files were changed by this task).
+  - Zero Claude API calls, zero Gemini API calls made during testing —
+    every test mocks get_db_connection/_document_consistency_for/
+    _extracted_vendor_name_for/run_authenticity_check; no real network
+    call is reachable from any test path.
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND only — no schema change, no new
+     migration, no new environment variables, no frontend changes.
+  2. After deploy: upload a new standalone invoice and confirm an
+     authenticity_checks row (document_type='invoice') appears
+     immediately, without opening Record Detail first, and that the
+     Authenticity Lens page shows it right away.
