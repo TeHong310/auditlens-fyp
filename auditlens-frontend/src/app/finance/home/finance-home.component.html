@@ -144,10 +144,10 @@
         <thead>
           <tr>
             <th>Document</th>
-            <th>Upload Date</th>
-            <th>Type</th>
-            <th>OCR Status</th>
-            <th>Match</th>
+            <th>Vendor</th>
+            <th>Status</th>
+            <th>Audit Status</th>
+            <th>Required Action</th>
             <th>Action</th>
           </tr>
         </thead>
@@ -159,23 +159,21 @@
             <td colspan="6" class="empty-row">No documents uploaded yet</td>
           </tr>
           <tr *ngFor="let doc of documents">
-            <td class="doc-name">{{ doc.file_name }}</td>
-            <td>{{ formatDate(doc.uploaded_at) }}</td>
-            <td><span class="type-badge">{{ doc.file_type?.toUpperCase() }}</span></td>
+            <td class="doc-name">{{ doc.invoice_number || doc.file_name }}</td>
+            <td>{{ doc.vendor_name || 'Unknown vendor' }}</td>
             <td>
               <span class="badge" [ngClass]="getStatusClass(doc.status)">
                 {{ getStatusLabel(doc.status) }}
               </span>
             </td>
             <td>
-              <span class="badge badge-matched"  *ngIf="doc.status === 'approved'">Matched</span>
-              <span class="badge badge-review"   *ngIf="doc.status === 'under_review'">Pending Match</span>
-              <span class="badge badge-returned" *ngIf="doc.status === 'returned'">Returned</span>
-              <span class="badge badge-pending"  *ngIf="doc.status === 'ocr_done'">Not Submitted</span>
-              <span class="badge badge-pending"  *ngIf="doc.status === 'ocr_processing'">-</span>
+              <span class="badge" [ngClass]="auditStatusClass(doc)">
+                {{ auditStatusLabel(doc) }}
+              </span>
             </td>
+            <td>{{ requiredActionLabel(doc) }}</td>
             <td>
-              <button class="btn-open" (click)="viewDocument(doc)">Open</button>
+              <button class="btn-open" (click)="onAction(doc)">{{ actionLabel(doc) }}</button>
             </td>
           </tr>
         </tbody>

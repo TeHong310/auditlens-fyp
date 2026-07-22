@@ -2,10 +2,27 @@ import { Component, OnInit, AfterViewInit, ElementRef, ViewChild, ChangeDetector
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { forkJoin, of } from 'rxjs';
+import { catchError } from 'rxjs/operators';
 import { Chart, registerables } from 'chart.js';
 import { environment } from '../../../environments/environment';
 
 Chart.register(...registerables);
+
+// Same required-action label lookup used in finance/corrections and
+// finance/correction-detail — mirrors helpers/send_back.py's
+// REQUIRED_ACTIONS exactly, kept as its own copy per this codebase's
+// established per-component convention (no shared constants file).
+const REQUIRED_ACTION_LABELS: Record<string, string> = {
+  upload_missing_document: 'Upload missing document',
+  correct_extracted_information: 'Correct extracted information',
+  provide_written_explanation: 'Provide written explanation',
+  confirm_duplicate_submission: 'Confirm duplicate submission',
+  replace_incorrect_document: 'Replace incorrect document',
+  verify_amount_or_quantity: 'Verify amount or quantity',
+  confirm_supplier_information: 'Confirm supplier information',
+  other: 'Other',
+};
 
 @Component({
   selector: 'app-finance-home',
@@ -29,6 +46,13 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
   avgConfidence: number = 0;
   isLoading: boolean = false;
   chartReady: boolean = false;
+
+  // ── Recent Uploads: required-action text for 'returned' rows,
+  // sourced from the SAME send_back_cycles data Correction Center
+  // already reads via GET /reviews/send-back-cycles/<id> — keyed by
+  // document_id, populated only for the (at most 5) returned documents
+  // actually shown in the Recent Uploads table. ──
+  latestCycleByDocId: { [documentId: number]: any } = {};
 
   private barChartInstance: any = null;
   private donutChartInstance: any = null;
@@ -106,8 +130,37 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
         this.chartReady = true;
         this.cdr.detectChanges();
         setTimeout(() => this.renderAllCharts(), 200);
+
+        this.loadCyclesForReturnedRows();
       },
       error: () => { this.isLoading = false; }
+    });
+  }
+
+  // Reuses GET /reviews/send-back-cycles/<id> (already used identically
+  // by finance/corrections and finance-ocr-review) for only the
+  // returned documents actually visible in the Recent Uploads table —
+  // never more than 5 requests, since `documents` is already sliced to
+  // the last 5. No new backend endpoint.
+  private loadCyclesForReturnedRows() {
+    const returnedIds = this.documents
+      .filter(d => d.status === 'returned')
+      .map(d => d.document_id);
+    if (!returnedIds.length) return;
+
+    const requests: { [documentId: number]: any } = {};
+    for (const id of returnedIds) {
+      requests[id] = this.http.get<any>(`${this.apiUrl}/reviews/send-back-cycles/${id}`, {
+        headers: this.getHeaders()
+      }).pipe(catchError(() => of(null)));
+    }
+
+    forkJoin(requests).subscribe((results: any) => {
+      for (const id of returnedIds) {
+        const cycles = results[id]?.cycles || [];
+        this.latestCycleByDocId[id] = cycles.length ? cycles[cycles.length - 1] : null;
+      }
+      this.cdr.detectChanges();
     });
   }
 
@@ -320,6 +373,84 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
       case 'resubmitted': return 'Resubmitted';
       case 'ocr_processing': return 'Processing...';
       default: return status;
+    }
+  }
+
+  // ── Recent Uploads: Audit Status column — a higher-level, audit-
+  // workflow-facing read of the same raw `status` above (e.g. "Returned"
+  // becomes "Correction Required"), not a new status value: nothing in
+  // the backend changes, this is purely a display label. ──
+
+  auditStatusLabel(doc: any): string {
+    switch (doc.status) {
+      case 'returned': return 'Correction Required';
+      case 'under_review': return 'Pending Auditor Review';
+      case 'resubmitted': return 'Pending Auditor Review';
+      case 'approved': return 'Approved';
+      case 'ocr_done': return 'Not Submitted';
+      case 'ocr_processing': return 'Processing';
+      default: return this.getStatusLabel(doc.status);
+    }
+  }
+
+  auditStatusClass(doc: any): string {
+    switch (doc.status) {
+      case 'returned': return 'badge-returned';
+      case 'under_review': return 'badge-review';
+      case 'resubmitted': return 'badge-review';
+      case 'approved': return 'badge-matched';
+      default: return 'badge-pending';
+    }
+  }
+
+  // ── Recent Uploads: Required Action column — only populated for
+  // 'returned' rows, from the SAME send_back_cycles data Correction
+  // Center already shows (see loadCyclesForReturnedRows() above). Every
+  // other status has nothing outstanding to require, so it's shown as
+  // a plain dash rather than an invented action. ──
+
+  requiredActionLabel(doc: any): string {
+    if (doc.status !== 'returned') return '-';
+    const cycle = this.latestCycleByDocId[doc.document_id];
+    const actions = cycle?.required_actions || [];
+    if (!actions.length) return 'Awaiting Finance correction';
+    return actions.map((a: string) => REQUIRED_ACTION_LABELS[a] || a).join(', ');
+  }
+
+  // ── Recent Uploads: dynamic Action button — label + click handler
+  // per status, per the task's routing rules. Reuses existing routes/
+  // endpoints only: Correction Center (already built), the existing
+  // OCR Review page, and the existing file-viewing blob fetch
+  // (viewDocument() above) — no new backend API of any kind. ──
+
+  actionLabel(doc: any): string {
+    switch (doc.status) {
+      case 'returned': return 'Fix Issue';
+      case 'under_review': return 'View';
+      case 'resubmitted': return 'View';
+      case 'approved': return 'View';
+      default: return 'Review'; // ocr_done / ocr_processing / any other in-flight state
+    }
+  }
+
+  onAction(doc: any) {
+    switch (doc.status) {
+      case 'returned':
+        this.router.navigate(['/finance/corrections/detail'], { queryParams: { document_id: doc.document_id } });
+        return;
+      case 'under_review':
+      case 'resubmitted':
+        this.router.navigate(['/finance/ocr-review']);
+        return;
+      case 'approved':
+        this.viewDocument(doc);
+        return;
+      default:
+        // ocr_done / ocr_processing / any other in-flight state — the
+        // OCR Review page is exactly where these still-actionable
+        // documents already live and can be edited/submitted.
+        this.router.navigate(['/finance/ocr-review']);
+        return;
     }
   }
 

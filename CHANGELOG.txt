@@ -7498,3 +7498,102 @@ Setup/config needed:
   1. Redeploy the Render FRONTEND.
   2. No backend redeploy needed (no backend changes).
   3. No config changes needed.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-22 (later same day)
+
+What was changed:
+  Frontend (auditlens-frontend/) — 1 new file, 3 modified files, ZERO
+  backend changes:
+    - finance/home/finance-home.component.ts: Recent Uploads' single
+      generic "Open" button (which fetched the raw invoice file for
+      every status, including 'returned' — routing Finance into a
+      normal file preview instead of the new Correction Center) is
+      replaced with a per-status action:
+        - 'returned'                -> "Fix Issue" -> navigates to
+          /finance/corrections/detail?document_id=<id> (the Correction
+          Center detail page added in the prior task).
+        - 'under_review'/'resubmitted' -> "View" -> navigates to the
+          existing /finance/ocr-review page.
+        - 'approved'                -> "View" -> opens the document
+          file directly (the ORIGINAL "Open" behavior, just relabeled
+          — approved has no further workflow page to route to).
+        - anything else (ocr_done, ocr_processing, ...) -> "Review" ->
+          navigates to /finance/ocr-review, where those still-in-flight
+          documents are already editable/submittable today.
+      New auditStatusLabel()/auditStatusClass() give the table's new
+      Audit Status column a higher-level, audit-facing read of the same
+      `status` value (e.g. 'returned' -> "Correction Required",
+      'under_review'/'resubmitted' -> "Pending Auditor Review",
+      'approved' -> "Approved") — a display label only, no new status
+      value anywhere. New requiredActionLabel() populates the Required
+      Action column ONLY for 'returned' rows, reusing the SAME
+      send_back_cycles data Correction Center already reads (GET
+      /reviews/send-back-cycles/<id>, mapped through the same
+      REQUIRED_ACTIONS label lookup already used in finance/corrections
+      and finance/correction-detail) — every other status shows a plain
+      "-" rather than an invented action. New private
+      loadCyclesForReturnedRows(), called once after the existing
+      Recent Uploads slice(0, 5), fetches cycles ONLY for the returned
+      documents actually shown (at most 5 requests, via the same
+      forkJoin-over-N-calls pattern finance/corrections.component.ts
+      already uses) — no new backend endpoint.
+    - finance/home/finance-home.component.html: Recent Uploads table
+      header changed from Document/Upload Date/Type/OCR Status/Match/
+      Action to Document/Vendor/Status/Audit Status/Required Action/
+      Action; the Document cell now shows invoice_number (falling back
+      to file_name), matching the convention already used in finance/
+      corrections' own list; the Action button now calls
+      actionLabel(doc)/onAction(doc) instead of always rendering "Open"
+      + viewDocument(doc).
+    - finance/home/finance-home.component.css: removed .type-badge —
+      orphaned by this change since the Type column (which was the only
+      thing using it) was replaced by Vendor/Audit Status/Required
+      Action. Every other class the new columns use (.badge-returned/
+      .badge-review/.badge-matched/.badge-pending) already existed.
+    - finance/home/finance-home.component.spec.ts (new): 12 tests
+      covering exactly the 3 scenarios the task named — returned shows
+      "Fix Issue" and navigates to Correction Center detail with the
+      right document_id; under_review shows "View" and navigates to
+      OCR Review; approved shows "View" and does NOT navigate anywhere
+      (opens the file directly) — plus Audit Status/Required Action
+      label correctness for each status, the ocr_processing/ocr_done
+      fallback to "Review" -> OCR Review, and loadCyclesForReturnedRows
+      only ever requesting cycles for the returned rows actually shown
+      (never for approved/under_review rows, never when nothing is
+      returned).
+
+Why:
+  Recent Uploads' one-size-fits-all "Open" button sent Finance into a
+  raw file preview for a returned invoice instead of the Correction
+  Center workspace built specifically to resolve it — the exact
+  friction the Correction Center task was meant to remove, just not
+  yet reflected on the Home dashboard's own upload table. The action
+  button, and the new Audit Status/Required Action columns, now route
+  and summarize per status using only data/endpoints that already
+  exist.
+
+Testing:
+  - `npx ng build --configuration production` — succeeded (exit 0;
+    same pre-existing budget warnings as prior tasks).
+  - `npx ng test --watch=false` — 83/84 pass (up from 71; +12 new
+    tests, all passing, zero new warnings). The 1 failure is the same
+    pre-existing, unrelated app.spec.ts issue seen throughout this
+    project's history.
+  - Tested exactly what the task asked: returned invoice -> "Fix
+    Issue" navigates to Correction Center detail with the correct
+    document_id; under_review invoice -> "View" navigates to OCR
+    Review; approved invoice -> "View" opens the file directly without
+    any page navigation.
+  - `git diff --stat` confirms ZERO backend files changed and no new
+    API endpoints — every request made (GET /documents/, GET /reviews/
+    send-back-cycles/<id>, GET /documents/<id>/file) already existed
+    before this task. Extraction, the AI pipeline, matching,
+    authenticity, and anomaly detection were never touched, imported,
+    or referenced by any new code.
+
+Setup/config needed:
+  1. Redeploy the Render FRONTEND.
+  2. No backend redeploy needed (no backend changes).
+  3. No config changes needed.

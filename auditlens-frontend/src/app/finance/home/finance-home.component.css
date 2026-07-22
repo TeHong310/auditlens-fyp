@@ -295,15 +295,6 @@
   white-space: nowrap;
 }
 
-.type-badge {
-  background: var(--bg-hover);
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 4px;
-}
-
 .loading-row, .empty-row {
   text-align: center;
   padding: 20px;
