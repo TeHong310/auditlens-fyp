@@ -865,16 +865,32 @@ def get_report_summary():
         )
         doc_rows = cursor.fetchall()
         exception_count = 0
+        # Audit Quality Overview (Report page) — three-way match PASS/
+        # REVIEW counts, read from the SAME comparison already computed
+        # per document for exception_count below (no extra query, no
+        # change to _build_comparison/_classify_exception themselves —
+        # just reading the overall_status they already return).
+        match_pass_count = 0
+        match_review_count = 0
         for doc_row in doc_rows:
             comparison = _build_comparison(cursor, doc_row['document_id'])
-            if comparison and _classify_exception(cursor, doc_row, comparison):
+            if not comparison:
+                continue
+            overall_status = comparison['match_result']['overall_status']
+            if overall_status == 'PASS':
+                match_pass_count += 1
+            elif overall_status == 'REVIEW':
+                match_review_count += 1
+            if _classify_exception(cursor, doc_row, comparison):
                 exception_count += 1
 
         stats = {
-            'approved':   action_counts.get('approved', 0),
-            'sent_back':  action_counts.get('returned', 0),
-            'pending':    pending,
-            'exceptions': exception_count,
+            'approved':      action_counts.get('approved', 0),
+            'sent_back':     action_counts.get('returned', 0),
+            'pending':       pending,
+            'exceptions':    exception_count,
+            'match_pass':    match_pass_count,
+            'match_review':  match_review_count,
         }
 
         # ── Timeline: always the last 30 days, regardless of `period` ──
@@ -987,7 +1003,7 @@ def get_audit_trail():
 
         cursor.execute(
             f'''SELECT rr.reviewed_at, u.full_name AS auditor_name, u.email AS auditor_email,
-                       rr.action, ef.invoice_number, rr.document_id, rr.remarks
+                       rr.action, ef.invoice_number, ef.vendor_name, rr.document_id, rr.remarks
                 {base}
                 ORDER BY rr.reviewed_at DESC
                 LIMIT %s OFFSET %s''',
@@ -1002,6 +1018,7 @@ def get_audit_trail():
             'auditor_email':       row['auditor_email'],
             'action':              ACTION_DB_TO_API.get(row['action'], row['action']),
             'invoice_no':          row['invoice_number'],
+            'vendor_name':         row['vendor_name'],
             'invoice_document_id': row['document_id'],
             'remarks':             row['remarks'],
         } for row in rows]

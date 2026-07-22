@@ -6525,3 +6525,114 @@ Setup/config needed:
      authenticity_checks row (document_type='invoice') appears
      immediately, without opening Record Detail first, and that the
      Authenticity Lens page shows it right away.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-22
+What was changed:
+  Frontend (auditlens-frontend/src/app/auditor/report/): UI/aggregation
+  only — no extraction, Claude/Gemini, OCR, three-way matching,
+  authenticity engine, anomaly detection, or send-back workflow logic
+  touched.
+    - auditor-report.component.html/.ts:
+        1. Stat card wording: "Approved" -> "Approved Documents",
+           "Pending" -> "Pending Review", "Exceptions" -> "Open
+           Exceptions" ("Sent Back" left as-is, not requested). Added a
+           small supporting-text line under every card (e.g. "Require
+           auditor action" under Pending Review) — static display text
+           only, same backend data source (stats.*) as before.
+        2. New "Audit Quality Overview" section — three blocks:
+           Three-way Matching (PASS/REVIEW), Authenticity (Passed/
+           Warning), Anomaly (High/Medium Risk). Each block shows a
+           graceful "Data unavailable"/"Loading…" empty state
+           independently if its data source fails or hasn't returned
+           yet — no fabricated numbers.
+        3. Chart section title renamed "Records Processed (last 30
+           days)" -> "Audit Activity Trend". Chart.js config/data/
+           renderChart() logic completely unchanged — text-only rename.
+        4. Audit Trail rows: each entry now shows an explicit "Reason:"
+           label before the remark text (previously shown in quotes
+           with no label) and a new "Status:" line derived from the
+           action itself (approved -> "Approved", sent_back -> "Awaiting
+           Finance correction", need_review -> "Under auditor review") —
+           a truthful restatement of what the historical action already
+           means, not a live join to the document's current status
+           (which could have moved on since — no schema change, no new
+           query).
+        5. New "Recent Review Activity" table (Document / Vendor /
+           Action / Status) — reuses the SAME `entries` array already
+           loaded for the Audit Trail directly below it (first 8 rows),
+           zero new HTTP calls.
+        6. Export CSV button unchanged/untouched (still calls the same
+           GET /auditor/report/audit-trail/export.csv). Added a
+           disabled "Export PDF Summary" placeholder button (title=
+           "Coming soon") — no PDF generation implemented, per the
+           task's explicit instruction.
+    - auditor-report.component.css: added styles for .stat-subtext,
+      .quality-card/.quality-grid/.quality-block/.quality-row/.quality-
+      dot (+ pass/review/warning variants)/.quality-empty, .activity-
+      card/.activity-table (+cells), .export-buttons/.btn-export-
+      disabled, and renamed .trail-remarks -> .trail-detail/.trail-
+      detail-label (now shared by both the Reason and Status lines).
+      No existing selector was removed.
+  Backend (auditlens-backend/routes/auditor.py) — two small, additive
+  changes to TWO ALREADY-EXISTING report endpoints, no new routes, no
+  schema change:
+    - GET /auditor/report/summary: added `stats.match_pass` /
+      `stats.match_review` — counted inside the SAME loop that already
+      computes `exceptions` for every in-flight document (status IN
+      under_review/resubmitted/returned), reading the `overall_status`
+      that `_build_comparison()` (the existing three-way matching
+      engine, routes/auditor.py — UNCHANGED) already returns. No new
+      query, no new call to the matching engine beyond what already ran
+      every time this endpoint was called.
+    - GET /auditor/report/audit-trail: added `ef.vendor_name` to the
+      SELECT list — the `extracted_fields` join it selects from
+      already existed in `_audit_trail_query()`'s FROM clause; this
+      only widens what's already being read from an already-joined
+      table. Every existing field in the response is unchanged.
+  Untouched, confirmed via `git diff --stat`: every file under helpers/
+  (claude_extractor.py, gemini_extractor.py, ocr_helper.py,
+  extraction_engine.py, anomaly_detector.py, authenticity_check.py) and
+  routes/matching.py, routes/anomalies.py, routes/authenticity.py,
+  routes/reviews.py, routes/documents.py.
+
+Why:
+  The Report page already had the raw building blocks of an audit
+  report (counts, a trend chart, an audit trail) but read like a bare
+  stats dashboard — no quality signal across matching/authenticity/
+  anomaly in one place, terse card labels, and audit-trail rows that
+  buried the reason/outcome in an unlabeled quoted remark.
+
+Data sources used (all pre-existing, all already auditor-scoped):
+  - Stat cards + Three-way Matching PASS/REVIEW: GET /auditor/report/
+    summary (existing endpoint, response widened).
+  - Chart: same GET /auditor/report/summary timeline — unchanged.
+  - Authenticity Passed/Warning: GET /authenticity (existing list
+    endpoint, already used by auditor-authenticity.component.ts) —
+    counted client-side, same pattern that component already uses.
+  - Anomaly High/Medium: GET /anomalies/stats (existing endpoint,
+    already used elsewhere) — read directly, by_severity.high/medium.
+  - Audit Trail + Recent Review Activity: GET /auditor/report/audit-
+    trail (existing endpoint, response widened with vendor_name).
+  - CSV export: GET /auditor/report/audit-trail/export.csv — untouched.
+
+Tests run and results:
+  - `python tests/extraction/run_all.py`: 13/13 suites PASS (unchanged
+    from before this task — confirms the two additive auditor.py edits
+    did not affect anything the existing suite covers).
+  - `python -c "import routes.auditor"`: clean import, no syntax/
+    circular-import issues from the edits.
+  - `npx ng build --configuration production`: clean build (same pre-
+    existing bundle-size budget warnings as before, unrelated).
+  - Zero Claude API calls, zero Gemini API calls — this task only reads
+    already-computed data via existing endpoints; no extraction/
+    authenticity/anomaly engine was invoked, mocked or otherwise, by
+    any test in this change.
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND — no schema change, no migration, no
+     new environment variables (only two SELECT-list/loop additions to
+     already-existing endpoints).
+  2. Redeploy the Render FRONTEND.
+  3. No config changes needed.

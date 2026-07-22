@@ -21,7 +21,8 @@
       <span class="stat-icon"><i class="ph-duotone ph-check-circle"></i></span>
       <div>
         <p class="stat-value">{{ isLoadingSummary ? '…' : stats.approved }}</p>
-        <p class="stat-label">Approved</p>
+        <p class="stat-label">Approved Documents</p>
+        <p class="stat-subtext">Reviewed and finalized</p>
       </div>
     </div>
     <div class="stat-card stat-sent-back">
@@ -29,29 +30,124 @@
       <div>
         <p class="stat-value">{{ isLoadingSummary ? '…' : stats.sent_back }}</p>
         <p class="stat-label">Sent Back</p>
+        <p class="stat-subtext">Returned to Finance</p>
       </div>
     </div>
     <div class="stat-card stat-pending">
       <span class="stat-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
       <div>
         <p class="stat-value">{{ isLoadingSummary ? '…' : stats.pending }}</p>
-        <p class="stat-label">Pending</p>
+        <p class="stat-label">Pending Review</p>
+        <p class="stat-subtext">Require auditor action</p>
       </div>
     </div>
     <div class="stat-card stat-exceptions">
       <span class="stat-icon"><i class="ph-duotone ph-siren"></i></span>
       <div>
         <p class="stat-value">{{ isLoadingSummary ? '…' : stats.exceptions }}</p>
-        <p class="stat-label">Exceptions</p>
+        <p class="stat-label">Open Exceptions</p>
+        <p class="stat-subtext">Mismatches &amp; flags</p>
       </div>
     </div>
   </div>
 
+  <!-- Audit Quality Overview -->
+  <div class="quality-card">
+    <h2 class="section-title"><i class="ph-duotone ph-shield-check"></i> Audit Quality Overview</h2>
+    <p class="section-subtitle">Current-state snapshot across matching, authenticity and anomaly detection</p>
+
+    <div class="quality-grid">
+      <!-- Three-way Matching -->
+      <div class="quality-block">
+        <p class="quality-block-title"><i class="ph-duotone ph-scales"></i> Three-way Matching</p>
+        <ng-container *ngIf="hasMatchQuality; else qualityEmpty">
+          <div class="quality-row">
+            <span class="quality-dot quality-dot-pass"></span>
+            <span class="quality-row-label">PASS</span>
+            <span class="quality-row-value">{{ stats.match_pass }}</span>
+          </div>
+          <div class="quality-row">
+            <span class="quality-dot quality-dot-review"></span>
+            <span class="quality-row-label">REVIEW</span>
+            <span class="quality-row-value">{{ stats.match_review }}</span>
+          </div>
+        </ng-container>
+      </div>
+
+      <!-- Authenticity -->
+      <div class="quality-block">
+        <p class="quality-block-title"><i class="ph-duotone ph-fingerprint"></i> Authenticity</p>
+        <ng-container *ngIf="authenticityQuality; else qualityEmpty">
+          <div class="quality-row">
+            <span class="quality-dot quality-dot-pass"></span>
+            <span class="quality-row-label">Passed</span>
+            <span class="quality-row-value">{{ authenticityQuality.passed }}</span>
+          </div>
+          <div class="quality-row">
+            <span class="quality-dot quality-dot-warning"></span>
+            <span class="quality-row-label">Warning</span>
+            <span class="quality-row-value">{{ authenticityQuality.warning }}</span>
+          </div>
+        </ng-container>
+      </div>
+
+      <!-- Anomaly -->
+      <div class="quality-block">
+        <p class="quality-block-title"><i class="ph-duotone ph-warning-circle"></i> Anomaly</p>
+        <ng-container *ngIf="anomalyQuality; else qualityEmpty">
+          <div class="quality-row">
+            <span class="quality-dot quality-dot-review"></span>
+            <span class="quality-row-label">High Risk</span>
+            <span class="quality-row-value">{{ anomalyQuality.high }}</span>
+          </div>
+          <div class="quality-row">
+            <span class="quality-dot quality-dot-warning"></span>
+            <span class="quality-row-label">Medium Risk</span>
+            <span class="quality-row-value">{{ anomalyQuality.medium }}</span>
+          </div>
+        </ng-container>
+      </div>
+    </div>
+
+    <ng-template #qualityEmpty>
+      <p class="quality-empty">{{ isLoadingQuality ? 'Loading…' : 'Data unavailable' }}</p>
+    </ng-template>
+  </div>
+
   <!-- Chart -->
   <div class="chart-card">
-    <h2 class="section-title"><i class="ph-duotone ph-chart-line"></i> Records Processed (last 30 days)</h2>
+    <h2 class="section-title"><i class="ph-duotone ph-chart-line"></i> Audit Activity Trend</h2>
     <div class="chart-wrap">
       <canvas #timelineChart></canvas>
+    </div>
+  </div>
+
+  <!-- Recent Review Activity -->
+  <div class="activity-card" *ngIf="recentActivity.length">
+    <h2 class="section-title"><i class="ph-duotone ph-list-checks"></i> Recent Review Activity</h2>
+    <div class="activity-table-wrap">
+      <table class="activity-table">
+        <thead>
+          <tr>
+            <th>Document</th>
+            <th>Vendor</th>
+            <th>Action</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let entry of recentActivity" (click)="viewInvoice(entry)">
+            <td class="activity-doc">{{ entry.invoice_no || '-' }}</td>
+            <td>{{ entry.vendor_name || '-' }}</td>
+            <td>
+              <span class="action-pill" [ngClass]="actionPillClass(entry.action)">
+                <i class="ph-duotone" [ngClass]="actionIcon(entry.action)"></i> {{ actionLabel(entry.action) }}
+              </span>
+            </td>
+            <td class="activity-status">{{ statusForAction(entry.action) }}</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </div>
 
@@ -62,7 +158,12 @@
         <h2 class="section-title"><i class="ph-duotone ph-scroll"></i> Audit Trail</h2>
         <p class="section-subtitle">{{ totalEntries }} total entries</p>
       </div>
-      <button class="btn-export" (click)="exportCsv()"><i class="ph-duotone ph-download-simple"></i> Export CSV</button>
+      <div class="export-buttons">
+        <button class="btn-export" (click)="exportCsv()"><i class="ph-duotone ph-download-simple"></i> Export CSV</button>
+        <button class="btn-export btn-export-disabled" disabled title="Coming soon">
+          <i class="ph-duotone ph-file-pdf"></i> Export PDF Summary
+        </button>
+      </div>
     </div>
 
     <div class="trail-filters">
@@ -99,7 +200,8 @@
           </span>
           <span class="trail-invoice" (click)="viewInvoice(entry)">{{ entry.invoice_no || '-' }}</span>
         </div>
-        <p class="trail-remarks" *ngIf="entry.remarks">"{{ entry.remarks }}"</p>
+        <p class="trail-detail" *ngIf="entry.remarks"><span class="trail-detail-label">Reason:</span> {{ entry.remarks }}</p>
+        <p class="trail-detail"><span class="trail-detail-label">Status:</span> {{ statusForAction(entry.action) }}</p>
       </div>
     </div>
 

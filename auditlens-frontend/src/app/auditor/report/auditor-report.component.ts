@@ -29,10 +29,22 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
   ];
   activePeriod: Period = 'month';
 
-  stats: any = { approved: 0, sent_back: 0, pending: 0, exceptions: 0 };
+  stats: any = { approved: 0, sent_back: 0, pending: 0, exceptions: 0, match_pass: 0, match_review: 0 };
   timeline: any[] = [];
   isLoadingSummary: boolean = false;
   summaryError: string = '';
+
+  // ── Audit Quality Overview ──────────────────────────────
+  // Three-way match PASS/REVIEW comes from the existing summary
+  // response (stats.match_pass/match_review) — no extra call.
+  // Authenticity and Anomaly each reuse an existing, already-built
+  // endpoint (GET /authenticity, GET /anomalies/stats) and are counted
+  // here rather than adding new backend endpoints. null = not yet
+  // loaded / unavailable -> template shows a graceful empty state,
+  // never fabricated numbers.
+  authenticityQuality: { passed: number; warning: number } | null = null;
+  anomalyQuality: { high: number; medium: number } | null = null;
+  isLoadingQuality: boolean = false;
 
   // Audit trail
   entries: any[] = [];
@@ -59,6 +71,7 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
   ngOnInit() {
     this.loadSummary();
     this.loadAuditTrail(true);
+    this.loadQualityOverview();
   }
 
   ngAfterViewInit() {
@@ -97,6 +110,53 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
         this.cdr.detectChanges();
       }
     });
+  }
+
+  // ── Audit Quality Overview ──────────────────────────────
+  // Authenticity + Anomaly counts reuse existing endpoints already used
+  // elsewhere in the app (auditor-authenticity.component.ts /
+  // auditor-anomalies.component.ts) — read-only, no new backend route.
+  // A fetch failure leaves the corresponding field null so the template
+  // renders a graceful empty state instead of a fabricated number.
+
+  loadQualityOverview() {
+    this.isLoadingQuality = true;
+    const headers = this.getHeaders();
+
+    this.http.get<any[]>(`${this.apiUrl}/authenticity`, { headers }).subscribe({
+      next: (res) => {
+        const rows = res || [];
+        this.authenticityQuality = {
+          passed:  rows.filter(r => r.authenticity_status === 'passed').length,
+          warning: rows.filter(r => r.authenticity_status === 'warning').length,
+        };
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.authenticityQuality = null;
+        this.cdr.detectChanges();
+      }
+    });
+
+    this.http.get<any>(`${this.apiUrl}/anomalies/stats`, { headers }).subscribe({
+      next: (res) => {
+        this.anomalyQuality = {
+          high:   res?.by_severity?.high ?? 0,
+          medium: res?.by_severity?.medium ?? 0,
+        };
+        this.isLoadingQuality = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.anomalyQuality = null;
+        this.isLoadingQuality = false;
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  get hasMatchQuality(): boolean {
+    return !this.isLoadingSummary && !this.summaryError;
   }
 
   renderChart() {
@@ -206,6 +266,25 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
 
   get hasMore(): boolean {
     return this.entries.length < this.totalEntries;
+  }
+
+  // Recent Review Activity table (Feature 5) — reuses the SAME entries
+  // array already loaded for the Audit Trail below it, just the most
+  // recent handful in a compact table. No second fetch.
+  get recentActivity(): any[] {
+    return this.entries.slice(0, 8);
+  }
+
+  // Status shown alongside each Audit Trail entry / Recent Activity row
+  // — a truthful restatement of what the recorded action itself already
+  // means, not a live lookup of the document's current status (which
+  // can have moved on since this historical entry, e.g. sent back then
+  // later resubmitted and approved) and requires no schema/query change.
+  statusForAction(action: string): string {
+    if (action === 'approved') return 'Approved';
+    if (action === 'sent_back') return 'Awaiting Finance correction';
+    if (action === 'need_review') return 'Under auditor review';
+    return '-';
   }
 
   exportCsv() {
