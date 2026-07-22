@@ -14,6 +14,7 @@ from db import get_user_by_id
 from helpers.transaction_packages import (
     create_package, get_package, link_document_to_package,
     get_package_documents, get_relationship_preview, list_packages,
+    resolve_package_for_document,
 )
 
 transaction_packages_bp = Blueprint('transaction_packages', __name__)
@@ -98,9 +99,16 @@ def add_transaction_package_document(package_id):
     if not isinstance(document_id, int):
         return jsonify({'error': 'document_id must be an integer'}), 400
 
-    link, error = link_document_to_package(package_id, document_id, document_role)
+    # Phase 7.1 (auto-grouping, not blocking): if this document's own PO
+    # reference matches a PO already anchoring a DIFFERENT package this
+    # same Finance user owns, land it there instead of fragmenting the
+    # same AP transaction into two packages. Falls back to the
+    # requested package_id whenever no match is found.
+    resolved_package_id = resolve_package_for_document(package_id, document_id, document_role, user['user_id'])
+
+    link, error = link_document_to_package(resolved_package_id, document_id, document_role)
     if error:
         return jsonify({'error': error}), 400
 
-    package = get_package(package_id)
-    return jsonify({'link': link, 'package': package}), 201
+    package = get_package(resolved_package_id)
+    return jsonify({'link': link, 'package': package, 'redirected_from_package_id': package_id if resolved_package_id != package_id else None}), 201

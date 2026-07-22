@@ -9697,3 +9697,102 @@ Rollback instructions:
   Redeploy the previous backend build - this change only adds a guard
   check before an INSERT that already existed; rolling back removes
   the guard but affects no existing data.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 7.1: corrected the previous fix, which was built on the wrong
+  assumption. The earlier change blocked linking an invoice into a
+  second transaction package (treating it as an accidental duplicate
+  re-upload). That was wrong: the real scenario is two GENUINELY
+  DIFFERENT, legitimate invoices (different invoice numbers) that both
+  belong to the same real PO transaction, which simply never converged
+  into one package. Blocking is gone; replaced with auto-grouping.
+
+  Backend (auditlens-backend/):
+    - helpers/transaction_packages.py: removed find_existing_package_
+      for_invoice() (the invoice-number/vendor/amount/date duplicate
+      BLOCKER from the previous fix) and its call site inside link_
+      document_to_package(), which is back to its original, unmodified
+      Phase 5 shape. Replaced with three new functions: _lookup_po_
+      reference_and_vendor() (an invoice/GR's own po_reference, or a
+      PO's own po_number, plus vendor), _find_package_with_matching_po()
+      and _find_package_with_matching_invoice_po_ref() (search this same
+      Finance user's OTHER existing packages for one already anchored on
+      the same PO, matching by normalized PO reference + fuzzy vendor -
+      the mirror-image pair covers both upload orders: PO-uploaded-first
+      and invoice-uploaded-first), and resolve_package_for_document()
+      (the public entry point combining them, falling back to the
+      originally-requested package_id whenever no match is found).
+      _normalize_po_reference() mirrors routes/auditor.py's own
+      _normalize_ref() (strips a leading "PO"/"PO-" prefix so "3006231"
+      and "PO3006231" compare equal) - duplicated rather than imported,
+      since helpers/ modules never import from routes/ (routes/auditor.py
+      already imports from this module).
+    - routes/transaction_packages.py: POST /transaction-packages/<id>/
+      documents now calls resolve_package_for_document() before linking,
+      scoped to the requesting Finance user's own packages only (no
+      ownership leak), and reports redirected_from_package_id in the
+      response when the document landed in a different package than
+      requested, so Finance can see why.
+
+Why:
+  Fixed duplicate invoice transaction creation causing incorrect
+  "Missing PO and GR": when Finance links two sibling invoices for the
+  same PO into two different packages (in either order - PO first or
+  invoice first), the relationship builder only ever runs for invoices
+  that are members of THAT specific package
+  (_rebuild_relationships_for_package), so the fragmented invoice never
+  gets a chance to link to its real PO/GR - engine_version stays legacy
+  for it and Record Detail falls back to the single-invoice-vs-full-PO
+  comparison regardless of the Phase 7 allocation-aware display fix.
+  Improved transaction grouping consistency: two invoices referencing
+  the same PO number (by po_reference/po_number, fuzzy vendor match)
+  now always converge into the SAME package automatically, without
+  ever blocking or erroring - Finance can still explicitly link a
+  document into more than one package if they choose to.
+
+  helpers/relationship_builder.py and helpers/enterprise_matching.py
+  were not touched - confirmed (again) that they already correctly
+  give each sibling invoice its own full allocation once both are
+  members of the same package; the gap was entirely in which package
+  each one ended up in.
+
+Test results:
+  - python tests/extraction/run_all.py - all 25 suites pass, including
+    test_transaction_packages.py (existing linking scenarios unaffected).
+  - Live smoke test against the real local Postgres dev DB (rows
+    created and cleaned up): PO3006231 + Invoice A + GR1 + GR2 linked
+    into Package A; a brand new Package B created and sibling Invoice B
+    (same PO reference, different invoice_number) linked into it -
+    Invoice B is auto-redirected into Package A instead (Package B ends
+    up with 0 documents, Package A ends up with all 5). Confirmed
+    end-to-end: after auto-grouping, GET /auditor/record/<id>/comparison
+    for Invoice B returns engine_version "v2", invoice_result.status
+    "PASS", match_result.overall_status "PASS" - no false mismatch.
+
+Build result:
+  Backend: all 25 test suites pass. Frontend: clean production build,
+  exit 0 (no frontend changes this round).
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Known limitation:
+  This fix only engages the next time a document is LINKED via POST
+  /transaction-packages/<id>/documents (the only place package
+  membership is ever created). It does not retroactively re-group any
+  transaction package already fragmented before this fix was deployed;
+  re-linking the affected invoice (even into the same package it's
+  already fragmented from) will now correctly redirect it going forward.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - no migration step, no new
+     environment variables.
+  2. No frontend redeploy needed this round.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend build - no schema change, no data
+  written by this fix beyond normal transaction_package_documents rows.

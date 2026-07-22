@@ -21,11 +21,10 @@ design exactly, for the same reason: purchase_orders/goods_receipts
 rows have no independent row in `documents`.
 """
 import re
-from decimal import Decimal
 import psycopg2.extras
 from db import get_db_connection
 from helpers.document_relationships import _entity_exists, get_related_invoices, get_related_goods_receipts
-from helpers.relationship_builder import build_relationships_for_invoice, AMOUNT_TOLERANCE
+from helpers.relationship_builder import build_relationships_for_invoice
 from helpers.entity_normalizer import is_same_company
 
 VALID_ROLES = ('invoice', 'purchase_order', 'goods_receipt')
@@ -140,79 +139,140 @@ def _rebuild_relationships_for_package(package_id):
                   f"in transaction package {package_id}: {type(e).__name__}: {e}")
 
 
-def _normalize_invoice_number(value):
+def _normalize_po_reference(value):
+    """Mirrors routes/auditor.py::_normalize_ref() (uppercase, strip
+    whitespace/non-alphanumerics, strip a leading "PO"/"PO-" prefix) so
+    an invoice's po_reference "3006231" and a PO's own po_number
+    "PO3006231" compare equal, same as the existing Field Comparison
+    table's PO Ref row already does. Duplicated rather than imported:
+    helpers/ modules never import from routes/ (routes/auditor.py
+    already imports from this module, which would create a circular
+    import)."""
     if not value:
         return ''
-    return re.sub(r'[^a-z0-9]', '', value.lower())
+    v = re.sub(r'[^a-z0-9]', '', str(value).lower())
+    return re.sub(r'^po', '', v)
 
 
-_INVOICE_DATE_TOLERANCE_DAYS = 3
+def _lookup_po_reference_and_vendor(document_role, document_id):
+    """The PO-identity fields for whichever role: an invoice/GR's own
+    po_reference (the PO number it claims to belong to), or a PO's own
+    po_number (its identity). Returns (reference_value, vendor_name) or
+    (None, None) if the document/fields aren't found."""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        if document_role == 'invoice':
+            cursor.execute('SELECT po_reference, vendor_name FROM extracted_fields WHERE document_id = %s', (document_id,))
+        elif document_role == 'purchase_order':
+            cursor.execute('SELECT po_number AS po_reference, vendor_name FROM purchase_orders WHERE po_id = %s', (document_id,))
+        elif document_role == 'goods_receipt':
+            cursor.execute('SELECT po_reference, vendor_name FROM goods_receipts WHERE gr_id = %s', (document_id,))
+        else:
+            return None, None
+        row = cursor.fetchone()
+        return (row['po_reference'], row['vendor_name']) if row else (None, None)
+    finally:
+        conn.close()
 
 
-def find_existing_package_for_invoice(document_id):
-    """Bug 2 fix — before linking an invoice into a package, checks
-    whether an invoice matching by invoice_number + vendor + amount +
-    invoice_date already belongs to a DIFFERENT existing package. Without
-    this, the same real invoice could be linked into two separate
-    packages (nothing enforced document_id uniqueness across packages),
-    with one package showing it correctly matched against its real PO/GR
-    and the other wrongly showing "Missing PO and GR" for the exact same
-    invoice — the relationship builder only ever runs for invoices that
-    are members of THAT specific package (see
-    _rebuild_relationships_for_package), so a fragmented, PO/GR-less
-    package for the same invoice never resolves relationships on its own.
-
-    All four signals must agree (invoice_number normalized-exact,
-    vendor fuzzy via the existing is_same_company(), amount within the
-    existing AMOUNT_TOLERANCE, invoice_date within a few days) —
-    deliberately strict to avoid ever blocking two genuinely different
-    invoices that happen to share one field. No new matching engine:
-    reuses the exact same vendor/amount comparators already trusted
-    elsewhere in this app (helpers/entity_normalizer.py, helpers/
-    relationship_builder.py's own tolerance constant).
-
-    Returns {'package_id', 'package_name', 'document_id'} of the
-    existing match, or None if this invoice isn't already grouped
-    under any other package."""
+def _find_package_with_matching_po(po_reference_value, vendor_name, user_id, exclude_package_id):
+    """An existing package (owned by this same Finance user) whose
+    linked PURCHASE ORDER's po_number matches po_reference_value
+    (normalized) + vendor (fuzzy). Used when linking an invoice or GR
+    that references a PO by number — finds the package already anchored
+    on that PO instead of leaving this document to start a fragmented
+    new one."""
+    if not po_reference_value:
+        return None
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         cursor.execute(
-            'SELECT invoice_number, vendor_name, total_amount, invoice_date FROM extracted_fields WHERE document_id = %s',
-            (document_id,)
-        )
-        this_inv = cursor.fetchone()
-        if not this_inv or not this_inv['invoice_number']:
-            return None
-
-        cursor.execute(
-            '''SELECT tpd.package_id, tp.package_name, ef.document_id, ef.invoice_number,
-                      ef.vendor_name, ef.total_amount, ef.invoice_date
+            '''SELECT tpd.package_id, tp.package_name, po.po_number, po.vendor_name
                FROM transaction_package_documents tpd
                JOIN transaction_packages tp ON tp.id = tpd.package_id
-               JOIN extracted_fields ef ON ef.document_id = tpd.document_id
-               WHERE tpd.document_role = 'invoice' AND tpd.document_id != %s''',
-            (document_id,)
+               JOIN purchase_orders po ON po.po_id = tpd.document_id
+               WHERE tpd.document_role = 'purchase_order' AND tp.created_by = %s AND tpd.package_id != %s''',
+            (user_id, exclude_package_id)
         )
         candidates = cursor.fetchall()
     finally:
         conn.close()
 
-    this_no = _normalize_invoice_number(this_inv['invoice_number'])
+    ref = _normalize_po_reference(po_reference_value)
     for c in candidates:
-        if not c['invoice_number'] or _normalize_invoice_number(c['invoice_number']) != this_no:
+        if _normalize_po_reference(c['po_number']) != ref:
             continue
-        if this_inv['vendor_name'] and c['vendor_name']:
-            if not is_same_company(this_inv['vendor_name'], c['vendor_name'])['match']:
-                continue
-        if this_inv['total_amount'] is not None and c['total_amount'] is not None:
-            if abs(Decimal(str(this_inv['total_amount'])) - Decimal(str(c['total_amount']))) > AMOUNT_TOLERANCE:
-                continue
-        if this_inv['invoice_date'] and c['invoice_date']:
-            if abs((this_inv['invoice_date'] - c['invoice_date']).days) > _INVOICE_DATE_TOLERANCE_DAYS:
-                continue
-        return {'package_id': c['package_id'], 'package_name': c['package_name'], 'document_id': c['document_id']}
+        if vendor_name and c['vendor_name'] and not is_same_company(vendor_name, c['vendor_name'])['match']:
+            continue
+        return {'package_id': c['package_id'], 'package_name': c['package_name']}
     return None
+
+
+def _find_package_with_matching_invoice_po_ref(po_number, vendor_name, user_id, exclude_package_id):
+    """The mirror-image lookup: an existing package (owned by this same
+    Finance user) whose linked INVOICE's po_reference matches po_number
+    (normalized) + vendor (fuzzy). Used when linking a PO — covers the
+    invoice-uploaded-before-its-PO ordering, so the PO joins whichever
+    package the sibling invoice already started instead of the reverse
+    fragmentation."""
+    if not po_number:
+        return None
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute(
+            '''SELECT tpd.package_id, tp.package_name, ef.po_reference, ef.vendor_name
+               FROM transaction_package_documents tpd
+               JOIN transaction_packages tp ON tp.id = tpd.package_id
+               JOIN extracted_fields ef ON ef.document_id = tpd.document_id
+               WHERE tpd.document_role = 'invoice' AND tp.created_by = %s AND tpd.package_id != %s''',
+            (user_id, exclude_package_id)
+        )
+        candidates = cursor.fetchall()
+    finally:
+        conn.close()
+
+    ref = _normalize_po_reference(po_number)
+    for c in candidates:
+        if _normalize_po_reference(c['po_reference']) != ref:
+            continue
+        if vendor_name and c['vendor_name'] and not is_same_company(vendor_name, c['vendor_name'])['match']:
+            continue
+        return {'package_id': c['package_id'], 'package_name': c['package_name']}
+    return None
+
+
+def resolve_package_for_document(requested_package_id, document_id, document_role, user_id):
+    """Phase 7.1 — auto-grouping, not blocking. When a document that
+    identifies its PO (an invoice/GR's own po_reference, or a PO's own
+    po_number) matches a PO already anchoring a DIFFERENT existing
+    package owned by the same Finance user, returns THAT package's id
+    instead of requested_package_id — so two invoices for the same real
+    PO transaction converge into one package regardless of which one
+    Finance happened to link first, rather than one becoming a
+    fragmented "Missing PO and GR" package of its own. Falls back to
+    requested_package_id whenever no match is found (including when the
+    document has no PO reference at all, or this is genuinely the first
+    document establishing a new transaction) — never blocks, never
+    errors, a document can still end up in multiple packages if Finance
+    explicitly links it into more than one.
+
+    No new matching engine: reuses the exact same normalization/fuzzy-
+    vendor comparator already used throughout this app."""
+    reference_value, vendor_name = _lookup_po_reference_and_vendor(document_role, document_id)
+    if not reference_value:
+        return requested_package_id
+
+    if document_role == 'purchase_order':
+        match = _find_package_with_matching_invoice_po_ref(reference_value, vendor_name, user_id, requested_package_id)
+    elif document_role in ('invoice', 'goods_receipt'):
+        match = _find_package_with_matching_po(reference_value, vendor_name, user_id, requested_package_id)
+    else:
+        match = None
+
+    return match['package_id'] if match else requested_package_id
 
 
 def link_document_to_package(package_id, document_id, document_role):
@@ -240,19 +300,6 @@ def link_document_to_package(package_id, document_id, document_role):
         )
         if cursor.fetchone():
             return None, 'this document is already linked to this package'
-
-        # Bug 2 fix: one invoice = one transaction membership. A match
-        # in a DIFFERENT package blocks this link rather than silently
-        # creating a fragmented duplicate grouping.
-        if document_role == 'invoice':
-            existing = find_existing_package_for_invoice(document_id)
-            if existing and existing['package_id'] != package_id:
-                return None, (
-                    f"This invoice already belongs to transaction package "
-                    f"\"{existing['package_name']}\" (id {existing['package_id']}) via document "
-                    f"{existing['document_id']}. Attach further documents to that package instead "
-                    f"of creating a duplicate."
-                )
 
         cursor.execute(
             'INSERT INTO transaction_package_documents (package_id, document_id, document_role) '
