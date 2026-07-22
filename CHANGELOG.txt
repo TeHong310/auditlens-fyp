@@ -7337,3 +7337,52 @@ Setup/config needed:
      ai_assistant_cache table unchanged), no new environment variables.
   2. Redeploy the Render FRONTEND.
   3. No config changes needed.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-22 (later same day)
+
+What was changed:
+  Frontend (auditlens-frontend/) — ONE file, HTML template only:
+    - auditor-record-detail.component.html: the AI card's "Case
+      Summary" box (populated by the explain-exception audit_status/
+      reason/recommended_action fields added in the prior task) is now
+      headed "AI Audit Assessment" and lays the 3 fields out as clearly
+      labeled sections instead of inline bold prefixes:
+        Audit Status: <PASS / REVIEW REQUIRED chip> (unchanged from the
+          prior task, still driven by the server-computed audit_status)
+        Risk Interpretation: <the existing `reason` text, unchanged and
+          un-shortened — this IS the Claude-generated explanation the
+          task asked to keep, just under a clearer label>
+        Recommended Action: <the existing `recommended_action` text>
+      Reuses the existing .frb-label class (Finance Response box's
+      sub-label style, already established in this same file) for the
+      two new section labels — no new CSS.
+
+Why:
+  Pure presentation polish requested after the audit_status/reason/
+  recommended_action fields landed in the prior fix — clearer section
+  labels and a renamed heading so the structured verdict/explanation/
+  next-step reads as a scannable assessment rather than one paragraph
+  with inline bold prefixes. No new data, no new field: `reason` (the
+  AI's explanation) is displayed in full, unchanged, just relabeled.
+
+Testing:
+  - `npx ng build --configuration production` — succeeded (exit 0;
+    same pre-existing budget warnings as prior tasks).
+  - `npx ng test --watch=false` — 56/57 pass; the 1 failure is the
+    same pre-existing, unrelated app.spec.ts issue seen throughout this
+    project's history. No component TS/spec changes were needed since
+    the bound object (aiCaseSummary) and its field names are unchanged
+    — only template text/labels changed.
+  - `git diff --stat` confirms exactly 1 file changed
+    (auditor-record-detail.component.html, 8 lines) — zero backend
+    changes of any kind, so extraction, matching, authenticity,
+    anomaly detection, and the ai_assistant_cache table/API are all
+    untouched. Zero new AI calls: explainException() itself is
+    unmodified, still one POST per click.
+
+Setup/config needed:
+  1. Redeploy the Render FRONTEND.
+  2. No backend redeploy needed (no backend changes).
+  3. No config changes needed.
