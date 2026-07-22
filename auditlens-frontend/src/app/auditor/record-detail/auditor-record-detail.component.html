@@ -81,44 +81,28 @@
     <div class="success-box" *ngIf="successMessage"><i class="ph-duotone ph-check-circle"></i> {{ successMessage }}</div>
     <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
 
-    <!-- Enterprise V3 Phase 6 (STEP 4) — Transaction Overview + Related
-         Documents. Rendered ONLY when comparison.transaction_context
-         said this invoice belongs to a Finance Transaction Package
-         (Phase 5); invisible for a standalone/legacy invoice, which
-         keeps looking exactly as it did before this phase (STEP 10).
-         Every value here comes from GET /auditor/transactions/<id>,
-         itself pure aggregation over already-computed data — no new
-         calculation happens in this component. -->
+    <!-- Enterprise V3 Phase 7 (Bug 3/FIX 4) — compact Transaction
+         Context: package name, document-type breakdown, status — no
+         separate document list (the Matching Summary directly below
+         already lists every PO/Invoice/GR, with more useful detail, and
+         its rows are clickable). Rendered ONLY when comparison.
+         transaction_context said this invoice belongs to a Finance
+         Transaction Package (Phase 5); invisible for a standalone/
+         legacy invoice (STEP 10). Every value here comes from GET
+         /auditor/transactions/<id>, pure aggregation over already-
+         computed data — no new calculation happens in this component. -->
     <div class="comparison-card txn-overview-card" *ngIf="transactionDetail as txn">
-      <div class="txn-overview-header">
-        <div>
-          <h2 class="comparison-title"><i class="ph-duotone ph-package"></i> Transaction Overview</h2>
-          <p class="txn-package-name">{{ txn.package.package_name }}</p>
-          <p class="comparison-subtitle">{{ comparison.transaction_context.documents_count }} related documents</p>
+      <div class="txn-context-compact">
+        <div class="txn-context-main">
+          <i class="ph-duotone ph-package"></i>
+          <span class="txn-package-name">{{ txn.package.package_name }}</span>
+          <span class="badge" [ngClass]="'txn-status-' + txn.package.status">{{ txn.package.status | titlecase }}</span>
         </div>
-        <span class="badge" [ngClass]="'txn-status-' + txn.package.status">{{ txn.package.status | titlecase }}</span>
-      </div>
-
-      <div class="enterprise-related-section">
-        <div class="enterprise-related-group" *ngIf="txn.documents.purchase_orders?.length">
-          <p class="enterprise-related-label">Purchase Orders</p>
-          <a class="enterprise-related-item txn-clickable" *ngFor="let po of txn.documents.purchase_orders" (click)="openTransactionDocument('po', po.document_id)">
-            <i class="ph-duotone ph-file-text enterprise-check-icon"></i> <span class="enterprise-related-name">{{ po.po_number || po.file_name }}</span>
-          </a>
-        </div>
-        <div class="enterprise-related-group" *ngIf="txn.documents.invoices?.length">
-          <p class="enterprise-related-label">Invoices</p>
-          <a class="enterprise-related-item txn-clickable" *ngFor="let inv of txn.documents.invoices"
-             [class.txn-related-current]="inv.document_id === documentId"
-             (click)="openTransactionDocument('invoice', inv.document_id)">
-            <i class="ph-duotone ph-receipt enterprise-check-icon"></i> <span class="enterprise-related-name">{{ inv.invoice_number || inv.file_name }}</span>
-          </a>
-        </div>
-        <div class="enterprise-related-group" *ngIf="txn.documents.goods_receipts?.length">
-          <p class="enterprise-related-label">Goods Receipts</p>
-          <a class="enterprise-related-item txn-clickable" *ngFor="let gr of txn.documents.goods_receipts" (click)="openTransactionDocument('gr', gr.document_id)">
-            <i class="ph-duotone ph-truck enterprise-check-icon"></i> <span class="enterprise-related-name">{{ gr.gr_number || gr.file_name }}</span>
-          </a>
+        <div class="txn-context-breakdown">
+          <span>{{ comparison.transaction_context.documents_count }} documents</span>
+          <span>PO: {{ comparison.transaction_context.purchase_orders }}</span>
+          <span>Invoices: {{ comparison.transaction_context.invoices }}</span>
+          <span>GR: {{ comparison.transaction_context.goods_receipts }}</span>
         </div>
       </div>
 
@@ -129,18 +113,19 @@
            number read directly from matching_summary (build_
            comparison()'s own already-computed po_fulfilment/
            invoice_result, aggregated once per package). No calculation
-           happens here. -->
+           happens here. Rows are clickable (Bug 3/FIX 4) — the only
+           place an auditor needs to open a related document from now. -->
       <div class="enterprise-fulfilment-section" *ngIf="txn.matching_summary as ms">
         <h3 class="source-docs-title"><i class="ph-duotone ph-scales"></i> Enterprise Matching Summary</h3>
 
         <div class="enterprise-status-row" *ngFor="let pf of ms.po_fulfilment">
-          <span class="enterprise-stat-label">Purchase Order Total ({{ pf.po_number }})</span>
+          <a class="enterprise-stat-label txn-clickable" (click)="openTransactionDocument('po', pf.po_id)">Purchase Order Total ({{ pf.po_number }})</a>
           <span class="enterprise-stat-value">{{ formatAmount(pf.po_amount, 'MYR') }}</span>
         </div>
 
         <p class="enterprise-related-label" style="margin-top:12px;">Invoice Allocation</p>
         <div class="enterprise-related-item" *ngFor="let alloc of ms.invoice_allocations">
-          <span class="enterprise-related-name">{{ alloc.invoice_number }}</span>
+          <a class="enterprise-related-name txn-clickable" [class.txn-related-current]="alloc.document_id === documentId" (click)="openTransactionDocument('invoice', alloc.document_id)">{{ alloc.invoice_number }}</a>
           <span class="enterprise-related-detail">{{ formatAmount(alloc.amount, alloc.currency) }}</span>
           <span class="match-pill" [ngClass]="alloc.status === 'PASS' ? 'pill-match' : 'pill-differ'">{{ alloc.status }}</span>
         </div>
@@ -148,7 +133,7 @@
         <ng-container *ngIf="ms.goods_receipts?.length">
           <p class="enterprise-related-label" style="margin-top:12px;">Received</p>
           <div class="enterprise-related-item" *ngFor="let gr of ms.goods_receipts">
-            <i class="ph-duotone ph-check-circle enterprise-check-icon"></i> <span class="enterprise-related-name">{{ gr.gr_number }}</span>
+            <i class="ph-duotone ph-check-circle enterprise-check-icon"></i> <a class="enterprise-related-name txn-clickable" (click)="openTransactionDocument('gr', gr.document_id)">{{ gr.gr_number }}</a>
           </div>
         </ng-container>
 
@@ -338,15 +323,18 @@
                      receipts record quantity received, not money), so this
                      stays Invoice-vs-PO only — unchanged from before, just
                      repositioned after Quantity. -->
-                <tr [ngClass]="rowClass([amountSymbol(comparison.invoice.total_amount, comparison.po?.total_amount, comparison.invoice.currency, comparison.po?.currency)])">
+                <tr [ngClass]="rowClass([amountSymbol(comparison.invoice.total_amount, amountCompareBasis, comparison.invoice.currency, comparison.po?.currency)])">
                   <td class="field-name"><span class="field-icon"><i class="ph-duotone ph-currency-circle-dollar"></i></span> Amount</td>
                   <td class="cell-value cell-amount">{{ formatAmount(comparison.invoice.total_amount, comparison.invoice.currency) }}</td>
                   <td class="cell-value" *ngIf="comparison.po">
-                    <span class="match-pill" [ngClass]="matchPillClass(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount, comparison.invoice.currency, comparison.po.currency))">
-                      <i class="ph-duotone" [ngClass]="matchPillIcon(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount, comparison.invoice.currency, comparison.po.currency))"></i>
-                      {{ matchPillText(amountSymbol(comparison.invoice.total_amount, comparison.po.total_amount, comparison.invoice.currency, comparison.po.currency)) }}
+                    <span class="match-pill" [ngClass]="matchPillClass(amountSymbol(comparison.invoice.total_amount, amountCompareBasis, comparison.invoice.currency, comparison.po.currency))">
+                      <i class="ph-duotone" [ngClass]="matchPillIcon(amountSymbol(comparison.invoice.total_amount, amountCompareBasis, comparison.invoice.currency, comparison.po.currency))"></i>
+                      {{ matchPillText(amountSymbol(comparison.invoice.total_amount, amountCompareBasis, comparison.invoice.currency, comparison.po.currency)) }}
                     </span>
-                    <div class="cell-main-value cell-amount">{{ formatAmount(comparison.po.total_amount, comparison.po.currency) }}</div>
+                    <div class="cell-main-value cell-amount">
+                      {{ formatAmount(amountCompareBasis, comparison.po.currency) }}<span class="cell-muted" *ngIf="isV2Allocated" style="font-size:11px;"> (Allocated)</span>
+                    </div>
+                    <div class="cell-muted" style="font-size:11px;margin-top:2px;" *ngIf="isV2Allocated">PO Total (context): {{ formatAmount(comparison.po.total_amount, comparison.po.currency) }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">
                     <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>

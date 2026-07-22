@@ -9452,3 +9452,160 @@ Rollback instructions:
   Redeploy the previous backend/frontend build - this phase reads
   existing tables only and writes nothing new, so rolling back has no
   data-cleanup implications.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 7: Localhost Debug Investigation and Fix - five auditor-facing
+  bugs found via direct code inspection and live DB verification
+  (no browser automation available; local dev DB was empty of test
+  data, so root causes were confirmed by isolated function calls and
+  targeted live-created/cleaned-up fixtures against the real Postgres
+  dev DB instead). Presentation/interpretation fixes only - no OCR,
+  Claude, Gemini, authenticity detection, anomaly, Enterprise Matching
+  V2 calculation, or relationship_builder logic was modified.
+
+  Backend (auditlens-backend/):
+    - routes/auditor.py: GET /auditor/record/<id>/comparison now
+      overwrites match_result.overall_status using the ALREADY-EXISTING
+      _matching_status_for_comparison() before returning, when the
+      Enterprise V2 engine ran for this invoice. Root cause: _build_
+      comparison_v2() already computes the correct allocation-aware
+      invoice_result (a partial-fulfilment invoice correctly resolves
+      to PASS), but recomputes its own legacy-shaped match_result
+      independently, comparing the single invoice's amount against the
+      PO's FULL total - producing a false FAIL. Every OTHER V2-aware
+      consumer (Dashboard, Exceptions, Report, AI Assistant) was
+      already routed through _matching_status_for_comparison() to
+      correct for exactly this (that function's own docstring cites
+      "the PO3006231 example") - Record Detail was the one consumer
+      that never got the fix. No new matching calculation: reuses the
+      exact function every other consumer already trusts, and is a
+      no-op for legacy (non-V2) comparisons.
+    - routes/authenticity.py: both GET /authenticity (list) and GET
+      /authenticity/<id> (detail) now include transaction_context per
+      row, added inside the one shared per-row enrichment function
+      (_with_authentication_score) both endpoints already call. New
+      _transaction_context_for_row() reuses get_transaction_context_for_
+      document() (Phase 6) unchanged, translating document_type ('po'/
+      'gr') plus the row's own po_id/gr_id into the (document_role,
+      document_id) shape that function expects - authenticity_checks
+      keys PO/GR rows by the invoice document_id they were uploaded
+      alongside, while transaction_package_documents links PO/GR by
+      po_id/gr_id (the same distinction already handled by Phase 6's
+      get_transaction_authenticity_summary host_document_id fix).
+
+  Frontend (auditlens-frontend/):
+    - auditor-record-detail.component.ts/html: the Amount row and Line
+      Items table are computed client-side and were still comparing a
+      single invoice against the PO's full total/quantity even when V2
+      allocation existed, independent of the backend's verdict. Fixed
+      via a new isV2Allocated/amountCompareBasis getter (uses invoice_
+      result.allocated_amount, already computed and returned by the
+      backend - no new calculation) and an isPartialAllocationLineItem()
+      check that renders a neutral "Partial Allocation" pill instead of
+      a hard "Mismatch" when a PO-side line-item quantity difference is
+      explained by a correct multi-invoice allocation (V2's own invoice_
+      result.status === 'PASS' and the invoice never bills more than the
+      PO line - a genuine over-invoice still shows as a mismatch).
+    - auditor-record-detail.component.ts: normalizeVendor() was
+      stripping punctuation to nothing instead of a space, unlike the
+      backend's helpers/entity_normalizer.py (which the backend's real,
+      already-correct match_result.vendor_match already uses). This
+      turned "A.Waner" into "awaner" while "A WANER" stayed "a waner" -
+      two names the backend already treats as identical, rendered as
+      "Differ" on this row's independent client-side pill. Fixed to
+      replace punctuation with a space, matching the backend exactly.
+    - auditor-record-detail.component.html/css: the "Transaction
+      Overview" card's Related Documents list (POs/Invoices/GRs) was
+      pure duplication of what the Enterprise Matching Summary directly
+      below it already shows, with more useful detail (amounts,
+      allocation status). Replaced with a compact one-line Transaction
+      Context (package name, document-type breakdown, status); the
+      Matching Summary's own PO/Invoice/GR rows are now clickable for
+      file access instead, so no functionality was lost.
+    - auditor/shared/authenticity-evidence.util.ts (NEW): both the
+      Authenticity list page and detail page already read the SAME
+      authenticity_checks row, but interpreted it with two independently
+      -written rules - the list page showed raw has_company_logo/has_
+      signature booleans as a strict yes/no badge with no awareness of
+      whether that signal is even expected for the document type, while
+      the detail page correctly treated a "not required" absence (e.g. a
+      Goods Receipt's signature) as neutral. Moved the detail page's
+      required-aware evidence logic into this one shared function; both
+      pages now call it, so they can no longer disagree about the same
+      document.
+    - auditor-authenticity.component.ts/html/css: removed the dominant,
+      separately-loaded "Transactions" grouped section (1+N sequential
+      HTTP calls via GET /auditor/transactions + GET /auditor/
+      transactions/<id> per package) that caused a visible loading-order
+      jump (documents appearing, then transactions appearing later).
+      Replaced with a Summary stat row (Documents Checked/Passed/Review
+      Required) + doc-type filters + a single unified Document Review
+      List, each card showing an explicit Authenticity Status pill,
+      Detected Signals (via the new shared evidence util), and - only
+      when applicable - a secondary "Transaction: X" line sourced from
+      the transaction_context now embedded directly in GET /authenticity
+      (no extra HTTP calls). One request, one render, no layout jump.
+    - auditor-authenticity-detail.component.ts: documentEvidenceRows now
+      delegates to the shared util instead of duplicating ~60 lines of
+      identical logic; removed now-orphaned evidenceEntry()/
+      visualEvidence helpers left unused by that change.
+
+Why:
+  All five were found by tracing the real PO3006231/A Waner enterprise
+  transaction (1 PO, 2 invoices, 2 GRs) the user was auditing: Record
+  Detail showed "Mismatch Detected" and a red Amount/Line Items pill
+  for a correctly-allocated partial invoice, the Authenticity list and
+  detail pages showed contradictory signals for the same document, the
+  Authenticity page visibly jumped while loading, the Transaction
+  Overview card pushed the actually-important Exception/Matching
+  information below the fold, and two spellings of the same vendor name
+  ("A WANER..." vs "A.Waner...") showed as a false mismatch.
+
+Test results:
+  - python tests/extraction/run_all.py - all 25 suites pass (one
+    transient flake on a first pass reproduced as clean on an immediate
+    re-run, both in isolation and in the full suite - each suite runs
+    in its own subprocess, so no shared state from these changes could
+    have caused it).
+  - Two targeted live smoke tests against the real local Postgres dev
+    DB (rows created and cleaned up, DB left exactly as found): the
+    PO3006231-style partial-allocation scenario now returns match_
+    result.overall_status "PASS" (was "FAIL") with invoice_result.
+    allocated_amount correctly matching the invoice's own amount; an
+    invoice/PO/GR authenticity_checks row all correctly resolve
+    transaction_context for the same package.
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size and record-detail CSS budget warnings, no
+    new errors).
+
+Build result:
+  Backend: all 25 test suites pass. Frontend: clean production build,
+  exit 0.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0. No prompts, engines, or AI-facing
+  routes were touched.
+
+Known limitation:
+  FIX 1 (allocation-aware comparison) only takes effect when
+  ENTERPRISE_MATCHING_V2_ENABLED is on - an existing config toggle,
+  unchanged by this phase (defaults to false in this repo's local
+  .env.example; must already be enabled wherever the original bug
+  screenshots were taken from, since Enterprise Matching Summary/
+  po_fulfilment data was visible there).
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - no migration step, no new
+     environment variables.
+  2. Redeploy the Render FRONTEND - the corrected Record Detail,
+     Authenticity list, and Authenticity Detail pages are immediately
+     available.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend/frontend build - this phase changes
+  only presentation/interpretation logic and reads existing tables, so
+  rolling back has no data-cleanup implications.

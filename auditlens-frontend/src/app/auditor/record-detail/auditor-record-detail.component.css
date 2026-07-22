@@ -1272,12 +1272,18 @@
 .enterprise-fulfilment-stat { display: flex; flex-direction: column; gap: 4px; padding: 12px; background: var(--bg-hover); border-radius: 10px; }
 .enterprise-stat-value { font-size: 16px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
-/* Enterprise V3 Phase 6 — Transaction Overview card (reuses .comparison-card/.enterprise-* above; only genuinely new rules here). */
-.txn-overview-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-.txn-package-name { font-size: 13px; font-weight: 600; color: var(--text-primary); margin: 4px 0 2px; }
+/* Enterprise V3 Phase 6/7 — Transaction Overview card (reuses .comparison-card/.enterprise-* above; only genuinely new rules here). */
+.txn-package-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .txn-status-draft { background: var(--bg-hover); color: var(--text-secondary); }
 .txn-status-waiting_documents { background: var(--warning-bg); color: var(--warning); }
 .txn-status-processing { background: var(--accent-bg); color: var(--accent-soft); }
 .txn-status-completed { background: var(--success-bg); color: var(--success); }
 .txn-clickable { cursor: pointer; }
-.txn-related-current .enterprise-related-name { text-decoration: underline; }
+.txn-clickable.enterprise-related-name, .txn-clickable.enterprise-stat-label { text-decoration: underline; text-decoration-color: var(--border); }
+.enterprise-related-name.txn-related-current { text-decoration-color: var(--accent-soft); font-weight: 700; }
+
+/* Bug 3/FIX 4 — compact Transaction Context (replaces the old, taller
+   Transaction Overview header + Related Documents list). */
+.txn-context-compact { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.txn-context-main { display: flex; align-items: center; gap: 8px; }
+.txn-context-breakdown { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-secondary); }

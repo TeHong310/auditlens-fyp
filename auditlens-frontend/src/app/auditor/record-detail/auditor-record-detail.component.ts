@@ -763,10 +763,18 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   // the raw values the API already returns, so the table can show a
   // per-column relationship instead of only the aggregate match flags.
 
+  // Enterprise V3 Phase 7 (FIX 5): must match helpers/entity_normalizer.
+  // py::normalize_company_name's punctuation handling exactly — that
+  // backend function replaces punctuation with a SPACE, not empty
+  // string. Stripping to empty (the previous bug here) merged
+  // "A." + "Waner" into "awaner" while "A WANER" stayed "a waner",
+  // making two names the backend already treats as identical (see
+  // match_result.vendor_match) render as "Differ" on this row's
+  // client-side pill.
   private normalizeVendor(name: string | null | undefined): string {
     if (!name) return '';
     return name.toLowerCase()
-      .replace(/[.,()]/g, '')
+      .replace(/[.,()]/g, ' ')
       .replace(/\bsdn\s*bhd\b/g, '')
       .replace(/\bberhad\b/g, '')
       .replace(/\s+/g, ' ')
@@ -850,8 +858,49 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return side === 'po' ? !!li.missing_on_po : !!li.missing_on_gr;
   }
 
+  // ── Enterprise V3 Phase 7 (FIX 1b) — allocation-aware Amount/Line
+  // Items display. build_comparison() always returns invoice_result
+  // (Enterprise V2's own allocation verdict, already computing
+  // allocated_amount/allocated_quantity across every PO this invoice is
+  // linked to — see helpers/enterprise_matching.py::compute_invoice_
+  // result) whenever engine_version === 'v2'. No new calculation here:
+  // this only decides which already-computed number the Field
+  // Comparison table's PO-side cells compare the invoice against. ──
+
+  get isV2Allocated(): boolean {
+    return this.comparison?.engine_version === 'v2' && !!this.comparison?.invoice_result;
+  }
+
+  // The value the Amount row's PO-side cell should be compared against:
+  // this invoice's allocated share of the PO(s) it's linked to (correct
+  // for a partial-fulfilment invoice) rather than the PO's full total
+  // (only correct for a plain 1:1 invoice-to-PO record — which is
+  // exactly what allocated_amount equals in that case too, so this is a
+  // pure superset fix, not a behavior change for the single-invoice
+  // workflow).
+  get amountCompareBasis(): number | null {
+    if (this.isV2Allocated && this.comparison.invoice_result.allocated_amount != null) {
+      return this.comparison.invoice_result.allocated_amount;
+    }
+    return this.comparison?.po?.total_amount ?? null;
+  }
+
+  // A PO-side line-item quantity "mismatch" that's actually just this
+  // invoice's partial share of a multi-invoice PO — informational, not
+  // a hard mismatch, as long as V2's own invoice_result found no real
+  // issue (exceeds-remaining-capacity/vendor mismatch/etc., surfaced via
+  // status !== 'PASS') and the invoice never bills MORE than the PO
+  // line (that would be a genuine over-invoicing problem regardless of
+  // allocation, and must still show as a mismatch).
+  private isPartialAllocationLineItem(li: any): boolean {
+    if (!this.isV2Allocated || this.comparison.invoice_result.status !== 'PASS') return false;
+    if (li.po_quantity == null || li.invoice_quantity == null) return false;
+    return li.invoice_quantity <= li.po_quantity + 0.01;
+  }
+
   lineItemRowClass(li: any): string[] {
-    const hardIssue = li.quantity_match === false || li.missing_on_invoice || li.missing_on_po || li.missing_on_gr;
+    const poQtyIssue = li.quantity_match === false && !this.isPartialAllocationLineItem(li);
+    const hardIssue = poQtyIssue || li.missing_on_invoice || li.missing_on_po || li.missing_on_gr;
     if (hardIssue) return ['row-mismatch', 'row-quantity-alert'];
     // amount_match is a SOFT check (drives the amber REVIEW banner state,
     // never red FAIL) — still needs a visible row indicator, or it would
@@ -866,17 +915,20 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
 
   lineItemPillClass(li: any, side: 'po' | 'gr'): string {
     if (this.lineItemMissing(li, side)) return 'pill-differ';
+    if (side === 'po' && li.quantity_match === false && this.isPartialAllocationLineItem(li)) return 'pill-na';
     return this.rowMatchPillClass(li.quantity_match);
   }
 
   lineItemPillIcon(li: any, side: 'po' | 'gr'): string {
     if (this.lineItemMissing(li, side)) return 'ph-warning';
+    if (side === 'po' && li.quantity_match === false && this.isPartialAllocationLineItem(li)) return 'ph-info';
     return this.rowMatchIcon(li.quantity_match);
   }
 
   lineItemPillText(li: any, side: 'po' | 'gr'): string {
     if (side === 'po' && li.missing_on_po) return 'Missing on PO';
     if (side === 'gr' && li.missing_on_gr) return 'Missing on GR';
+    if (side === 'po' && li.quantity_match === false && this.isPartialAllocationLineItem(li)) return 'Partial Allocation';
     return this.rowMatchText(li.quantity_match);
   }
 

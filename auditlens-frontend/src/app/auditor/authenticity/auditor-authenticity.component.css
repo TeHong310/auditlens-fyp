@@ -170,8 +170,17 @@
   white-space: nowrap;
 }
 
-.badge-yes { background: var(--success-bg); color: var(--success); }
-.badge-no  { background: var(--danger-bg); color: var(--danger); }
+.badge-yes  { background: var(--success-bg); color: var(--success); }
+.badge-no   { background: var(--danger-bg); color: var(--danger); }
+.badge-warn { background: var(--warning-bg); color: var(--warning); }
+.badge-na   { background: var(--bg-hover); color: var(--text-secondary); }
+
+/* Enterprise V3 Phase 7 (FIX 2/Bug 3) — explicit Authenticity Status pill
+   per card, and the transaction secondary-context line. */
+.status-pill { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.status-pass   { background: var(--success-bg); color: var(--success); }
+.status-review { background: var(--warning-bg); color: var(--warning); }
+.card-transaction-line { font-size: 11.5px; color: var(--accent-soft); display: flex; align-items: center; gap: 4px; }
 
 .ai-box {
   background: var(--accent-bg);
@@ -256,14 +265,3 @@
   .card-time { margin-left: 0; }
   .badge-row { flex-direction: column; align-items: flex-start; }
 }
-
-/* Enterprise V3 Phase 6 — Transaction-grouped authenticity (STEP 8 / Additional Requirement). */
-.txn-group-section { margin-bottom: 20px; }
-.txn-group-card { background: var(--bg-card); border-radius: 12px; margin-bottom: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); overflow: hidden; }
-.txn-group-header { display: flex; align-items: center; gap: 10px; padding: 14px 16px; cursor: pointer; }
-.txn-group-name { font-size: 14px; font-weight: 700; color: var(--text-primary); flex: 1; }
-.txn-group-docs { border-top: 1px solid var(--bg-hover); padding: 6px 16px 10px 40px; }
-.txn-group-doc-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; cursor: pointer; font-size: 13px; color: var(--text-primary); }
-.group-status-pass    { background: var(--success-bg); color: var(--success); }
-.group-status-review  { background: var(--warning-bg); color: var(--warning); }
-.group-status-pending { background: var(--bg-hover); color: var(--text-secondary); }

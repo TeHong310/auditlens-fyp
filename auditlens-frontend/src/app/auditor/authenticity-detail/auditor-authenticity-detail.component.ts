@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
+import { getAuthenticityEvidenceRows, EvidenceRow, RowStatus } from '../shared/authenticity-evidence.util';
 
 type SignalKey = 'has_company_chop' | 'has_company_logo' | 'has_company_name' | 'has_signature';
 
@@ -11,17 +12,6 @@ const SIGNAL_LABELS: Record<SignalKey, string> = {
   has_company_chop: 'Company Chop',
   has_signature: 'Signature',
   has_company_logo: 'Company Logo',
-};
-
-const EVIDENCE_KEYS = ['company_logo', 'company_name', 'supplier_address', 'stamp', 'signature'] as const;
-type EvidenceKey = typeof EVIDENCE_KEYS[number];
-
-const EVIDENCE_LABELS: Record<EvidenceKey, string> = {
-  company_logo:     'Supplier Logo',
-  company_name:     'Supplier Name',
-  supplier_address: 'Supplier Address',
-  stamp:            'Stamp / Chop',
-  signature:        'Signature',
 };
 
 const CONSISTENCY_LABELS: Record<string, string> = {
@@ -37,20 +27,6 @@ const RISK_LABELS: Record<string, string> = {
   alignment_consistency:  'Alignment Consistency',
   alteration_risk:        'Alteration Risk',
 };
-
-type RowStatus = 'yes' | 'no' | 'warn' | 'na';
-
-// A Document Evidence row is either derived from a real detection signal,
-// or a static informational row (e.g. "Supplier Logo: Optional" on a
-// PO/GR — the letterhead on those document types is normally the buyer's
-// own branding, so there's usually no distinct supplier logo to find at
-// all, and that must never read as a failure).
-interface EvidenceRow {
-  label: string;
-  status: RowStatus;
-  statusLabel: string;
-  reason?: string;
-}
 
 @Component({
   selector: 'app-auditor-authenticity-detail',
@@ -179,10 +155,6 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return this.check?.ai_visual_result?.supplier_identity || null;
   }
 
-  get visualEvidence(): any {
-    return this.check?.ai_visual_result?.document_visual_evidence || null;
-  }
-
   get integrityCheck(): any {
     return this.check?.ai_visual_result?.integrity_check || null;
   }
@@ -217,10 +189,6 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
 
   get consistencyKeys(): string[] {
     return Object.keys(CONSISTENCY_LABELS);
-  }
-
-  evidenceEntry(key: EvidenceKey): any {
-    return this.visualEvidence?.[key] || null;
   }
 
   riskLevelClass(level: string): string {
@@ -309,76 +277,12 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   }
 
   // ── Section B: Document Evidence (document-type-specific wording) ──
-
-  // v4: stamp classification (company_chop/received_stamp/qc_stamp/
-  // approval_stamp) — folded into the stamp row's label below.
-  private stampTypeLabel(): string {
-    const type = this.evidenceEntry('stamp')?.type;
-    if (!type) return '';
-    return type.split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-  }
-
-  private evidenceRowFromKey(key: EvidenceKey, label: string): EvidenceRow {
-    const entry = this.evidenceEntry(key);
-    const detected = !!(entry?.status === 'detected' || entry?.detected);
-    const required = entry?.required !== false;
-    let status: RowStatus;
-    let statusLabel: string;
-    if (detected) {
-      status = 'yes'; statusLabel = 'Detected';
-    } else if (!required) {
-      status = 'na'; statusLabel = 'Not Required';
-    } else {
-      status = 'warn'; statusLabel = 'Needs Review';
-    }
-    if (key === 'stamp') {
-      const t = this.stampTypeLabel();
-      if (t) label = `${label} (${t})`;
-    }
-    return { label, status, statusLabel, reason: entry?.reason };
-  }
-
-  private supplierInfoRow(): EvidenceRow {
-    const detected = !!(this.supplierIdentity?.supplier_name_detected || this.supplierIdentity?.address_detected);
-    return {
-      label: 'Supplier Information Present',
-      status: detected ? 'yes' : 'warn',
-      statusLabel: detected ? 'Detected' : 'Needs Review',
-    };
-  }
-
-  // PO/GR letterheads are normally the BUYER's own branding — a distinct
-  // supplier logo is usually absent by design, so it's shown as a
-  // static, always-neutral row rather than a detection result.
-  private static readonly SUPPLIER_LOGO_OPTIONAL_ROW: EvidenceRow = {
-    label: 'Supplier Logo',
-    status: 'na',
-    statusLabel: 'Optional',
-  };
+  // Enterprise V3 Phase 7 (FIX 3): delegates to the shared util also used
+  // by the Authenticity list page's "Detected Signals" badges, so both
+  // pages can never disagree about the same document again.
 
   get documentEvidenceRows(): EvidenceRow[] {
-    if (!this.hasNewResult) return [];
-    if (this.documentType === 'po') {
-      return [
-        this.evidenceRowFromKey('company_logo', 'Buyer / Issuer Letterhead Detected'),
-        this.supplierInfoRow(),
-        AuditorAuthenticityDetailComponent.SUPPLIER_LOGO_OPTIONAL_ROW,
-      ];
-    }
-    if (this.documentType === 'gr') {
-      return [
-        this.evidenceRowFromKey('company_logo', 'Receiver / Buyer Letterhead Detected'),
-        this.supplierInfoRow(),
-        this.evidenceRowFromKey('stamp', 'QC / Receiving Stamp Detected'),
-        AuditorAuthenticityDetailComponent.SUPPLIER_LOGO_OPTIONAL_ROW,
-      ];
-    }
-    // invoice (default)
-    return [
-      this.evidenceRowFromKey('company_logo', 'Supplier Branding / Logo Detected'),
-      this.evidenceRowFromKey('stamp', 'Received Stamp Detected'),
-      this.evidenceRowFromKey('signature', 'Signature'),
-    ];
+    return getAuthenticityEvidenceRows(this.check, this.documentType);
   }
 
   // ── Final recommendation ──

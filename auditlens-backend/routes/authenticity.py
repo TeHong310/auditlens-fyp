@@ -9,12 +9,39 @@ from helpers.authenticity_check import (
     run_authenticity_check, save_rendered_authenticity_image, AUTHENTICITY_IMAGE_DIR
 )
 from helpers.auth_rules import compute_authentication
+from helpers.transaction_packages import get_transaction_context_for_document
 from routes.auditor import _build_comparison, _vendor_match_all
 
 authenticity_bp = Blueprint('authenticity', __name__)
 
 VALID_STATUSES = ('passed', 'warning')
 VALID_DOC_TYPES = ('invoice', 'po', 'gr')
+
+# authenticity_checks.document_type uses 'invoice'/'po'/'gr'; transaction_
+# package_documents.document_role uses 'invoice'/'purchase_order'/
+# 'goods_receipt' — same distinction already handled in helpers/
+# transaction_packages.py::get_transaction_authenticity_summary.
+_DOC_TYPE_TO_ROLE = {'invoice': 'invoice', 'po': 'purchase_order', 'gr': 'goods_receipt'}
+
+
+def _transaction_context_for_row(row):
+    """Enterprise V3 Phase 7 (FIX 2) — the transaction package context for
+    an authenticity_checks row, or None for a standalone document. Reuses
+    get_transaction_context_for_document() (Phase 6) unchanged; only
+    translates document_type + the row's own po_id/gr_id into the
+    (document_role, document_id) shape that function expects, since
+    transaction_package_documents links PO/GR by po_id/gr_id while
+    authenticity_checks keys PO/GR rows by the invoice document_id they
+    were uploaded alongside (the same distinction already handled by
+    get_transaction_authenticity_summary's host_document_id lookup)."""
+    doc_type = row.get('document_type')
+    role = _DOC_TYPE_TO_ROLE.get(doc_type)
+    if role is None:
+        return None
+    lookup_id = row['document_id'] if doc_type == 'invoice' else row.get('po_id') if doc_type == 'po' else row.get('gr_id')
+    if not lookup_id:
+        return None
+    return get_transaction_context_for_document(lookup_id, role)
 
 
 def _with_authentication_score(row):
@@ -36,6 +63,12 @@ def _with_authentication_score(row):
         'doc_number':   bool(row.get('document_number')),
     }
     row.update(compute_authentication(row.get('document_type'), detected_signals))
+    # Enterprise V3 Phase 7 (FIX 2): both GET /authenticity (list) and
+    # GET /authenticity/<id> (detail) already call this function on
+    # every row, so this is the one shared place to add transaction_
+    # context once instead of duplicating the enrichment call in both
+    # route handlers.
+    row['transaction_context'] = _transaction_context_for_row(row)
     return row
 
 # Reused by both GET endpoints: joins to whichever source table actually has

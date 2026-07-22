@@ -1109,6 +1109,22 @@ def get_record_comparison(invoice_document_id):
         result = dict(result)
         result['transaction_context'] = get_transaction_context_for_document(invoice_document_id, 'invoice')
 
+        # Enterprise V3 Phase 7 (FIX 1a): every OTHER V2-aware consumer in
+        # this app (Dashboard, Exceptions, Report, AI Assistant) already
+        # normalizes through _matching_status_for_comparison() instead of
+        # reading match_result.overall_status raw, specifically because
+        # the raw value can be a false FAIL for a correctly-allocated
+        # multi-invoice PO — _build_comparison_v2() recomputes
+        # match_result independently using the same single-invoice-vs-
+        # full-PO logic as the legacy engine (see that function's own
+        # docstring, "the PO3006231 example"). Record Detail was the one
+        # consumer that never got this fix. No new matching calculation:
+        # reuses the exact same function every other consumer already
+        # trusts, and is a no-op for non-V2 (legacy) comparisons since
+        # that function falls back to the same raw value in that case.
+        result['match_result'] = dict(result['match_result'])
+        result['match_result']['overall_status'] = _matching_status_for_comparison(result)
+
         return jsonify(result), 200
 
     except Exception as e:
