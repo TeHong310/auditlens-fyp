@@ -10278,3 +10278,75 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous frontend build - no backend/data changes this
   round at all.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 13 (UX refinement): compacted the "Enterprise Three-way
+  Matching" card on Record Detail, which had become redundant with the
+  Field Comparison table above it (now allocation-aware per Phase 11/12)
+  and, for package-grouped invoices, with the Transaction Overview's
+  own Matching Summary.
+
+  Frontend (auditlens-frontend/):
+    - auditor-record-detail.component.html: replaced the large card
+      (a full "Related Documents" list of every PO/invoice/GR by name,
+      plus a per-PO Ordered/Invoiced/Received/Remaining 4-stat grid) with
+      a compact "Three-way Match" summary: Status pill, a one-line
+      PO/Invoice/GR document-count breakdown (reusing the same compact
+      count-row style already used by the Transaction Context card),
+      and a single Fulfilment verdict pill ("Fully Matched" / "Review
+      Required"). Every value still comes from the exact same
+      comparison.invoice_result/related_purchase_orders/related_
+      invoices/related_goods_receipts/po_fulfilment fields build_
+      comparison() already returns.
+    - auditor-record-detail.component.ts: replaced fulfilmentStatusText/
+      fulfilmentStatusPillClass (per-PO status label/pill mapping, no
+      longer used by anything after the card was compacted) with
+      fulfilmentSummaryText/fulfilmentSummaryClass - a single aggregate
+      verdict across every related PO (Fully Matched only when ALL of
+      them report FULLY_FULFILLED).
+    - auditor-record-detail.component.css: removed the now-orphaned
+      .enterprise-fulfilment-grid/.enterprise-fulfilment-stat/.
+      enterprise-fulfilment-status-row/.enterprise-related-section/.
+      enterprise-related-group rules (no longer referenced anywhere in
+      the template); every class still used elsewhere (by the
+      Transaction Overview's own Matching Summary section) was left
+      untouched.
+
+Why:
+  The Field Comparison table (already allocation-aware since Phase 11/
+  12) and, for package-grouped invoices, the Transaction Overview's
+  Matching Summary already show the same PO/invoice/GR names and
+  fulfilment detail this card was duplicating, making the page longer
+  than it needed to be without adding new information.
+
+  No backend files were touched - Enterprise Matching V2's calculation,
+  API response shape, and report usage are completely unchanged;
+  helpers/enterprise_matching.py and helpers/relationship_builder.py
+  were not modified. This was purely a frontend presentation change.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; the
+    record-detail component's CSS budget usage actually decreased
+    slightly, from 21.93kB to 21.52kB, from removing the orphaned
+    rules; same pre-existing bundle-size warning, no new errors).
+  - No backend changes this round, so python tests/extraction/run_all.py
+    was not re-run (nothing in it could have been affected).
+
+Build result:
+  Frontend: clean production build, exit 0. Backend: unchanged.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. No backend redeploy needed this round.
+  2. Redeploy the Render FRONTEND - the compact Three-way Match card is
+     immediately available.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no backend/data changes this
+  round at all.

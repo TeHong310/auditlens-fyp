@@ -1004,17 +1004,19 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return Number.isInteger(n) ? String(n) : n.toFixed(2);
   }
 
-  // ── Enterprise Matching Summary (Phase 4) — status pill mapping for
-  // po_fulfilment.status, reusing the existing .match-pill/.pill-*
-  // classes so this section matches the page's existing visual style. ──
-  fulfilmentStatusText(status: string): string {
-    return (status || '').replace(/_/g, ' ');
+  // ── Three-way Match card (Phase 4, compacted Phase 13) — one-line
+  // fulfilment verdict across every related PO, reusing the existing
+  // .match-pill/.pill-* classes. Reads ONLY comparison.po_fulfilment,
+  // already computed and returned by build_comparison() — no
+  // calculation happens here. ──
+  get fulfilmentSummaryText(): string {
+    const pf = this.comparison?.po_fulfilment || [];
+    if (!pf.length) return 'N/A';
+    return pf.every((p: any) => p.status === 'FULLY_FULFILLED') ? 'Fully Matched' : 'Review Required';
   }
 
-  fulfilmentStatusPillClass(status: string): string {
-    if (status === 'FULLY_FULFILLED' || status === 'FULLY_INVOICED' || status === 'FULLY_RECEIVED') return 'pill-match';
-    if (status === 'OVER_INVOICED' || status === 'OVER_RECEIVED' || status === 'REVIEW_REQUIRED') return 'pill-differ';
-    return 'pill-before';
+  get fulfilmentSummaryClass(): string {
+    return this.fulfilmentSummaryText === 'Fully Matched' ? 'pill-match' : 'pill-differ';
   }
 
   // ── Formatting ───────────────────────────────────────────

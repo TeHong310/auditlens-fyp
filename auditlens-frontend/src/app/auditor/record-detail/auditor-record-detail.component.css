@@ -1257,19 +1257,14 @@
 
 /* Enterprise Matching Summary — Phase 4. Reuses existing .comparison-
    card/.source-docs-title/.match-pill/.pill-* styles; minimal new CSS. */
-.enterprise-status-row, .enterprise-fulfilment-status-row { display: flex; align-items: center; gap: 10px; }
-.enterprise-status-row { margin-bottom: 18px; }
+.enterprise-status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
 .enterprise-status-label, .enterprise-stat-label { color: var(--text-secondary); font-weight: 500; font-size: 13px; }
-.enterprise-related-section, .enterprise-fulfilment-section { margin-top: 4px; padding-top: 18px; border-top: 1px solid var(--bg-hover); }
-.enterprise-related-group { margin-bottom: 14px; }
-.enterprise-related-group:last-child { margin-bottom: 0; }
+.enterprise-fulfilment-section { margin-top: 4px; padding-top: 18px; border-top: 1px solid var(--bg-hover); }
 .enterprise-related-label { font-size: 11px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
 .enterprise-related-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 14px; color: var(--text-primary); }
 .enterprise-check-icon { color: var(--success); font-size: 15px; }
 .enterprise-related-name { font-weight: 600; }
 .enterprise-related-detail { color: var(--text-secondary); font-size: 12px; margin-left: auto; }
-.enterprise-fulfilment-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
-.enterprise-fulfilment-stat { display: flex; flex-direction: column; gap: 4px; padding: 12px; background: var(--bg-hover); border-radius: 10px; }
 .enterprise-stat-value { font-size: 16px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
 /* Enterprise V3 Phase 6/7 — Transaction Overview card (reuses .comparison-card/.enterprise-* above; only genuinely new rules here). */

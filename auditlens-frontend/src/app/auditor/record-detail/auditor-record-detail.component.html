@@ -424,10 +424,22 @@
              response (GET /auditor/record/<id>/comparison already
              returns build_comparison()'s result) — no new API call, no
              new calculation performed here. -->
+        <!-- Enterprise V3 Phase 13 — compact Three-way Match summary.
+             The per-document Related Documents list and the per-PO
+             Ordered/Invoiced/Received/Remaining grid are already
+             covered by the Field Comparison table above (which now
+             shows allocation-aware quantities per line item, per
+             Phase 11/12) and, when this invoice is in a Transaction
+             Package, by the Transaction Overview's own Matching
+             Summary — so this card only needs to say status + counts +
+             a one-line fulfilment verdict. Every value here still comes
+             straight from the SAME comparison.invoice_result/related_*/
+             po_fulfilment fields build_comparison() already returns —
+             no calculation happens in this component, and nothing about
+             what the backend computes or returns changed. -->
         <div class="comparison-card" *ngIf="comparison.engine_version === 'v2'">
           <div class="comparison-card-header">
-            <h2 class="comparison-title"><i class="ph-duotone ph-flow-arrow"></i> Enterprise Three-way Matching</h2>
-            <p class="comparison-subtitle">Cumulative matching across all related documents</p>
+            <h2 class="comparison-title"><i class="ph-duotone ph-flow-arrow"></i> Three-way Match</h2>
           </div>
 
           <div class="enterprise-status-row">
@@ -438,59 +450,15 @@
             </span>
           </div>
 
-          <div class="enterprise-related-section" *ngIf="comparison.related_purchase_orders?.length || comparison.related_invoices?.length || comparison.related_goods_receipts?.length">
-            <h3 class="source-docs-title"><i class="ph-duotone ph-files"></i> Related Documents</h3>
-
-            <div class="enterprise-related-group" *ngIf="comparison.related_purchase_orders?.length">
-              <p class="enterprise-related-label">Purchase Orders</p>
-              <div class="enterprise-related-item" *ngFor="let relPo of comparison.related_purchase_orders">
-                <i class="ph-duotone ph-file-text enterprise-check-icon"></i>
-                <span class="enterprise-related-name">{{ relPo.po_number || ('PO #' + relPo.po_id) }}</span>
-              </div>
-            </div>
-
-            <div class="enterprise-related-group" *ngIf="comparison.related_invoices?.length">
-              <p class="enterprise-related-label">Invoices</p>
-              <div class="enterprise-related-item" *ngFor="let relInv of comparison.related_invoices">
-                <i class="ph-duotone ph-check-circle enterprise-check-icon"></i>
-                <span class="enterprise-related-name">{{ relInv.invoice_number || ('Invoice #' + relInv.document_id) }}</span>
-                <span class="enterprise-related-detail">Amount: {{ formatAmount(relInv.total_amount, relInv.currency) }}</span>
-              </div>
-            </div>
-
-            <div class="enterprise-related-group" *ngIf="comparison.related_goods_receipts?.length">
-              <p class="enterprise-related-label">Goods Receipts</p>
-              <div class="enterprise-related-item" *ngFor="let relGr of comparison.related_goods_receipts">
-                <i class="ph-duotone ph-check-circle enterprise-check-icon"></i>
-                <span class="enterprise-related-name">{{ relGr.gr_number || ('GR #' + relGr.gr_id) }}</span>
-              </div>
-            </div>
+          <div class="txn-context-breakdown" style="margin-top:10px;">
+            <span>PO: {{ comparison.related_purchase_orders?.length || 0 }}</span>
+            <span>Invoice: {{ (comparison.related_invoices?.length || 0) + 1 }}</span>
+            <span>GR: {{ comparison.related_goods_receipts?.length || 0 }}</span>
           </div>
 
-          <div class="enterprise-fulfilment-section" *ngFor="let pf of comparison.po_fulfilment">
-            <h3 class="source-docs-title"><i class="ph-duotone ph-chart-bar"></i> Fulfilment — {{ pf.po_number || ('PO #' + pf.po_id) }}</h3>
-            <div class="enterprise-fulfilment-grid">
-              <div class="enterprise-fulfilment-stat">
-                <span class="enterprise-stat-label">Ordered</span>
-                <span class="enterprise-stat-value">{{ formatQuantity(pf.ordered_quantity) }}</span>
-              </div>
-              <div class="enterprise-fulfilment-stat">
-                <span class="enterprise-stat-label">Invoiced</span>
-                <span class="enterprise-stat-value">{{ formatQuantity(pf.invoiced_quantity_cumulative) }}</span>
-              </div>
-              <div class="enterprise-fulfilment-stat">
-                <span class="enterprise-stat-label">Received</span>
-                <span class="enterprise-stat-value">{{ formatQuantity(pf.received_quantity_cumulative) }}</span>
-              </div>
-              <div class="enterprise-fulfilment-stat">
-                <span class="enterprise-stat-label">Remaining</span>
-                <span class="enterprise-stat-value">{{ formatQuantity(pf.remaining_to_invoice) }}</span>
-              </div>
-            </div>
-            <div class="enterprise-fulfilment-status-row">
-              <span class="enterprise-status-label">Status</span>
-              <span class="match-pill" [ngClass]="fulfilmentStatusPillClass(pf.status)">{{ fulfilmentStatusText(pf.status) }}</span>
-            </div>
+          <div class="enterprise-status-row" style="margin-top:10px;" *ngIf="comparison.po_fulfilment?.length">
+            <span class="enterprise-status-label">Fulfilment</span>
+            <span class="match-pill" [ngClass]="fulfilmentSummaryClass">{{ fulfilmentSummaryText }}</span>
           </div>
         </div>
       </div>
