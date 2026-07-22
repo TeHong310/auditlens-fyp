@@ -300,6 +300,7 @@
                       {{ formatQuantity(lineItemPoDisplayQuantity(li)) }}<span class="cell-muted" *ngIf="li.quantity_match === false && isPartialAllocationLineItem(li)" style="font-size:11px;"> (Allocated)</span>
                     </div>
                     <div class="cell-muted" style="font-size:11px;margin-top:2px;" *ngIf="li.quantity_match === false && isPartialAllocationLineItem(li)">PO Ordered (context): {{ formatQuantity(li.po_quantity) }}</div>
+                    <div class="cell-muted" style="font-size:11px;margin-top:2px;font-style:italic;" *ngIf="showPoDescription(li)">PO Item: {{ li.po_description }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">
                     <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
@@ -311,6 +312,7 @@
                       <i class="ph-duotone" [ngClass]="lineItemPillIcon(li, 'gr')"></i> {{ lineItemPillText(li, 'gr') }}
                     </span>
                     <div class="cell-main-value cell-quantity" *ngIf="!li.missing_on_gr">{{ formatQuantity(li.gr_quantity) }}</div>
+                    <div class="cell-muted" style="font-size:11px;margin-top:2px;font-style:italic;" *ngIf="showGrDescription(li)">GR Item: {{ li.gr_description }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.gr">
                     <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>

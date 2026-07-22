@@ -10090,3 +10090,99 @@ Rollback instructions:
   Redeploy the previous backend build - this fix only removes one key
   from returned dicts before they're serialized; no data written, no
   schema change.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 11: fixed false "Missing on PO"/"Missing on Invoice" line-item
+  labels for a genuinely-matched item whose wording differs completely
+  across documents.
+
+  Root cause (confirmed via a live reproduction using the exact
+  PO3006231 item text): routes/auditor.py's _find_line_item_match()
+  pairs line items across Invoice/PO/GR by (in order) item_code, exact
+  normalized description, then a substring-containment check. For this
+  real item, no item_code was stored on any side, and the descriptions
+  share no substring relationship at all ("Zipper Bag 205*275mm with
+  Logo" on the PO/GR vs "PRINTING: RECYCLE LOGO (BASE: PE TRAN)(BLACK
+  1+0) - ZIPLOCK BAG 205MM X 275MM..." on the invoice - genuinely the
+  same physical item, described completely differently by each
+  document). All three pairing strategies legitimately failed, so
+  _match_line_items() produced TWO separate unpaired rows instead of
+  one matched row: the invoice's own line with missing_on_po=True, and
+  the PO's line (also pulled in via the GR-pairing pass) with missing_
+  on_invoice=True - exactly the false red labels reported.
+
+  Backend (auditlens-backend/):
+    - routes/auditor.py: _match_line_items() gained a "sole-line-item
+      fallback" - when the invoice has exactly one line item and the
+      document being compared against also has exactly one, they are
+      paired unconditionally, even when item_code/description matching
+      both come up empty. This only applies when there is exactly one
+      unambiguous candidate on each side, so it can never mis-pair one
+      of several genuinely different items - the existing item_code and
+      description matching remain the primary, tried-first signals for
+      the multi-line-item case. Each row also now carries invoice_
+      description/po_description/gr_description (additive) alongside
+      the existing single canonical description, so the frontend can
+      show what each document actually called the item.
+
+  Frontend (auditlens-frontend/):
+    - auditor-record-detail.component.ts/html: Line Items PO/GR cells
+      now show the other document's own wording as small italic context
+      text ("PO Item: ...", "GR Item: ...") whenever it genuinely
+      differs from the canonical description shown in the row's
+      field-name column - informational only, never styled as a
+      mismatch.
+
+Why:
+  Once a line item is correctly paired on one row, the EXISTING
+  allocation-aware display logic (Phase 7/8's isPartialAllocationLineItem/
+  lineItemPoDisplayQuantity) already renders it correctly as an
+  allocation Match with the PO's full quantity shown as context - no
+  further frontend changes were needed for that part. The only actual
+  gap was that the item never got paired into one row in the first
+  place.
+
+  enterprise_matching.py and relationship_builder.py were not touched -
+  this was a line-item pairing issue local to routes/auditor.py, not a
+  matching-calculation or relationship-building issue. OCR, Claude/
+  Gemini extraction, and the authenticity engine were not touched
+  either.
+
+Test results:
+  - python tests/extraction/run_all.py - all 25 suites pass, including
+    test_entity_and_line_items.py (no regression in existing line-item
+    matching behavior for documents with multiple, genuinely different
+    items).
+  - Live smoke test against the real local Postgres dev DB (rows
+    created and cleaned up) reproducing the exact reported scenario -
+    single-line-item invoice/PO/GR trio with the real item text and no
+    item_code stored, correct V2 allocation relationships already
+    established: line_items now returns exactly ONE row (previously
+    would have been two), missing_on_invoice/missing_on_po/missing_on_gr
+    all False, invoice/PO/GR quantities (15000/30000/15000) all present
+    on that one row, per-document descriptions preserved, and overall_
+    status "PASS" (not a false FAIL).
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+
+Build result:
+  Backend: all 25 test suites pass. Frontend: clean production build,
+  exit 0.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - no migration step, no new
+     environment variables.
+  2. Redeploy the Render FRONTEND - the corrected Line Items pairing
+     and description context text are immediately available.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend/frontend build - no schema change, no
+  new data written; this only affects how existing document_line_items
+  rows are paired and displayed at read time.

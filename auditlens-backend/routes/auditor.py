@@ -192,6 +192,11 @@ def _match_line_items(invoice_items, po_items, gr_items):
     extraction would flag EVERY invoice item as "missing" on that
     document, which is a false signal about extraction, not the audit.
 
+    When exactly one line item exists on each side being compared, they
+    are paired unconditionally (the "sole-line-item fallback" below)
+    even if item_code/description matching both come up empty — see
+    that block's own comment for why this is safe.
+
     Returns (rows, has_hard_mismatch, has_soft_mismatch):
       rows: one dict per distinct matched item, in invoice-then-PO-only-
         then-GR-only order: {'description', 'item_code', 'invoice_
@@ -261,6 +266,16 @@ def _match_line_items(invoice_items, po_items, gr_items):
         rows.append({
             'description':        description,
             'item_code':          item_code,
+            # Per-document descriptions (additive) — the SAME physical
+            # item is often worded completely differently on each
+            # document (e.g. a PO's "Zipper Bag 205*275mm with Logo" vs
+            # the supplier's own invoice line "PRINTING: RECYCLE LOGO...
+            # ZIPLOCK BAG 205MM X 275MM..."), so the single canonical
+            # `description` above isn't enough context on its own; the
+            # frontend can show these side by side.
+            'invoice_description': inv_item.get('description') if inv_item else None,
+            'po_description':      po_item.get('description') if po_item else None,
+            'gr_description':      gr_item.get('description') if gr_item else None,
             'invoice_quantity':   inv_item['quantity'] if inv_item else None,
             'po_quantity':        po_item['quantity'] if po_item else None,
             'gr_quantity':        gr_item['quantity'] if gr_item else None,
@@ -271,12 +286,31 @@ def _match_line_items(invoice_items, po_items, gr_items):
             'missing_on_gr':      missing_on_gr,
         })
 
+    # Sole-line-item fallback: when the invoice has EXACTLY one line item
+    # and the document it's being compared against also has exactly one,
+    # there is no ambiguity about which item corresponds to which — even
+    # if item_code is missing on one side and the wording is completely
+    # different (a real example: PO "Zipper Bag 205*275mm with Logo" vs
+    # the same supplier's own invoice line "PRINTING: RECYCLE LOGO...
+    # ZIPLOCK BAG 205MM X 275MM..." — genuinely the same physical item).
+    # Item-code and description matching (_find_line_item_match, tried
+    # first below) remain the primary, unambiguous signals for the
+    # multi-line-item case; this only applies as a last resort, and only
+    # when there is exactly one candidate to pair with, so it can never
+    # mis-pair one of several genuinely different items.
+    sole_po_match = len(invoice_items) == 1 and len(po_items) == 1
+    sole_gr_match = len(invoice_items) == 1 and len(gr_items) == 1
+
     # Anchor on invoice items first (existing row-ordering convention:
     # invoice-then-PO-only-then-GR-only), pairing each with its best
     # match (if any) among the not-yet-used PO/GR items.
     for inv_item in invoice_items:
         po_idx = _find_line_item_match(inv_item, po_items, po_used) if po_present else None
+        if po_idx is None and sole_po_match and 0 not in po_used:
+            po_idx = 0
         gr_idx = _find_line_item_match(inv_item, gr_items, gr_used) if gr_present else None
+        if gr_idx is None and sole_gr_match and 0 not in gr_used:
+            gr_idx = 0
         if po_idx is not None:
             po_used.add(po_idx)
         if gr_idx is not None:

@@ -915,6 +915,26 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return li.po_quantity;
   }
 
+  // The same physical item is often worded completely differently
+  // across documents (a PO's "Zipper Bag 205*275mm with Logo" vs the
+  // supplier's own invoice line "PRINTING: RECYCLE LOGO...ZIPLOCK BAG
+  // 205MM X 275MM..."). The field-name column shows ONE canonical
+  // description; these surface the OTHER side's own wording as small
+  // context text only when it's actually different — informational,
+  // never a failure signal.
+  private descriptionDiffers(a: string | null | undefined, b: string | null | undefined): boolean {
+    if (!a || !b) return false;
+    return a.trim().toLowerCase() !== b.trim().toLowerCase();
+  }
+
+  showPoDescription(li: any): boolean {
+    return !li.missing_on_po && this.descriptionDiffers(li.po_description, li.description);
+  }
+
+  showGrDescription(li: any): boolean {
+    return !li.missing_on_gr && this.descriptionDiffers(li.gr_description, li.description);
+  }
+
   lineItemRowClass(li: any): string[] {
     const poQtyIssue = li.quantity_match === false && !this.isPartialAllocationLineItem(li);
     const hardIssue = poQtyIssue || li.missing_on_invoice || li.missing_on_po || li.missing_on_gr;
