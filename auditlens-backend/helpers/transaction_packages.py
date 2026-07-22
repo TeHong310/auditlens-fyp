@@ -20,10 +20,13 @@ differs by document_role) mirrors Phase 1's document_relationships
 design exactly, for the same reason: purchase_orders/goods_receipts
 rows have no independent row in `documents`.
 """
+import re
+from decimal import Decimal
 import psycopg2.extras
 from db import get_db_connection
 from helpers.document_relationships import _entity_exists, get_related_invoices, get_related_goods_receipts
-from helpers.relationship_builder import build_relationships_for_invoice
+from helpers.relationship_builder import build_relationships_for_invoice, AMOUNT_TOLERANCE
+from helpers.entity_normalizer import is_same_company
 
 VALID_ROLES = ('invoice', 'purchase_order', 'goods_receipt')
 
@@ -137,6 +140,81 @@ def _rebuild_relationships_for_package(package_id):
                   f"in transaction package {package_id}: {type(e).__name__}: {e}")
 
 
+def _normalize_invoice_number(value):
+    if not value:
+        return ''
+    return re.sub(r'[^a-z0-9]', '', value.lower())
+
+
+_INVOICE_DATE_TOLERANCE_DAYS = 3
+
+
+def find_existing_package_for_invoice(document_id):
+    """Bug 2 fix — before linking an invoice into a package, checks
+    whether an invoice matching by invoice_number + vendor + amount +
+    invoice_date already belongs to a DIFFERENT existing package. Without
+    this, the same real invoice could be linked into two separate
+    packages (nothing enforced document_id uniqueness across packages),
+    with one package showing it correctly matched against its real PO/GR
+    and the other wrongly showing "Missing PO and GR" for the exact same
+    invoice — the relationship builder only ever runs for invoices that
+    are members of THAT specific package (see
+    _rebuild_relationships_for_package), so a fragmented, PO/GR-less
+    package for the same invoice never resolves relationships on its own.
+
+    All four signals must agree (invoice_number normalized-exact,
+    vendor fuzzy via the existing is_same_company(), amount within the
+    existing AMOUNT_TOLERANCE, invoice_date within a few days) —
+    deliberately strict to avoid ever blocking two genuinely different
+    invoices that happen to share one field. No new matching engine:
+    reuses the exact same vendor/amount comparators already trusted
+    elsewhere in this app (helpers/entity_normalizer.py, helpers/
+    relationship_builder.py's own tolerance constant).
+
+    Returns {'package_id', 'package_name', 'document_id'} of the
+    existing match, or None if this invoice isn't already grouped
+    under any other package."""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute(
+            'SELECT invoice_number, vendor_name, total_amount, invoice_date FROM extracted_fields WHERE document_id = %s',
+            (document_id,)
+        )
+        this_inv = cursor.fetchone()
+        if not this_inv or not this_inv['invoice_number']:
+            return None
+
+        cursor.execute(
+            '''SELECT tpd.package_id, tp.package_name, ef.document_id, ef.invoice_number,
+                      ef.vendor_name, ef.total_amount, ef.invoice_date
+               FROM transaction_package_documents tpd
+               JOIN transaction_packages tp ON tp.id = tpd.package_id
+               JOIN extracted_fields ef ON ef.document_id = tpd.document_id
+               WHERE tpd.document_role = 'invoice' AND tpd.document_id != %s''',
+            (document_id,)
+        )
+        candidates = cursor.fetchall()
+    finally:
+        conn.close()
+
+    this_no = _normalize_invoice_number(this_inv['invoice_number'])
+    for c in candidates:
+        if not c['invoice_number'] or _normalize_invoice_number(c['invoice_number']) != this_no:
+            continue
+        if this_inv['vendor_name'] and c['vendor_name']:
+            if not is_same_company(this_inv['vendor_name'], c['vendor_name'])['match']:
+                continue
+        if this_inv['total_amount'] is not None and c['total_amount'] is not None:
+            if abs(Decimal(str(this_inv['total_amount'])) - Decimal(str(c['total_amount']))) > AMOUNT_TOLERANCE:
+                continue
+        if this_inv['invoice_date'] and c['invoice_date']:
+            if abs((this_inv['invoice_date'] - c['invoice_date']).days) > _INVOICE_DATE_TOLERANCE_DAYS:
+                continue
+        return {'package_id': c['package_id'], 'package_name': c['package_name'], 'document_id': c['document_id']}
+    return None
+
+
 def link_document_to_package(package_id, document_id, document_role):
     """Links an already-uploaded document (by whichever id document_
     role implies) into a package, then re-runs the existing relationship
@@ -162,6 +240,19 @@ def link_document_to_package(package_id, document_id, document_role):
         )
         if cursor.fetchone():
             return None, 'this document is already linked to this package'
+
+        # Bug 2 fix: one invoice = one transaction membership. A match
+        # in a DIFFERENT package blocks this link rather than silently
+        # creating a fragmented duplicate grouping.
+        if document_role == 'invoice':
+            existing = find_existing_package_for_invoice(document_id)
+            if existing and existing['package_id'] != package_id:
+                return None, (
+                    f"This invoice already belongs to transaction package "
+                    f"\"{existing['package_name']}\" (id {existing['package_id']}) via document "
+                    f"{existing['document_id']}. Attach further documents to that package instead "
+                    f"of creating a duplicate."
+                )
 
         cursor.execute(
             'INSERT INTO transaction_package_documents (package_id, document_id, document_role) '

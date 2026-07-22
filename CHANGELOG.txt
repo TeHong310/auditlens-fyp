@@ -9609,3 +9609,91 @@ Rollback instructions:
   Redeploy the previous backend/frontend build - this phase changes
   only presentation/interpretation logic and reads existing tables, so
   rolling back has no data-cleanup implications.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Two workflow bugs found after Phase 7, traced to a single upstream
+  root cause: transaction package membership had no protection against
+  the same real invoice being linked into two different packages.
+
+  Backend (auditlens-backend/):
+    - helpers/transaction_packages.py: link_document_to_package() only
+      ever checked whether a document was already linked to the SAME
+      package - nothing prevented it from also being linked into a
+      DIFFERENT package. New find_existing_package_for_invoice()
+      matches an invoice against every OTHER package's invoices by
+      invoice_number (normalized-exact) + vendor (existing fuzzy is_
+      same_company()) + amount (existing AMOUNT_TOLERANCE) + invoice_
+      date (3-day tolerance) - all four must agree, deliberately strict
+      so two genuinely different invoices are never blocked. When
+      linking a document with document_role='invoice', a match in a
+      different package now returns a clear error identifying that
+      package instead of silently creating a fragmented duplicate
+      grouping. No new matching engine: reuses the exact vendor/amount
+      comparators already trusted elsewhere in this app.
+
+Why:
+  Fixed matching calculation caused false mismatch in Record Detail
+  comparison using allocation-aware matching. The Phase 7 fix (compare
+  against Enterprise V2's allocated_amount instead of the PO's full
+  total) only engages when engine_version === 'v2', which requires the
+  invoice to have document_relationships rows. _rebuild_relationships_
+  for_package() only ever runs the relationship builder for invoices
+  that are members of THAT specific package - so an invoice fragmented
+  into a second, PO/GR-less package (nothing previously stopped this)
+  never gets a chance to link to its real PO/GR, engine_version stays
+  legacy for it, and Record Detail falls back to the old single-invoice-
+  vs-full-PO comparison regardless of the Phase 7 display fix already
+  being correct. Root cause traced to duplicate invoice transaction
+  creation causing incorrect "Missing PO and GR": with the membership
+  guard in place, an invoice can no longer be split across two
+  packages, so this class of false mismatch can no longer occur going
+  forward. Improved transaction grouping consistency: one invoice now
+  belongs to exactly one transaction package, enforced at link time.
+
+  helpers/relationship_builder.py and helpers/enterprise_matching.py
+  were read to confirm they already handle multiple sibling invoices
+  sharing one PO correctly (each gets its own full allocation against a
+  single matching PO candidate) - neither needed a change; the gap was
+  entirely in package membership, not matching calculation.
+
+Test results:
+  - python tests/extraction/run_all.py - all 25 suites pass, including
+    test_transaction_packages.py (existing single-invoice-per-package
+    linking scenarios still pass unaffected by the new guard).
+  - Live smoke test against the real local Postgres dev DB (rows
+    created and cleaned up): a duplicate invoice (same invoice_number/
+    vendor/amount/date, a different document_id simulating a re-upload)
+    attempting to link into a second package is now rejected with an
+    error naming the original package - confirmed blocked.
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors; no frontend files
+    changed this round).
+
+Build result:
+  Backend: all 25 test suites pass. Frontend: clean production build,
+  exit 0 (no frontend changes needed this round).
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Known limitation:
+  This fix is preventive - it stops the duplicate-package scenario
+  from happening again, but does not retroactively merge or clean up
+  any transaction package already fragmented by this bug before the
+  fix was deployed. Any already-created duplicate ("Testing"-style)
+  package would need a manual one-off cleanup if it exists in a live
+  environment.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - no migration step, no new
+     environment variables.
+  2. No frontend redeploy needed this round.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend build - this change only adds a guard
+  check before an INSERT that already existed; rolling back removes
+  the guard but affects no existing data.
