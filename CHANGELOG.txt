@@ -7744,3 +7744,100 @@ Setup/config needed:
      ai_assistant_cache table unchanged), no new environment variables.
   2. Redeploy the Render FRONTEND.
   3. No config changes needed.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-22 (later same day)
+
+What was changed:
+  Frontend (auditlens-frontend/) — 4 files, all inside Finance Home,
+  ZERO backend changes:
+    - finance-home.component.ts:
+        - Stats: the "Returned" card's underlying value (totalReturned)
+          is unchanged, now labeled "Correction Required" (see HTML).
+          New missingDocsCount: the subset of THIS MONTH'S returned
+          invoices whose latest send_back_cycle's required_actions
+          includes 'upload_missing_document' — powers the new "Pending
+          Finance Action" card.
+        - loadCyclesForReturnedRows() replaced by
+          loadCyclesForActionStats(returnedDocs): same GET /reviews/
+          send-back-cycles/<id> endpoint, same forkJoin-over-N-calls
+          pattern, but now called over EVERY returned document this
+          month (not just the 5 shown in Recent Uploads) so
+          missingDocsCount reflects the dashboard's real scope. Still
+          populates latestCycleByDocId, so the Required Action column
+          keeps working unchanged for the 5 visible rows.
+        - actionLabel()/onAction(): 'under_review'/'resubmitted' now
+          read "Waiting Auditor" and 'approved' now reads "No Action" —
+          both are genuinely non-actionable-by-Finance states, so
+          onAction() is now a no-op for them and the now-unused
+          viewDocument() (its only caller) was removed. New
+          isActionClickable(doc) drives whether the Action cell renders
+          a button at all — an action-oriented dashboard shouldn't
+          dangle a clickable-looking button with nothing behind it.
+          'returned' ("Fix Issue" -> Correction Center) and the ocr_
+          done/ocr_processing default ("Review" -> OCR Review) are
+          unchanged and stay clickable.
+        - New goToCorrections() for the Quick Navigation row.
+    - finance-home.component.html:
+        - "Returned" stat card relabeled "Correction Required" (same
+          totalReturned value, new sub-text "N invoice(s) returned for
+          Finance correction").
+        - New "Pending Finance Action" stat card: missingDocsCount as
+          the headline number, "Missing PO/GR · N unresolved correction
+          case(s)" (totalReturned) as the sub-text — two numbers in one
+          card per the task's two bullet points, without duplicating
+          the Correction Required card's own headline number.
+        - Total Uploaded / OCR Processed / Approved cards: unchanged,
+          per the task's explicit "keep existing cards." Under Review
+          was left in place too (never asked to be removed).
+        - New Quick Navigation row: Correction Center / Upload Document
+          / OCR Review buttons, calling the existing goToCorrections()/
+          goToUpload()/goToOcrReview() methods.
+        - Recent Uploads' Action cell now renders a button ONLY when
+          isActionClickable(doc) is true; otherwise a plain muted-text
+          label — "Waiting Auditor"/"No Action" no longer look like
+          dead buttons.
+    - finance-home.component.css: grid-template-columns updated from
+      repeat(5,1fr) to repeat(6,1fr) for the new 6-card stats row; new
+      .quick-actions-row/.btn-quick-action (reuses the existing
+      border/hover-accent styling already used elsewhere in this app)
+      and .action-label-static (muted, non-button text for the two
+      non-clickable Action states).
+    - finance-home.component.spec.ts: updated the under_review/
+      approved action tests to the new "Waiting Auditor"/"No Action"
+      labels and non-clickable/no-navigation behavior; renamed/updated
+      the loadCyclesFor* tests to the new function name and signature
+      (now takes the returned-docs array as a parameter instead of
+      reading `this.documents`); added tests for missingDocsCount
+      (counts only upload_missing_document cases, 0 when nothing is
+      returned) and the 3 Quick Navigation methods.
+
+Why:
+  The dashboard mainly reported upload/OCR statistics even though the
+  system now has a full send-back -> Correction Center -> AI assistant
+  -> resubmit workflow — Finance had to already know to go look
+  elsewhere for what actually needed their attention. This surfaces
+  the actionable items (corrections required, what's blocking them,
+  quick links to resolve them) directly on the landing page, and stops
+  the Recent Uploads table from showing a clickable-looking button for
+  statuses where there's genuinely nothing for Finance to do right now.
+
+Testing:
+  - `npx ng build --configuration production` — succeeded (exit 0;
+    same pre-existing budget warnings as prior tasks).
+  - `npx ng test --watch=false` — 95/96 pass (up from 90; net +5 after
+    updating the superseded under_review/approved action tests). The 1
+    failure is the same pre-existing, unrelated app.spec.ts issue seen
+    throughout this project's history.
+  - `git diff --stat` confirms only the 4 Finance Home frontend files
+    changed — zero backend files touched, zero new API endpoints (GET
+    /documents/ and GET /reviews/send-back-cycles/<id> are both
+    pre-existing and already used elsewhere), zero AI calls of any
+    kind. Extraction, matching, authenticity, anomaly detection, and
+    the send-back workflow were never touched, imported, or referenced.
+
+Setup/config needed:
+  1. Redeploy the Render FRONTEND.
+  2. No backend redeploy needed (no backend changes).
+  3. No config changes needed.

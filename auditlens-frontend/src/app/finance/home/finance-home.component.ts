@@ -47,11 +47,20 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
   isLoading: boolean = false;
   chartReady: boolean = false;
 
-  // ── Recent Uploads: required-action text for 'returned' rows,
-  // sourced from the SAME send_back_cycles data Correction Center
-  // already reads via GET /reviews/send-back-cycles/<id> — keyed by
-  // document_id, populated only for the (at most 5) returned documents
-  // actually shown in the Recent Uploads table. ──
+  // ── Pending Finance Action card — missingDocsCount is the subset of
+  // this month's returned invoices whose latest send_back_cycle
+  // requires uploading a missing document (see loadCyclesForActionStats
+  // below); totalReturned above already IS "unresolved correction
+  // cases" (a document stays 'returned' — not 'resubmitted' — for
+  // exactly as long as its cycle is unresolved). ──
+  missingDocsCount: number = 0;
+
+  // ── Recent Uploads' Required Action column + the two action stats
+  // above both read from the SAME send_back_cycles data Correction
+  // Center already reads via GET /reviews/send-back-cycles/<id> — keyed
+  // by document_id, populated for EVERY returned document this month
+  // (not just the 5 shown in Recent Uploads), via
+  // loadCyclesForActionStats() below. ──
   latestCycleByDocId: { [documentId: number]: any } = {};
 
   private barChartInstance: any = null;
@@ -131,22 +140,28 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
         this.cdr.detectChanges();
         setTimeout(() => this.renderAllCharts(), 200);
 
-        this.loadCyclesForReturnedRows();
+        const returnedThisMonth = thisMonthDocs.filter((d: any) => d.status === 'returned');
+        this.loadCyclesForActionStats(returnedThisMonth);
       },
       error: () => { this.isLoading = false; }
     });
   }
 
   // Reuses GET /reviews/send-back-cycles/<id> (already used identically
-  // by finance/corrections and finance-ocr-review) for only the
-  // returned documents actually visible in the Recent Uploads table —
-  // never more than 5 requests, since `documents` is already sliced to
-  // the last 5. No new backend endpoint.
-  private loadCyclesForReturnedRows() {
-    const returnedIds = this.documents
-      .filter(d => d.status === 'returned')
-      .map(d => d.document_id);
-    if (!returnedIds.length) return;
+  // by finance/corrections and finance-ocr-review) for EVERY returned
+  // document this month — not just the 5 rows shown in Recent Uploads —
+  // so the Pending Finance Action card's missingDocsCount reflects the
+  // dashboard's true scope (this month), not only what happens to be in
+  // the last-5 slice. No new backend endpoint; the request volume is
+  // bounded by how many invoices are actually returned this month
+  // (typically small), the same population the Correction Required
+  // stat already counts.
+  private loadCyclesForActionStats(returnedDocs: any[]) {
+    const returnedIds = returnedDocs.map(d => d.document_id);
+    if (!returnedIds.length) {
+      this.missingDocsCount = 0;
+      return;
+    }
 
     const requests: { [documentId: number]: any } = {};
     for (const id of returnedIds) {
@@ -156,10 +171,14 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
     }
 
     forkJoin(requests).subscribe((results: any) => {
+      let missingCount = 0;
       for (const id of returnedIds) {
         const cycles = results[id]?.cycles || [];
-        this.latestCycleByDocId[id] = cycles.length ? cycles[cycles.length - 1] : null;
+        const latest = cycles.length ? cycles[cycles.length - 1] : null;
+        this.latestCycleByDocId[id] = latest;
+        if (latest?.required_actions?.includes('upload_missing_document')) missingCount++;
       }
+      this.missingDocsCount = missingCount;
       this.cdr.detectChanges();
     });
   }
@@ -342,17 +361,9 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
     });
   }
 
-  viewDocument(doc: any) {
-    const token = localStorage.getItem('access_token');
-    const url = `${this.apiUrl}/documents/${doc.document_id}/file`;
-    fetch(url, { headers: { 'Authorization': `Bearer ${token}` } })
-      .then(res => res.blob())
-      .then(blob => window.open(URL.createObjectURL(blob), '_blank'))
-      .catch(() => alert('Failed to open file.'));
-  }
-
   goToUpload() { this.router.navigate(['/finance/upload']); }
   goToOcrReview() { this.router.navigate(['/finance/ocr-review']); }
+  goToCorrections() { this.router.navigate(['/finance/corrections']); }
 
   getStatusClass(status: string): string {
     switch (status) {
@@ -417,20 +428,29 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
     return actions.map((a: string) => REQUIRED_ACTION_LABELS[a] || a).join(', ');
   }
 
-  // ── Recent Uploads: dynamic Action button — label + click handler
-  // per status, per the task's routing rules. Reuses existing routes/
-  // endpoints only: Correction Center (already built), the existing
-  // OCR Review page, and the existing file-viewing blob fetch
-  // (viewDocument() above) — no new backend API of any kind. ──
+  // ── Recent Uploads: dynamic Action column — label + click handler per
+  // status. Only genuinely actionable statuses ('returned' and the
+  // still-in-flight ocr_done/ocr_processing default) render as a
+  // clickable button; 'under_review'/'resubmitted' and 'approved' are
+  // waiting-on-someone-else or already-done states, so they render as
+  // a plain status label instead of a button (see isActionClickable
+  // below) — an action-oriented dashboard should never dangle a button
+  // with nothing for Finance to actually do behind it. Reuses existing
+  // routes/endpoints only: Correction Center (already built) and the
+  // existing OCR Review page — no new backend API of any kind. ──
 
   actionLabel(doc: any): string {
     switch (doc.status) {
       case 'returned': return 'Fix Issue';
-      case 'under_review': return 'View';
-      case 'resubmitted': return 'View';
-      case 'approved': return 'View';
+      case 'under_review': return 'Waiting Auditor';
+      case 'resubmitted': return 'Waiting Auditor';
+      case 'approved': return 'No Action';
       default: return 'Review'; // ocr_done / ocr_processing / any other in-flight state
     }
+  }
+
+  isActionClickable(doc: any): boolean {
+    return doc.status === 'returned' || (doc.status !== 'under_review' && doc.status !== 'resubmitted' && doc.status !== 'approved');
   }
 
   onAction(doc: any) {
@@ -440,11 +460,8 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
         return;
       case 'under_review':
       case 'resubmitted':
-        this.router.navigate(['/finance/ocr-review']);
-        return;
       case 'approved':
-        this.viewDocument(doc);
-        return;
+        return; // no action — see isActionClickable above, these never render a clickable button
       default:
         // ocr_done / ocr_processing / any other in-flight state — the
         // OCR Review page is exactly where these still-actionable

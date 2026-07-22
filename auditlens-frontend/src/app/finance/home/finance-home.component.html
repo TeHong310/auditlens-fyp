@@ -70,11 +70,35 @@
         <i class="ph-duotone ph-warning-circle" style="font-size:20px;"></i>
       </div>
       <div class="stat-info">
-        <p class="stat-label">Returned</p>
+        <p class="stat-label">Correction Required</p>
         <p class="stat-value" style="color:var(--danger)">{{ totalReturned }}</p>
-        <p class="stat-sub">Needs correction</p>
+        <p class="stat-sub">{{ totalReturned === 1 ? 'Invoice' : 'Invoices' }} returned for Finance correction</p>
       </div>
     </div>
+
+    <div class="stat-card" style="--card-color:var(--warning);">
+      <div class="stat-icon-wrap">
+        <i class="ph-duotone ph-hourglass-medium" style="font-size:20px;"></i>
+      </div>
+      <div class="stat-info">
+        <p class="stat-label">Pending Finance Action</p>
+        <p class="stat-value" style="color:var(--warning)">{{ missingDocsCount }}</p>
+        <p class="stat-sub">Missing PO/GR &middot; {{ totalReturned }} unresolved correction {{ totalReturned === 1 ? 'case' : 'cases' }}</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Navigation -->
+  <div class="quick-actions-row">
+    <button class="btn-quick-action" (click)="goToCorrections()">
+      <i class="ph-duotone ph-arrow-u-up-left"></i> Correction Center
+    </button>
+    <button class="btn-quick-action" (click)="goToUpload()">
+      <i class="ph-duotone ph-upload-simple"></i> Upload Document
+    </button>
+    <button class="btn-quick-action" (click)="goToOcrReview()">
+      <i class="ph-duotone ph-check-circle"></i> OCR Review
+    </button>
   </div>
 
   <!-- Charts Row -->
@@ -173,7 +197,8 @@
             </td>
             <td>{{ requiredActionLabel(doc) }}</td>
             <td>
-              <button class="btn-open" (click)="onAction(doc)">{{ actionLabel(doc) }}</button>
+              <button class="btn-open" *ngIf="isActionClickable(doc)" (click)="onAction(doc)">{{ actionLabel(doc) }}</button>
+              <span class="action-label-static" *ngIf="!isActionClickable(doc)">{{ actionLabel(doc) }}</span>
             </td>
           </tr>
         </tbody>
