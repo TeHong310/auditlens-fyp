@@ -65,6 +65,30 @@ def get_package(package_id):
         conn.close()
 
 
+def delete_empty_package(package_id):
+    """Phase 9 — deletes a package ONLY if it has zero linked documents.
+    Used for the "do not create empty draft packages" cleanup: when
+    Finance creates a new package and every document they meant to put
+    in it auto-groups into a different, already-existing package
+    instead (Phase 7.1's resolve_package_for_document), the newly
+    created package is left behind as an empty, useless shell — this
+    removes it. Deliberately refuses (returns False) if the package has
+    ANY document linked, so it can never be used to delete a package
+    Finance is actually using."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('SELECT 1 FROM transaction_package_documents WHERE package_id = %s LIMIT 1', (package_id,))
+        if cursor.fetchone():
+            return False
+        cursor.execute('DELETE FROM transaction_packages WHERE id = %s', (package_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+        return deleted
+    finally:
+        conn.close()
+
+
 def compute_package_status(package_id):
     """Deterministic status, no AI/matching call:
       - 'draft': no documents linked yet.

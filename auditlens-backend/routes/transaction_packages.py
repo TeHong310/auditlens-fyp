@@ -14,7 +14,7 @@ from db import get_user_by_id
 from helpers.transaction_packages import (
     create_package, get_package, link_document_to_package,
     get_package_documents, get_relationship_preview, list_packages,
-    resolve_package_for_document,
+    resolve_package_for_document, delete_empty_package,
 )
 
 transaction_packages_bp = Blueprint('transaction_packages', __name__)
@@ -83,6 +83,34 @@ def get_transaction_package_detail(package_id):
     }), 200
 
 
+# ------------------------------------------------------------
+# DELETE AN EMPTY TRANSACTION PACKAGE
+# DELETE /transaction-packages/<package_id>
+# Finance Executive only, owner only, EMPTY packages only.
+#
+# Phase 9 — cleans up the "ghost draft package" left behind when every
+# document Finance meant to add to a brand new package auto-groups
+# (Phase 7.1) into a different, already-existing package instead. The
+# frontend calls this after the create-package flow when it detects
+# that outcome (see finance-transaction-create.component.ts).
+# ------------------------------------------------------------
+@transaction_packages_bp.route('/<int:package_id>', methods=['DELETE'])
+@jwt_required()
+def delete_transaction_package(package_id):
+    user, err = _require_finance()
+    if err:
+        return err
+    _, err = _require_package_owner(package_id, user)
+    if err:
+        return err
+
+    deleted = delete_empty_package(package_id)
+    if not deleted:
+        return jsonify({'error': 'Only an empty transaction package (no linked documents) can be deleted'}), 400
+
+    return jsonify({'message': 'Empty transaction package deleted'}), 200
+
+
 @transaction_packages_bp.route('/<int:package_id>/documents', methods=['POST'])
 @jwt_required()
 def add_transaction_package_document(package_id):
@@ -103,8 +131,19 @@ def add_transaction_package_document(package_id):
     # reference matches a PO already anchoring a DIFFERENT package this
     # same Finance user owns, land it there instead of fragmenting the
     # same AP transaction into two packages. Falls back to the
-    # requested package_id whenever no match is found.
-    resolved_package_id = resolve_package_for_document(package_id, document_id, document_role, user['user_id'])
+    # requested package_id whenever no match is found — and, per Phase 9,
+    # ALSO on any unexpected failure in the lookup itself: this is a
+    # best-effort auto-grouping convenience, matching this module's own
+    # established "must never block the primary action" philosophy
+    # (see _rebuild_relationships_for_package/_ensure_sibling_checks
+    # elsewhere in this app). Its failure must never mean the document
+    # doesn't get attached to a package at all.
+    try:
+        resolved_package_id = resolve_package_for_document(package_id, document_id, document_role, user['user_id'])
+    except Exception as e:
+        print(f"WARNING: resolve_package_for_document failed for document_id={document_id} "
+              f"role={document_role} requested_package_id={package_id}: {type(e).__name__}: {e}")
+        resolved_package_id = package_id
 
     link, error = link_document_to_package(resolved_package_id, document_id, document_role)
     if error:

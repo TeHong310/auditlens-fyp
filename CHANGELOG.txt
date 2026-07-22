@@ -9885,3 +9885,113 @@ Rollback instructions:
   Redeploy the previous backend/frontend build - no schema change, no
   new data written beyond the same documents.status column this
   endpoint already updated.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 9: fixed the "Testing 1"/"Testing 2" empty-package regression
+  reported after Phase 7.1/8's transaction auto-grouping changes.
+
+  Root cause (confirmed by live reproduction, not assumed): the
+  auto-grouping added in Phase 7.1 was working exactly as designed —
+  when Finance created a brand new package and uploaded a document
+  whose PO reference matched an ALREADY-EXISTING package (e.g. a
+  package created during earlier testing of the same PO3006231 fixture
+  data), the document correctly and silently redirected into that
+  existing package. The bug was that the FRONTEND never surfaced this:
+  it navigated Finance to the ORIGINAL, now-empty package_id regardless,
+  and never told them where their documents actually went. Reproduced
+  directly: creating package "A Waner" with PO3006231 + an invoice,
+  then creating a brand new package "Testing 1" and uploading a second
+  invoice referencing the same PO, showed "Testing 1" ending with 0
+  documents while "A Waner" silently grew from 2 to 3 — exactly the
+  reported symptom, with nothing actually lost.
+
+  Backend (auditlens-backend/):
+    - routes/transaction_packages.py: the auto-grouping resolution call
+      in POST /transaction-packages/<id>/documents is now wrapped in
+      try/except, falling back to the originally-requested package_id
+      on any unexpected failure — matching this module's own
+      established "best-effort convenience must never block the
+      primary action" philosophy (_rebuild_relationships_for_package,
+      _ensure_sibling_checks). New DELETE /transaction-packages/<id>
+      (Finance-only, owner-only) for the "do not create empty draft
+      packages" cleanup described below.
+    - helpers/transaction_packages.py: new delete_empty_package() -
+      deletes a package ONLY if it has zero linked documents; refuses
+      (returns False, no delete) for any package with even one document,
+      so it can never be used to remove a package Finance is actually
+      using.
+
+  Frontend (auditlens-frontend/):
+    - finance-transaction-create.component.ts: uploadAndLink() now
+      returns the package the document ACTUALLY landed in (already
+      present in the existing link response, just not read before).
+      After the upload batch, if the anchor invoice's documents landed
+      in a different, pre-existing package, the newly created (now
+      empty) package is deleted via the new DELETE endpoint, Finance is
+      navigated to the CORRECT package instead, and a clear message
+      explains the auto-grouping ("...automatically grouped into the
+      existing transaction package "X"") instead of silently leaving
+      them looking at an empty "Draft" package with Supplier: Unknown.
+
+Why:
+  This directly satisfies the two explicit Phase 9 requirements: "If no
+  existing package exists, documents must still attach to the newly
+  created package" (already true; confirmed by re-testing the exact
+  5-document PO3006231 scenario from a clean state) and "Do not create
+  empty draft packages" (the new package is deleted once Finance is
+  shown where their documents actually are). Phase 8's business logic
+  (auto-group matching invoices into the same PO's package) is fully
+  preserved — nothing about the matching/redirect decision itself
+  changed, only its visibility and the empty-shell cleanup.
+
+  helpers/relationship_builder.py, helpers/enterprise_matching.py, OCR,
+  Claude/Gemini extraction, and the authenticity engine were not
+  touched - this was entirely a package-linking/UX gap, not a matching
+  or extraction bug.
+
+Test results:
+  - python tests/extraction/run_all.py - all 25 suites pass.
+  - Live smoke tests against the real local Postgres dev DB (rows
+    created and cleaned up):
+    (1) Reproduction: pre-existing package "A Waner" (PO3006231 +
+        invoice) + a brand new package "Testing 1" + a second invoice
+        referencing the same PO -> confirmed "Testing 1" ends with 0
+        documents and "A Waner" grows to 3, with the response's
+        redirected_from_package_id correctly identifying this - proving
+        the auto-grouping itself was never broken, only invisible.
+    (2) The exact 5-document PO3006231 scenario from a clean state (no
+        pre-existing package) -> ONE package, 5 documents, PO=1
+        Invoice=2 GR=2 - confirms "no existing package" case still
+        attaches to the newly created package as required.
+    (3) DELETE /transaction-packages/<id> refuses a non-empty package
+        (400) and succeeds on a genuinely empty one (200).
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+
+Build result:
+  Backend: all 25 test suites pass. Frontend: clean production build,
+  exit 0.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Known limitation:
+  This fix prevents new empty "Draft" packages from being left behind
+  going forward. Any "Testing 1"/"Testing 2"-style empty packages
+  already sitting in a live environment from before this fix are
+  harmless (zero documents, zero effect on matching/auditor views) but
+  can be deleted directly now via the new DELETE endpoint if desired.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - no migration step, no new
+     environment variables.
+  2. Redeploy the Render FRONTEND - the corrected create-package flow
+     is immediately available.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend/frontend build - no schema change; the
+  new DELETE endpoint only ever removes packages with zero documents.

@@ -45,6 +45,7 @@ export class FinanceTransactionCreateComponent {
   errorMessage: string = '';
   successMessage: string = '';
   poGrStagedNotice: string = '';
+  regroupedNotice: string = '';
 
   private apiUrl = environment.apiUrl;
 
@@ -106,6 +107,7 @@ export class FinanceTransactionCreateComponent {
     this.errorMessage = '';
     this.successMessage = '';
     this.poGrStagedNotice = '';
+    this.regroupedNotice = '';
 
     if (!this.packageName.trim()) {
       this.errorMessage = 'Package name is required.';
@@ -132,10 +134,14 @@ export class FinanceTransactionCreateComponent {
       const packageId = pkg.id;
 
       let anchorDocumentId: number | null = null;
+      let resolvedPackage: { id: number; name: string } | null = null;
 
       for (const file of this.invoiceFiles) {
-        const documentId = await this.uploadAndLink(packageId, file, 'invoice');
-        if (documentId && anchorDocumentId === null) anchorDocumentId = documentId;
+        const result = await this.uploadAndLink(packageId, file, 'invoice');
+        if (result) {
+          if (anchorDocumentId === null) anchorDocumentId = result.documentId;
+          if (resolvedPackage === null) resolvedPackage = result.package;
+        }
       }
 
       if (anchorDocumentId !== null) {
@@ -164,13 +170,32 @@ export class FinanceTransactionCreateComponent {
 
       this.isSubmitting = false;
       const hasError = this.progress.some(p => p.status === 'error');
+
+      // Phase 9 — if every document that established this package's
+      // anchor invoice auto-grouped (Phase 7.1) into a DIFFERENT,
+      // already-existing package, the just-created package is now an
+      // empty, useless shell ("do not create empty draft packages").
+      // Clean it up and send Finance to where the documents actually
+      // ended up, instead of leaving them looking at an empty package.
+      let finalPackageId = packageId;
+      if (!hasError && resolvedPackage && resolvedPackage.id !== packageId) {
+        try {
+          await firstValueFrom(this.http.delete(`${this.apiUrl}/transaction-packages/${packageId}`, { headers: this.getHeaders() }));
+        } catch {
+          // Best-effort cleanup only — not fatal if it fails (e.g. a
+          // later file did stay in the new package after all).
+        }
+        finalPackageId = resolvedPackage.id;
+        this.regroupedNotice = `These documents were automatically grouped into the existing transaction package "${resolvedPackage.name}".`;
+      }
+
       this.successMessage = hasError
         ? 'Package created, but some files failed — see details below.'
-        : 'Transaction package created successfully.';
+        : (this.regroupedNotice || 'Transaction package created successfully.');
       this.cdr.detectChanges();
 
       if (!hasError) {
-        setTimeout(() => this.router.navigate(['/finance/transactions/detail'], { queryParams: { id: packageId } }), 1200);
+        setTimeout(() => this.router.navigate(['/finance/transactions/detail'], { queryParams: { id: finalPackageId } }), 1200);
       }
     } catch (err: any) {
       this.isSubmitting = false;
@@ -181,9 +206,11 @@ export class FinanceTransactionCreateComponent {
 
   // Uploads one file via the EXISTING per-role endpoint, then links the
   // resulting document into the package. Returns the new document_id
-  // (or PO/GR id) on success, null on failure — never throws, so one
-  // failed file doesn't stop the rest of the batch.
-  private async uploadAndLink(packageId: number, file: File, role: PackageRole, anchorDocumentId?: number): Promise<number | null> {
+  // plus the package it ACTUALLY landed in (Phase 7.1's auto-grouping
+  // may redirect it into a different, already-existing package than
+  // packageId), or null on failure — never throws, so one failed file
+  // doesn't stop the rest of the batch.
+  private async uploadAndLink(packageId: number, file: File, role: PackageRole, anchorDocumentId?: number): Promise<{ documentId: number; package: { id: number; name: string } } | null> {
     const item = this.progress.find(p => p.name === file.name && p.role === role)!;
     item.status = 'uploading';
     this.cdr.detectChanges();
@@ -202,16 +229,18 @@ export class FinanceTransactionCreateComponent {
       const uploadRes = await firstValueFrom(this.http.post<any>(uploadUrl, formData, { headers: this.getHeaders() }));
       const documentId = role === 'invoice' ? uploadRes.document_id : (role === 'purchase_order' ? uploadRes.po_id : uploadRes.gr_id);
 
-      await firstValueFrom(this.http.post<any>(
+      const linkRes = await firstValueFrom(this.http.post<any>(
         `${this.apiUrl}/transaction-packages/${packageId}/documents`,
         { document_id: documentId, document_role: role },
         { headers: this.getHeaders() }
       ));
 
       item.status = 'done';
-      item.message = 'Uploaded and linked';
+      item.message = linkRes.redirected_from_package_id
+        ? `Uploaded and grouped into "${linkRes.package?.package_name}"`
+        : 'Uploaded and linked';
       this.cdr.detectChanges();
-      return documentId;
+      return { documentId, package: { id: linkRes.package?.id, name: linkRes.package?.package_name } };
     } catch (err: any) {
       item.status = 'error';
       item.message = err.error?.error || 'Upload failed';
