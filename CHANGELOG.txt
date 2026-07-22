@@ -9995,3 +9995,98 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous backend/frontend build - no schema change; the
   new DELETE endpoint only ever removes packages with zero documents.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 10: fixed "Object of type memoryview is not JSON serializable"
+  on Record Detail's Open button.
+
+  Root cause (confirmed by reproducing with real bytea content, not
+  assumed): helpers/document_relationships.py's get_related_purchase_
+  orders(), get_related_goods_receipts(), and get_related_invoices()
+  each ran a bare SELECT * (or documents d.*) against purchase_orders/
+  goods_receipts/documents - all three of which have a file_bytes BYTEA
+  column (the durable, DB-stored copy of the original uploaded file,
+  used because Render's disk is ephemeral). psycopg2 returns a BYTEA
+  value as a Python memoryview, which Flask's jsonify() cannot
+  serialize. These three functions are called directly by _build_
+  comparison_v2() (routes/auditor.py) and their raw output is returned
+  verbatim as related_purchase_orders/related_invoices/related_goods_
+  receipts in GET /auditor/record/<id>/comparison's JSON response -
+  the exact endpoint Record Detail's Open button loads.
+
+  This bug is NOT new - it has existed in helpers/document_
+  relationships.py since Phase 1, before this session's work began.
+  It stayed silently dormant because Enterprise Matching V2 (which is
+  the only code path that calls these three functions) wasn't
+  successfully engaging until Phase 9.1/the user's own environment fix
+  - the moment V2 started actually running, this pre-existing leak
+  surfaced for the first time.
+
+  The rest of this codebase already handles this correctly in every
+  other place BYTEA columns get read for a JSON response (routes/
+  documents.py's get_po_list/get_gr_list/get_supporting_documents all
+  explicitly `row.pop('file_bytes', None)`) - document_relationships.py
+  was the one place that had never been audited for it, since its
+  SELECT * queries predate the file_bytes column's introduction.
+
+  Backend (auditlens-backend/):
+    - helpers/document_relationships.py: all 6 SELECT sites across the
+      three functions now strip file_bytes from the returned dict
+      before it's used, matching the exact convention already
+      established in routes/documents.py. No other columns touched -
+      every other metadata field (file_name, file_type, vendor_name,
+      amounts, etc.) is preserved exactly as before. The actual file
+      content remains available exactly as before, through the
+      existing, unmodified file-serving endpoints (GET /documents/
+      <id>/file, /documents/po/<po_id>/file, /documents/gr/<gr_id>/
+      file) - nothing about file download/view changed.
+
+Why:
+  Auditors could not open a Record Detail page for any invoice whose
+  Enterprise Matching V2 relationships included a PO/GR/sibling invoice
+  with its file bytes stored in the database (i.e. essentially every
+  real uploaded document) - the comparison API 500'd before any data
+  reached the page.
+
+  enterprise_matching.py and relationship_builder.py were not touched -
+  this was purely a JSON-serialization bug in how already-fetched
+  rows were shaped for the API response, not a matching calculation
+  issue. OCR, Claude/Gemini extraction, and the authenticity engine
+  were not touched either.
+
+Test results:
+  - python tests/extraction/run_all.py - all 25 suites pass, including
+    test_document_relationships.py (no regression in the existing
+    relationship-lookup behavior).
+  - Live smoke test against the real local Postgres dev DB, this time
+    with file_bytes ACTUALLY populated (psycopg2.Binary, matching a
+    real uploaded document - my earlier tests had always left it NULL,
+    which coincidentally serializes fine and would never have caught
+    this) for the PO3006231 scenario (PO + 2 invoices + 2 GRs, V2
+    relationships already established): GET /auditor/record/<id>/
+    comparison now returns HTTP 200 with engine_version "v2", and
+    related_purchase_orders/related_invoices/related_goods_receipts
+    confirmed to contain no file_bytes key at all.
+  - npx ng build --configuration production - succeeded (exit 0; no
+    frontend changes this round, same pre-existing warnings only).
+
+Build result:
+  Backend: all 25 test suites pass. Frontend: clean production build,
+  exit 0 (no frontend changes).
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - no migration step, no new
+     environment variables.
+  2. No frontend redeploy needed this round.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend build - this fix only removes one key
+  from returned dicts before they're serialized; no data written, no
+  schema change.

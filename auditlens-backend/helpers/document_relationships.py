@@ -229,7 +229,14 @@ def get_related_purchase_orders(doc_type, doc_id):
         if related:
             po_ids = [r['other_id'] for r in related]
             cursor.execute('SELECT * FROM purchase_orders WHERE po_id = ANY(%s)', (po_ids,))
-            pos_by_id = {row['po_id']: dict(row) for row in cursor.fetchall()}
+            # file_bytes (BYTEA) comes back from psycopg2 as a memoryview,
+            # which jsonify() can't serialize — this dict is returned
+            # straight into GET /auditor/record/<id>/comparison's
+            # related_purchase_orders field. The file endpoint
+            # (GET /documents/po/<po_id>/file) already serves the actual
+            # bytes; this is metadata-only, same convention already used
+            # by routes/documents.py's get_po_list/get_gr_list.
+            pos_by_id = {row['po_id']: {k: v for k, v in dict(row).items() if k != 'file_bytes'} for row in cursor.fetchall()}
             return [{**pos_by_id[r['other_id']], 'relationship': r}
                     for r in related if r['other_id'] in pos_by_id]
 
@@ -242,7 +249,10 @@ def get_related_purchase_orders(doc_type, doc_id):
             (doc_id,)
         )
         row = cursor.fetchone()
-        return [{**dict(row), 'relationship': None}] if row else []
+        if not row:
+            return []
+        row = {k: v for k, v in dict(row).items() if k != 'file_bytes'}
+        return [{**row, 'relationship': None}]
     finally:
         conn.close()
 
@@ -258,7 +268,10 @@ def get_related_goods_receipts(doc_type, doc_id):
         if related:
             gr_ids = [r['other_id'] for r in related]
             cursor.execute('SELECT * FROM goods_receipts WHERE gr_id = ANY(%s)', (gr_ids,))
-            grs_by_id = {row['gr_id']: dict(row) for row in cursor.fetchall()}
+            # See get_related_purchase_orders' comment above — file_bytes
+            # is BYTEA (memoryview), not JSON-serializable, and the file
+            # endpoint already serves it separately.
+            grs_by_id = {row['gr_id']: {k: v for k, v in dict(row).items() if k != 'file_bytes'} for row in cursor.fetchall()}
             return [{**grs_by_id[r['other_id']], 'relationship': r}
                     for r in related if r['other_id'] in grs_by_id]
 
@@ -269,7 +282,10 @@ def get_related_goods_receipts(doc_type, doc_id):
             (doc_id,)
         )
         row = cursor.fetchone()
-        return [{**dict(row), 'relationship': None}] if row else []
+        if not row:
+            return []
+        row = {k: v for k, v in dict(row).items() if k != 'file_bytes'}
+        return [{**row, 'relationship': None}]
     finally:
         conn.close()
 
@@ -291,7 +307,11 @@ def get_related_invoices(doc_type, doc_id):
                    WHERE d.document_id = ANY(%s)''',
                 (invoice_ids,)
             )
-            invoices_by_id = {row['document_id']: dict(row) for row in cursor.fetchall()}
+            # See get_related_purchase_orders' comment above — d.* pulls
+            # in documents.file_bytes (BYTEA/memoryview), not JSON-
+            # serializable and already served separately by the file
+            # endpoint.
+            invoices_by_id = {row['document_id']: {k: v for k, v in dict(row).items() if k != 'file_bytes'} for row in cursor.fetchall()}
             return [{**invoices_by_id[r['other_id']], 'relationship': r}
                     for r in related if r['other_id'] in invoices_by_id]
 
@@ -310,6 +330,9 @@ def get_related_invoices(doc_type, doc_id):
             (row['document_id'],)
         )
         inv_row = cursor.fetchone()
-        return [{**dict(inv_row), 'relationship': None}] if inv_row else []
+        if not inv_row:
+            return []
+        inv_row = {k: v for k, v in dict(inv_row).items() if k != 'file_bytes'}
+        return [{**inv_row, 'relationship': None}]
     finally:
         conn.close()
