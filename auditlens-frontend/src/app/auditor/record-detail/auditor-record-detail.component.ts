@@ -909,10 +909,17 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   // valid allocation) instead of the PO line's full ordered quantity,
   // whenever this row's quantity difference is explained by allocation.
   lineItemPoDisplayQuantity(li: any): any {
-    if (li.quantity_match === false && this.isPartialAllocationLineItem(li)) {
+    if (li.po_quantity !== li.invoice_quantity && this.isPartialAllocationLineItem(li)) {
       return li.invoice_quantity;
     }
     return li.po_quantity;
+  }
+
+  // Drives the "(Allocated)" / "PO Ordered (context)" notes in the
+  // template — true whenever the PO cell is showing the invoice's
+  // allocated share instead of the PO's raw ordered quantity.
+  showPoAllocationContext(li: any): boolean {
+    return li.po_quantity !== li.invoice_quantity && this.isPartialAllocationLineItem(li);
   }
 
   // The same physical item is often worded completely differently
@@ -935,38 +942,60 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return !li.missing_on_gr && this.descriptionDiffers(li.gr_description, li.description);
   }
 
+  // Enterprise V3 Phase 12 — a genuine, PER-SIDE comparison (invoice vs
+  // THIS side's own quantity) instead of the blended 3-way li.
+  // quantity_match flag (invoice == po == gr all at once). That blended
+  // flag was driving the GR column's pill/icon/text too, so a GR that
+  // exactly matches the invoice (15000 == 15000) still showed Mismatch
+  // purely because the PO's raw, un-allocated total (30000) differed —
+  // a completely unrelated column's discrepancy bleeding into the GR
+  // pill. Returns null when there's nothing to compare (missing side).
+  private lineItemSideQuantityMatch(li: any, side: 'po' | 'gr'): boolean | null {
+    const sideQty = side === 'po' ? li.po_quantity : li.gr_quantity;
+    if (sideQty == null || li.invoice_quantity == null) return null;
+    return Math.abs(sideQty - li.invoice_quantity) < 0.01;
+  }
+
+  private lineItemSideHasIssue(li: any, side: 'po' | 'gr'): boolean {
+    if (this.lineItemMissing(li, side)) return true;
+    if (side === 'po' && this.isPartialAllocationLineItem(li)) return false;
+    return this.lineItemSideQuantityMatch(li, side) === false;
+  }
+
   lineItemRowClass(li: any): string[] {
-    const poQtyIssue = li.quantity_match === false && !this.isPartialAllocationLineItem(li);
-    const hardIssue = poQtyIssue || li.missing_on_invoice || li.missing_on_po || li.missing_on_gr;
+    const hardIssue = this.lineItemSideHasIssue(li, 'po') || this.lineItemSideHasIssue(li, 'gr')
+      || li.missing_on_invoice;
     if (hardIssue) return ['row-mismatch', 'row-quantity-alert'];
-    // amount_match is a SOFT check (drives the amber REVIEW banner state,
-    // never red FAIL) — still needs a visible row indicator, or it would
+    // amount_match is a SOFT check comparing the line's amount across
+    // every present side — for a partially-allocated invoice this is
+    // the SAME "invoice line vs PO's FULL line" comparison already
+    // softened above for quantity (V2's own invoice_result already
+    // confirmed this is a correct allocation), so the same reasoning
+    // applies: don't show a row-mismatch stripe for it. Still needs a
+    // visible row indicator when it's a REAL soft mismatch, or it would
     // be an invisible check silently affecting the banner with nothing
     // in the table for an auditor to actually see (the exact bug fixed
     // for date_order_valid/po_reference_match in earlier work on this
     // page). Standard row-mismatch styling only, no row-quantity-alert
     // stripe — that's reserved for the hard quantity case.
-    if (li.amount_match === false) return ['row-mismatch'];
+    if (li.amount_match === false && !this.isPartialAllocationLineItem(li)) return ['row-mismatch'];
     return [];
   }
 
   lineItemPillClass(li: any, side: 'po' | 'gr'): string {
     if (this.lineItemMissing(li, side)) return 'pill-differ';
-    if (side === 'po' && li.quantity_match === false && this.isPartialAllocationLineItem(li)) return 'pill-match';
-    return this.rowMatchPillClass(li.quantity_match);
+    return this.lineItemSideHasIssue(li, side) ? 'pill-differ' : 'pill-match';
   }
 
   lineItemPillIcon(li: any, side: 'po' | 'gr'): string {
     if (this.lineItemMissing(li, side)) return 'ph-warning';
-    if (side === 'po' && li.quantity_match === false && this.isPartialAllocationLineItem(li)) return 'ph-check';
-    return this.rowMatchIcon(li.quantity_match);
+    return this.lineItemSideHasIssue(li, side) ? 'ph-x' : 'ph-check';
   }
 
   lineItemPillText(li: any, side: 'po' | 'gr'): string {
     if (side === 'po' && li.missing_on_po) return 'Missing on PO';
     if (side === 'gr' && li.missing_on_gr) return 'Missing on GR';
-    if (side === 'po' && li.quantity_match === false && this.isPartialAllocationLineItem(li)) return 'Match';
-    return this.rowMatchText(li.quantity_match);
+    return this.lineItemSideHasIssue(li, side) ? 'Mismatch' : 'Match';
   }
 
   formatQuantity(qty: any): string {

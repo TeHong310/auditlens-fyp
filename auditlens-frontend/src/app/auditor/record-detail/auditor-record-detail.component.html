@@ -297,9 +297,9 @@
                       <i class="ph-duotone" [ngClass]="lineItemPillIcon(li, 'po')"></i> {{ lineItemPillText(li, 'po') }}
                     </span>
                     <div class="cell-main-value cell-quantity" *ngIf="!li.missing_on_po">
-                      {{ formatQuantity(lineItemPoDisplayQuantity(li)) }}<span class="cell-muted" *ngIf="li.quantity_match === false && isPartialAllocationLineItem(li)" style="font-size:11px;"> (Allocated)</span>
+                      {{ formatQuantity(lineItemPoDisplayQuantity(li)) }}<span class="cell-muted" *ngIf="showPoAllocationContext(li)" style="font-size:11px;"> (Allocated)</span>
                     </div>
-                    <div class="cell-muted" style="font-size:11px;margin-top:2px;" *ngIf="li.quantity_match === false && isPartialAllocationLineItem(li)">PO Ordered (context): {{ formatQuantity(li.po_quantity) }}</div>
+                    <div class="cell-muted" style="font-size:11px;margin-top:2px;" *ngIf="showPoAllocationContext(li)">PO Ordered (context): {{ formatQuantity(li.po_quantity) }}</div>
                     <div class="cell-muted" style="font-size:11px;margin-top:2px;font-style:italic;" *ngIf="showPoDescription(li)">PO Item: {{ li.po_description }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">

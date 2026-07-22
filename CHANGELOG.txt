@@ -10186,3 +10186,95 @@ Rollback instructions:
   Redeploy the previous backend/frontend build - no schema change, no
   new data written; this only affects how existing document_line_items
   rows are paired and displayed at read time.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 12: fixed a false red "Mismatch" on the GR column of a Line
+  Items row that was already correctly matched, and the row's red
+  background persisting even when the invoice's overall matching
+  status was PASS.
+
+  Root cause (confirmed by tracing the exact rendering logic): the GR
+  column's pill/icon/text (auditor-record-detail.component.ts) read
+  li.quantity_match — a single BLENDED 3-way flag ("are invoice, PO,
+  and GR quantities ALL equal at once") — instead of comparing the
+  invoice's quantity against the GR's OWN quantity specifically. For
+  the real PO3006231 case, invoice=15000 and GR=15000 (an exact match),
+  but PO=30000 (a correct partial allocation, already softened for the
+  PO column in Phase 11/8) made the BLENDED flag false, and that false
+  value leaked into the GR column's pill even though GR and invoice
+  agreed perfectly. The row's red background had the same root cause
+  one level up: it fell back to a plain row-mismatch class whenever
+  li.amount_match was false, without checking whether that too was
+  just the PO's full amount vs the invoice's allocated share (already
+  known to be a valid allocation from the Amount row directly above it
+  in the same page).
+
+  Frontend (auditlens-frontend/):
+    - auditor-record-detail.component.ts: new lineItemSideQuantityMatch
+      (li, side) does a genuine PAIRWISE comparison (invoice vs THIS
+      side's own quantity only) instead of relying on the blended flag.
+      lineItemPillClass/Icon/Text and lineItemRowClass now use this for
+      both the PO and GR columns (the PO column keeps its existing
+      allocation-aware override from Phase 8/11 layered on top - a PO
+      quantity difference explained by a valid partial allocation still
+      shows Match). lineItemRowClass also no longer shows a red
+      background for a soft amount_match difference when V2's own
+      invoice_result already confirmed this row is a correct allocation
+      - the SAME reasoning already applied to quantity. lineItemPo
+      DisplayQuantity's allocation-detection condition was updated to
+      match (a small new showPoAllocationContext() helper, replacing a
+      duplicated inline condition in the template).
+
+Why:
+  A completely genuine GR match (15000 received == 15000 invoiced) was
+  showing as a hard "Mismatch" purely because an unrelated column's
+  (the PO's) raw, un-allocated total happened to differ - a false
+  signal an auditor could easily misread as "goods weren't fully
+  received," when in fact the goods receipt was exactly correct. The
+  row's persistent red background compounded this: once every
+  individual field genuinely matched (Vendor, PO Ref, Amount, and now
+  GR), there was no remaining reason for the row to still read as a
+  problem.
+
+  enterprise_matching.py and relationship_builder.py were not touched -
+  this was purely a rendering/interpretation issue in how the ALREADY-
+  correct backend comparison data (unchanged since Phase 11) gets
+  turned into pills and row styling. No backend changes were needed
+  this round at all. OCR, Claude/Gemini extraction, and the
+  authenticity engine were not touched either.
+
+Test results:
+  - python tests/extraction/run_all.py - all 25 suites pass (no backend
+    changes this round; run to confirm nothing else regressed).
+  - Manually traced the fixed logic against the exact reported case
+    (invoice=15000, po_quantity=30000, gr_quantity=15000, invoice_
+    result.status="PASS"): PO column -> Match (allocated, 15000 shown
+    with PO Ordered context 30000, unchanged from Phase 11); GR column
+    -> now correctly Match (15000 == 15000, was previously Mismatch);
+    row class -> no hard issue, amount_match softened by the same
+    allocation reasoning -> empty class list, no red background at all.
+    A genuinely under-received GR (a real quantity shortfall) still
+    correctly flags as a hard Mismatch, confirming the fix doesn't mask
+    real problems.
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+
+Build result:
+  Backend: all 25 test suites pass (unchanged). Frontend: clean
+  production build, exit 0.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. No backend redeploy needed this round.
+  2. Redeploy the Render FRONTEND - the corrected GR pill and row
+     styling are immediately available.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no backend/data changes this
+  round at all.
