@@ -1,0 +1,97 @@
+<div class="page-wrapper">
+
+  <div class="header">
+    <button class="btn-back" (click)="goBack()">
+      <i class="ph-duotone ph-arrow-left"></i> Back
+    </button>
+  </div>
+
+  <div class="loading-wrap" *ngIf="isLoading">
+    <div class="spinner"></div>
+    <p>Loading transaction package...</p>
+  </div>
+
+  <div class="error-box" *ngIf="errorMessage && !isLoading"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
+
+  <ng-container *ngIf="!isLoading && package">
+
+    <!-- Package Information -->
+    <div class="detail-card">
+      <h2 class="section-title"><i class="ph-duotone ph-package"></i> Package Information</h2>
+      <div class="info-row">
+        <div class="info-item">
+          <span class="info-label">Package Name</span>
+          <span class="info-value">{{ package.package_name }}</span>
+        </div>
+        <div class="info-item">
+          <span class="info-label">Created Date</span>
+          <span class="info-value">{{ formatDate(package.created_at) }}</span>
+        </div>
+        <div class="info-item">
+          <span class="info-label">Status</span>
+          <span class="badge" [ngClass]="statusClass(package.status)">{{ statusLabel(package.status) }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Documents -->
+    <div class="detail-card">
+      <h2 class="section-title"><i class="ph-duotone ph-files"></i> Documents</h2>
+
+      <div class="doc-group" *ngIf="documents?.purchase_orders?.length">
+        <p class="doc-group-label">Purchase Orders</p>
+        <div class="doc-row" *ngFor="let po of documents.purchase_orders">
+          <i class="ph-duotone ph-file-text"></i>
+          <span class="doc-name">{{ po.po_number || po.file_name }}</span>
+          <span class="doc-detail">{{ po.vendor_name }} · {{ formatAmount(po.total_amount, po.currency) }}</span>
+        </div>
+      </div>
+
+      <div class="doc-group" *ngIf="documents?.invoices?.length">
+        <p class="doc-group-label">Invoices</p>
+        <div class="doc-row" *ngFor="let inv of documents.invoices">
+          <i class="ph-duotone ph-receipt"></i>
+          <span class="doc-name">{{ inv.invoice_number || inv.file_name }}</span>
+          <span class="doc-detail">{{ inv.vendor_name }} · {{ formatAmount(inv.total_amount, inv.currency) }}</span>
+        </div>
+      </div>
+
+      <div class="doc-group" *ngIf="documents?.goods_receipts?.length">
+        <p class="doc-group-label">Goods Receipts</p>
+        <div class="doc-row" *ngFor="let gr of documents.goods_receipts">
+          <i class="ph-duotone ph-truck"></i>
+          <span class="doc-name">{{ gr.gr_number || gr.file_name }}</span>
+          <span class="doc-detail">{{ gr.vendor_name }}</span>
+        </div>
+      </div>
+
+      <p class="empty-note" *ngIf="!documents?.purchase_orders?.length && !documents?.invoices?.length && !documents?.goods_receipts?.length">
+        No documents linked to this package yet.
+      </p>
+    </div>
+
+    <!-- Relationship Preview -->
+    <div class="detail-card">
+      <h2 class="section-title"><i class="ph-duotone ph-flow-arrow"></i> Relationship Preview</h2>
+      <p class="section-subtitle">Read-only view of linked documents — matching happens automatically once Enterprise Matching runs.</p>
+
+      <div class="rel-tree" *ngIf="relationshipPreview.length">
+        <div class="rel-po-node" *ngFor="let po of relationshipPreview">
+          <p class="rel-po-label"><i class="ph-duotone ph-file-text"></i> {{ po.po_number || ('PO #' + po.document_id) }}</p>
+          <div class="rel-invoice-node" *ngFor="let inv of po.invoices">
+            <p class="rel-invoice-label"><i class="ph-duotone ph-arrow-bend-down-right"></i> {{ inv.invoice_number || ('Invoice #' + inv.document_id) }}</p>
+            <p class="rel-gr-label" *ngFor="let gr of inv.goods_receipts">
+              <i class="ph-duotone ph-arrow-bend-down-right"></i> {{ gr.gr_number || ('GR #' + gr.document_id) }}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <p class="empty-note" *ngIf="!relationshipPreview.length">
+        No relationships discovered yet — this needs at least one Purchase Order linked to this package.
+      </p>
+    </div>
+
+  </ng-container>
+
+</div>

@@ -1,0 +1,104 @@
+<div class="page-wrapper">
+
+  <div class="header">
+    <div class="header-left">
+      <h1 class="page-title">New Transaction Package</h1>
+      <p class="page-subtitle">Group related Purchase Orders, Invoices, and Goods Receipts into one AP transaction</p>
+    </div>
+  </div>
+
+  <div class="success-box" *ngIf="successMessage"><i class="ph-duotone ph-check-circle"></i> {{ successMessage }}</div>
+  <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
+  <div class="notice-box" *ngIf="poGrStagedNotice"><i class="ph-duotone ph-info"></i> {{ poGrStagedNotice }}</div>
+
+  <div class="form-card">
+
+    <div class="field-group">
+      <label class="field-label">Package Name</label>
+      <input type="text" class="field-input" [(ngModel)]="packageName"
+             placeholder="e.g. PO7710 Supplier ABC" [disabled]="isSubmitting" />
+    </div>
+
+    <!-- Purchase Orders -->
+    <div class="upload-zone">
+      <div class="upload-zone-header">
+        <p class="upload-zone-title"><i class="ph-duotone ph-file-text"></i> Purchase Orders</p>
+        <label class="btn-add-file" [class.disabled]="isSubmitting">
+          <i class="ph-duotone ph-plus"></i> Upload PO
+          <input type="file" hidden multiple accept=".pdf,.jpg,.jpeg,.png"
+                 [disabled]="isSubmitting" (change)="onFilesSelected($event, 'purchase_order')" />
+        </label>
+      </div>
+      <p class="upload-zone-hint">Allow multiple files</p>
+      <div class="file-chip" *ngFor="let f of poFiles; let i = index">
+        <i class="ph-duotone ph-file"></i>
+        <span class="file-chip-name">{{ f.name }}</span>
+        <button type="button" class="file-chip-remove" [disabled]="isSubmitting" (click)="removeFile('purchase_order', i)">
+          <i class="ph-duotone ph-x"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Invoices -->
+    <div class="upload-zone">
+      <div class="upload-zone-header">
+        <p class="upload-zone-title"><i class="ph-duotone ph-receipt"></i> Invoices</p>
+        <label class="btn-add-file" [class.disabled]="isSubmitting">
+          <i class="ph-duotone ph-plus"></i> Upload Invoice
+          <input type="file" hidden multiple accept=".pdf,.jpg,.jpeg,.png"
+                 [disabled]="isSubmitting" (change)="onFilesSelected($event, 'invoice')" />
+        </label>
+      </div>
+      <p class="upload-zone-hint">Allow multiple files</p>
+      <div class="file-chip" *ngFor="let f of invoiceFiles; let i = index">
+        <i class="ph-duotone ph-file"></i>
+        <span class="file-chip-name">{{ f.name }}</span>
+        <button type="button" class="file-chip-remove" [disabled]="isSubmitting" (click)="removeFile('invoice', i)">
+          <i class="ph-duotone ph-x"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Goods Receipts -->
+    <div class="upload-zone">
+      <div class="upload-zone-header">
+        <p class="upload-zone-title"><i class="ph-duotone ph-package"></i> Goods Receipts</p>
+        <label class="btn-add-file" [class.disabled]="isSubmitting">
+          <i class="ph-duotone ph-plus"></i> Upload GR
+          <input type="file" hidden multiple accept=".pdf,.jpg,.jpeg,.png"
+                 [disabled]="isSubmitting" (change)="onFilesSelected($event, 'goods_receipt')" />
+        </label>
+      </div>
+      <p class="upload-zone-hint">Allow multiple files</p>
+      <div class="file-chip" *ngFor="let f of grFiles; let i = index">
+        <i class="ph-duotone ph-file"></i>
+        <span class="file-chip-name">{{ f.name }}</span>
+        <button type="button" class="file-chip-remove" [disabled]="isSubmitting" (click)="removeFile('goods_receipt', i)">
+          <i class="ph-duotone ph-x"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Upload progress -->
+    <div class="progress-section" *ngIf="progress.length">
+      <p class="progress-title">Upload Progress</p>
+      <div class="progress-row" *ngFor="let item of progress">
+        <i class="ph-duotone" [ngClass]="{
+          'ph-circle-dashed': item.status === 'pending',
+          'ph-spinner-gap spin': item.status === 'uploading',
+          'ph-check-circle': item.status === 'done',
+          'ph-x-circle': item.status === 'error',
+          'ph-clock': item.status === 'staged'
+        }" [class.icon-success]="item.status === 'done'" [class.icon-error]="item.status === 'error'"></i>
+        <span class="progress-name">{{ item.name }}</span>
+        <span class="progress-message">{{ item.message }}</span>
+      </div>
+    </div>
+
+    <button class="btn-create-package" (click)="createPackage()" [disabled]="isSubmitting">
+      {{ isSubmitting ? 'Creating Package...' : 'Create Package' }}
+    </button>
+
+  </div>
+
+</div>

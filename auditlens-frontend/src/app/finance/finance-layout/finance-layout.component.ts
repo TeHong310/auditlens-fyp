@@ -17,6 +17,7 @@ export class FinanceLayoutComponent implements OnInit {
   navItems = [
     { label: 'Finance Home', icon: 'home', route: '/finance/home' },
     { label: 'Upload Document', icon: 'upload', route: '/finance/upload' },
+    { label: 'Transactions', icon: 'transactions', route: '/finance/transactions' },
     { label: 'OCR Review', icon: 'review', route: '/finance/ocr-review' },
     { label: 'Correction Center', icon: 'correction', route: '/finance/corrections' },
     { label: 'Calendar', icon: 'calendar', route: '/finance/calendar' },

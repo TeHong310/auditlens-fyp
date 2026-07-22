@@ -9,6 +9,9 @@ import { FinanceOcrReviewComponent } from './finance/ocr-review/finance-ocr-revi
 import { FinanceCorrectionsComponent } from './finance/corrections/finance-corrections.component';
 import { FinanceCorrectionDetailComponent } from './finance/correction-detail/finance-correction-detail.component';
 import { FinanceReportComponent } from './finance/report/finance-report.component';
+import { FinanceTransactionsComponent } from './finance/transactions/finance-transactions.component';
+import { FinanceTransactionCreateComponent } from './finance/transaction-create/finance-transaction-create.component';
+import { FinanceTransactionDetailComponent } from './finance/transaction-detail/finance-transaction-detail.component';
 import { AuditorLayoutComponent } from './auditor/auditor-layout/auditor-layout.component';
 import { AuditorDashboardComponent } from './auditor/dashboard/auditor-dashboard.component';
 import { AuditorReportComponent } from './auditor/report/auditor-report.component';
@@ -34,6 +37,9 @@ export const routes: Routes = [
       { path: 'corrections/detail', component: FinanceCorrectionDetailComponent },
       { path: 'report', component: FinanceReportComponent },
       { path: 'calendar', component: CalendarComponent },
+      { path: 'transactions', component: FinanceTransactionsComponent },
+      { path: 'transactions/create', component: FinanceTransactionCreateComponent },
+      { path: 'transactions/detail', component: FinanceTransactionDetailComponent },
       { path: '', redirectTo: 'home', pathMatch: 'full' }
     ]
   },

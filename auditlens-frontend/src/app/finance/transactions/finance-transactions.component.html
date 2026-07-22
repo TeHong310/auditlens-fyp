@@ -1,0 +1,55 @@
+<div class="page-wrapper">
+
+  <div class="header">
+    <div class="header-left">
+      <h1 class="page-title">Transaction Packages</h1>
+      <p class="page-subtitle">Group related Purchase Orders, Invoices, and Goods Receipts into one AP transaction</p>
+    </div>
+    <div class="header-right">
+      <button class="btn-new-package" (click)="createNewPackage()">
+        <i class="ph-duotone ph-plus"></i> New Transaction Package
+      </button>
+    </div>
+  </div>
+
+  <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
+
+  <div class="list-card">
+    <div class="search-bar">
+      <i class="ph-duotone ph-magnifying-glass" style="font-size:15px; color:var(--text-muted);"></i>
+      <input type="text" placeholder="Search package name or supplier..." class="search-input" [(ngModel)]="searchText" />
+    </div>
+
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Transaction Package</th>
+            <th>Supplier</th>
+            <th>Document Count</th>
+            <th>Status</th>
+            <th>Created Date</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngIf="isLoading"><td colspan="6" class="loading-row">Loading...</td></tr>
+          <tr *ngIf="!isLoading && filteredPackages.length === 0">
+            <td colspan="6" class="empty-row">
+              <p>No transaction packages yet. Create one to group related AP documents.</p>
+            </td>
+          </tr>
+          <tr *ngFor="let pkg of filteredPackages" (click)="openPackage(pkg)">
+            <td class="package-name">{{ pkg.package_name }}</td>
+            <td>{{ pkg.supplier || 'Unknown' }}</td>
+            <td>{{ pkg.document_count }} document{{ pkg.document_count === 1 ? '' : 's' }}</td>
+            <td><span class="badge" [ngClass]="statusClass(pkg.status)">{{ statusLabel(pkg.status) }}</span></td>
+            <td>{{ formatDate(pkg.created_at) }}</td>
+            <td><button class="btn-open" (click)="openPackage(pkg); $event.stopPropagation()">Open</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>

@@ -9019,3 +9019,271 @@ Rollback instructions:
 Both feature flags remain at their safe defaults after this phase:
   ENTERPRISE_MATCHING_V2_ENABLED=false
   ENTERPRISE_MATCHING_V2_SHADOW_MODE=false
+
+
+====================================================================
+
+Date: 2026-07-23
+
+What was changed:
+  Backend (auditlens-backend/) - Enterprise V3 Phase 5: Finance
+  Transaction Package Workflow. 2 new tables, 2 new files, additive-
+  only edits to 2 existing files. Zero changes to OCR extraction,
+  Claude/Gemini extraction, the authenticity engine, the anomaly
+  engine, the enterprise matching engine, document_relationships
+  logic, matching calculation, or the auditor workflow (confirmed via
+  git diff --stat against every one of those files individually -
+  zero diff on all of them).
+    - transaction_packages (id, package_name, created_by, status,
+      created_at, updated_at) and transaction_package_documents (id,
+      package_id, document_id, document_role, created_at) - app.py::
+      _ensure_transaction_packages_table()/_ensure_transaction_package_
+      documents_table(), same auto-create-on-startup pattern as every
+      other table in this app. document_id on the documents table is
+      polymorphic by document_role ('invoice'|'purchase_order'|
+      'goods_receipt'), meaning documents.document_id / purchase_
+      orders.po_id / goods_receipts.gr_id depending on role - the exact
+      same trade-off Phase 1 already established for document_
+      relationships (a single-column FK can't target three tables, so
+      referential integrity is enforced in the service layer instead).
+      Purely additive/organizational: does not replace or duplicate
+      document_relationships, and performs no matching calculation of
+      its own.
+    - helpers/transaction_packages.py (new): create_package(),
+      get_package(), link_document_to_package() (validates the
+      referenced entity exists via Phase 1's own _entity_exists(),
+      rejects unknown roles/duplicates/nonexistent packages, then -
+      after inserting - calls the EXISTING, unmodified helpers.
+      relationship_builder.build_relationships_for_invoice() for every
+      invoice currently in the package, so Enterprise Matching V2 picks
+      up newly-grouped documents automatically the next time anyone
+      reads the record; a per-invoice failure is logged and never
+      blocks the link, matching this codebase's established "a
+      background step must never block the primary action"
+      philosophy), compute_package_status() (deterministic, no AI/
+      matching call: 'draft' with zero linked documents, 'waiting_
+      documents' when documents exist but no invoice does yet - a PO/GR
+      alone cannot be OCR-processed without an invoice to anchor it,
+      confirmed by inspecting the existing upload-po/upload-gr routes'
+      own document_id-scoped design before writing any code -
+      'processing' once an invoice exists but isn't yet approved,
+      'completed' once every linked invoice's existing documents.status
+      is 'approved'), get_package_documents(), get_relationship_
+      preview() (read-only tree built by calling Phase 1's get_related_
+      invoices()/get_related_goods_receipts() verbatim - "do not
+      calculate" honored literally, zero new relationship logic),
+      list_packages() (document_count/supplier annotated from data
+      already in hand, never fabricated).
+    - routes/transaction_packages.py (new blueprint, registered at
+      url_prefix '/transaction-packages'): POST '' (create package),
+      GET '' (list own packages), GET /<id> (package + documents +
+      relationship_preview), POST /<id>/documents (link an already-
+      uploaded document into a package). Finance-Executive-only
+      throughout, with package-ownership checks mirroring this
+      codebase's established _require_*_owner() pattern. Does NOT add
+      its own upload endpoint - documents are uploaded via the
+      EXISTING, completely unmodified POST /documents/upload,
+      /documents/upload-po/<id>, /documents/upload-gr/<id>, confirmed
+      untouched via git diff.
+    - tests/extraction/test_transaction_packages.py (new, 24 checks):
+      the exact 4 scenarios the task named - Scenario 1 (1 invoice/1
+      PO/1 GR, no regression, package reaches "processing"), Scenario 2
+      (PO7710-style: 1 PO/2 invoices/2 GR - package created, all 5
+      documents linked, relationship preview correctly shows each
+      invoice with only its OWN GR, and Enterprise Matching V2, once
+      enabled, correctly resolves PASS for the grouped invoice, proving
+      the relationship-builder trigger fired automatically on link),
+      Scenario 3 (2 PO/2 Invoice/2 GR - no crash, 6 documents linked
+      cleanly), Scenario 4 (PO uploaded with no invoice in the package -
+      status is "waiting_documents") - plus status-transition edge
+      cases (draft with zero documents; completed once every invoice is
+      approved) and link_document_to_package() validation (unknown
+      role, nonexistent document, duplicate link, nonexistent package
+      all rejected). Registered in tests/extraction/run_all.py.
+    - app.py: 2 new _ensure_* functions + their call-list entries, 1
+      new blueprint import + registration - zero lines removed
+      (confirmed via git diff).
+
+  Frontend (auditlens-frontend/) - 3 new pages under a Mode-2 workflow
+  that sits alongside the completely untouched existing single-document
+  upload page (confirmed via git diff: finance-upload.component.ts/
+  .html/.css have ZERO changes):
+    - finance-transaction-create (new, /finance/transactions/create):
+      package name field + 3 independent multi-file pickers (Purchase
+      Orders / Invoices / Goods Receipts), each with remove-before-
+      upload, extension validation (pdf/jpg/jpeg/png, matching the
+      backend's own ALLOWED_EXTENSIONS), and a live per-file upload-
+      progress list. "Create Package" orchestrates the EXISTING upload
+      endpoints from the frontend in sequence (invoices first via POST
+      /documents/upload, then POs/GRs anchored to the package's first
+      uploaded invoice via POST /documents/upload-po|gr/<id> - the same
+      endpoints and the same document_id-anchoring the existing /
+      finance/upload page already uses), then links each resulting
+      document into the package via POST /transaction-packages/<id>/
+      documents. If Finance selects only PO/GR files with no invoice,
+      those files are marked "staged" (not uploaded - there is no valid
+      anchor to OCR-process them against yet) with a clear on-screen
+      notice to add an invoice; the package is still created, saved as
+      "waiting_documents". No new calculation, no OCR/extraction/
+      matching code in the frontend - only orchestration of existing
+      calls.
+    - finance-transactions (new, /finance/transactions): list of the
+      current Finance user's own packages - Transaction Package /
+      Supplier / Document Count / Status / Created Date / Action,
+      exactly the columns and example ("PO7710 Supplier ABC, 5
+      documents, Processing, Open") the task specified - reading
+      GET /transaction-packages directly, no client-side calculation.
+    - finance-transaction-detail (new, /finance/transactions/detail?
+      id=X, matching this app's existing query-param routing
+      convention, e.g. auditor-record-detail): Package Information
+      (name/status/created date), Documents grouped by role, and a
+      read-only Relationship Preview tree (PO -> its invoices -> each
+      invoice's own GRs) rendered directly from the backend's
+      relationship_preview field - no calculation performed here either.
+    - finance-layout.component.ts/.html: added one "Transactions" nav
+      item (route '/finance/transactions', a new ph-package icon
+      branch) to the existing Finance sidebar list, alongside Home/
+      Upload Document/OCR Review/Correction Center/Calendar/Report -
+      every existing item and its behavior is unchanged.
+    - app.routes.ts: 3 new child routes under the existing 'finance'
+      layout route - zero existing route entries changed.
+
+  Untouched, verified via git diff --stat against each file
+  individually: helpers/ocr_helper.py, helpers/claude_extractor.py,
+  helpers/gemini_extractor.py, helpers/authenticity_check.py, helpers/
+  anomaly_detector.py, helpers/relationship_builder.py, helpers/
+  enterprise_matching.py, helpers/document_relationships.py, routes/
+  auditor.py, routes/documents.py, routes/ai_assistant.py, and the
+  EXISTING finance-upload.component.ts/.html/.css - zero lines changed
+  in any of them.
+
+Why it was changed:
+  Phase 5 of the Enterprise V3 upgrade - Phases 1-4 built and wired the
+  many-to-many matching engine, but Finance still uploaded every
+  document independently with no way to express "these 5 documents are
+  one AP transaction" before an auditor ever sees them. This phase adds
+  that organizational layer for Finance, while leaving every matching/
+  extraction/authenticity/anomaly engine exactly as Phases 1-4 left it -
+  Enterprise Matching V2 discovers the grouped documents' relationships
+  itself (via the same deterministic, already-existing relationship
+  builder now simply triggered a bit earlier, at grouping time instead
+  of only on-demand), never duplicated or reimplemented here.
+
+Database changes:
+  2 new additive tables (transaction_packages, transaction_package_
+  documents) - see the detail above. No column added to, no constraint
+  changed on, any existing table.
+
+New routes:
+  Backend: POST /transaction-packages, GET /transaction-packages, GET
+  /transaction-packages/<id>, POST /transaction-packages/<id>/documents.
+  Frontend: /finance/transactions, /finance/transactions/create,
+  /finance/transactions/detail?id=X.
+
+Upload flow diagram:
+  Mode 1 (existing, completely unchanged):
+    Finance uploads ONE document
+      -> POST /documents/upload (or upload-po/upload-gr/<id>)
+      -> existing OCR + Claude/Gemini extraction
+      -> Finance Correction / Auditor review, exactly as before
+
+  Mode 2 (new, this phase):
+    Finance selects files for Purchase Orders / Invoices / Goods
+    Receipts on /finance/transactions/create
+      -> POST /transaction-packages (create the package row)
+      -> for each Invoice file: POST /documents/upload (EXISTING,
+         unmodified) -> document_id
+      -> for each PO/GR file (only once >=1 invoice exists in the
+         package): POST /documents/upload-po|gr/<first_invoice_id>
+         (EXISTING, unmodified) -> po_id / gr_id
+      -> for each uploaded document: POST /transaction-packages/<id>/
+         documents { document_id, document_role }
+           -> link_document_to_package() validates + inserts, then
+              calls the EXISTING build_relationships_for_invoice() for
+              every invoice in the package (Phase 2, untouched)
+           -> compute_package_status() recomputes 'waiting_documents' /
+              'processing' / 'completed'
+      -> Enterprise Matching V2 (Phase 2/4, untouched) picks up the new
+         document_relationships rows automatically the next time
+         anyone views any linked invoice - no separate "run matching"
+         step needed
+      -> Auditor Review - Record Detail, Exceptions, Report, AI
+         Assistant, Workflow Timeline (Phase 4) all already read
+         through the same build_comparison() dispatcher, unaware
+         (and not needing to be aware) that these documents arrived via
+         a package instead of independently
+
+Backward compatibility confirmation:
+  Confirmed, not assumed: git diff --stat shows ZERO changes to
+  finance-upload.component.ts/.html/.css (Mode 1's actual file), zero
+  changes to routes/documents.py (the upload/OCR pipeline those
+  endpoints live in), zero changes to any extraction/authenticity/
+  anomaly/matching engine file. The existing single-document upload
+  flow (Upload -> OCR Review -> Auditor Review) is exercised unchanged
+  by every pre-existing test in tests/extraction/run_all.py, all of
+  which still pass.
+
+API usage confirmation:
+  Number of Claude calls added: 0. Number of Gemini calls added: 0.
+  This phase is pure document grouping/organization - the only
+  "processing" it triggers is calling the existing, deterministic,
+  non-AI relationship builder; no new call to Claude, Gemini, or any
+  other AI provider exists anywhere in helpers/transaction_packages.py
+  or routes/transaction_packages.py.
+
+Test results:
+  - python tests/extraction/run_all.py - all 24 suites pass (1 new:
+    test_transaction_packages.py 24/24; zero regressions in any
+    pre-existing suite, including every extraction/matching/
+    authenticity/anomaly/send-back/calendar test).
+  - Live verification against the real local Postgres dev DB (rows
+    created and cleaned up, DB left exactly as found) before writing
+    the automated suite: all 4 named scenarios plus the relationship
+    preview tree and Enterprise Matching V2 end-to-end, confirming the
+    grouped PO7710-style invoice resolves to PASS with matched_po_
+    count=1/matched_gr_count=1 purely from the automatic relationship-
+    builder trigger - no manual "run matching" step was needed.
+  - python -c "import app" - clean import; both new tables print
+    "ready", confirming the additive CREATE TABLE statements are valid
+    and idempotent.
+  - npx ng build --configuration production - succeeded (exit 0;
+    same pre-existing bundle-size warnings, no new component-style
+    budget issues from the 3 new pages, which are all comfortably
+    under budget).
+
+Build result:
+  Backend: clean import, 2 new tables auto-created. Frontend: clean
+  production build, exit 0.
+
+Known limitations:
+  - A Purchase Order or Goods Receipt cannot be OCR-processed with zero
+    invoices in its package (a real constraint of the existing upload-
+    po/upload-gr routes, confirmed by inspection, not modified by this
+    phase) - such files are staged client-side with a clear notice
+    until Finance adds an invoice, at which point they upload normally.
+  - The relationship_preview tree only shows POs that are already
+    linked into the package (matching STEP 7's own "read existing
+    document_relationships, display only" instruction) - if Enterprise
+    Matching V2 later discovers a relationship to a PO from a different
+    package or an un-grouped upload, that PO won't appear in THIS
+    package's preview tree unless it's also explicitly linked here.
+  - "Multiple PO + Multiple Invoice + Multiple GR" (the task's "Future
+    support" tier) already works structurally today (Scenario 3 proves
+    no crash and correct multi-document handling), but this phase adds
+    no PO-to-PO or cross-package UI beyond what the existing
+    relationship builder already discovers per invoice.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - both new tables auto-create on
+     startup via the existing _ensure_* pattern, no manual migration
+     step, no new required environment variables.
+  2. Redeploy the Render FRONTEND - the 3 new pages and the "New
+     Transaction Package" flow are immediately available; the existing
+     /finance/upload page is unaffected.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend/frontend build - both new tables are
+  purely additive and read by nothing outside this phase's own code, so
+  they can be left in place indefinitely with zero effect on any other
+  feature, or dropped manually if ever desired.

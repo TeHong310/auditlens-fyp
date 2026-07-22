@@ -15,6 +15,7 @@ from routes.authenticity import authenticity_bp
 from routes.calendar import calendar_bp
 from routes.ai_assistant import ai_assistant_bp
 from routes.document_relationships import document_relationships_bp
+from routes.transaction_packages import transaction_packages_bp
 
 
 def _ensure_anomalies_table():
@@ -574,6 +575,67 @@ def _ensure_document_relationships_v2_columns():
         print(f'WARNING: could not add document_relationships v2 columns: {type(e).__name__}: {e}')
 
 
+def _ensure_transaction_packages_table():
+    """Enterprise V3 Phase 5: Finance Transaction Package workflow —
+    lets Finance group related AP documents (PO/Invoice/GR) into one
+    package before auditor review. Purely additive/organizational —
+    does not replace or duplicate document_relationships (Phase 1) or
+    any upload/OCR/extraction/matching logic. See the matching
+    migrations/*.sql file for the full rationale."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS transaction_packages (
+                id SERIAL PRIMARY KEY,
+                package_name VARCHAR(200) NOT NULL,
+                created_by INTEGER NOT NULL REFERENCES users(user_id),
+                status VARCHAR(20) NOT NULL DEFAULT 'draft',
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                CONSTRAINT chk_transaction_packages_status
+                    CHECK (status IN ('draft', 'waiting_documents', 'processing', 'completed'))
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_packages_created_by ON transaction_packages(created_by)')
+        conn.commit()
+        conn.close()
+        print('transaction_packages table ready')
+    except Exception as e:
+        print(f'WARNING: could not create transaction_packages table: {type(e).__name__}: {e}')
+
+
+def _ensure_transaction_package_documents_table():
+    """Polymorphic association, same pattern/trade-off as Phase 1's
+    document_relationships table — document_id means documents.
+    document_id / purchase_orders.po_id / goods_receipts.gr_id
+    depending on document_role, so no single-table SQL FOREIGN KEY is
+    possible; referential integrity is enforced in helpers/
+    transaction_packages.py::link_document_to_package()."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS transaction_package_documents (
+                id SERIAL PRIMARY KEY,
+                package_id INTEGER NOT NULL REFERENCES transaction_packages(id) ON DELETE CASCADE,
+                document_id INTEGER NOT NULL,
+                document_role VARCHAR(20) NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                CONSTRAINT chk_transaction_package_documents_role
+                    CHECK (document_role IN ('invoice', 'purchase_order', 'goods_receipt')),
+                CONSTRAINT uq_transaction_package_documents UNIQUE (package_id, document_role, document_id)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_package_documents_package ON transaction_package_documents(package_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transaction_package_documents_doc ON transaction_package_documents(document_role, document_id)')
+        conn.commit()
+        conn.close()
+        print('transaction_package_documents table ready')
+    except Exception as e:
+        print(f'WARNING: could not create transaction_package_documents table: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -594,6 +656,7 @@ app.register_blueprint(authenticity_bp, url_prefix='/authenticity')
 app.register_blueprint(calendar_bp,   url_prefix='/calendar')
 app.register_blueprint(ai_assistant_bp, url_prefix='/ai-assistant')
 app.register_blueprint(document_relationships_bp, url_prefix='/documents')
+app.register_blueprint(transaction_packages_bp, url_prefix='/transaction-packages')
 
 _ensure_anomalies_table()
 _ensure_authenticity_checks_table()
@@ -611,6 +674,8 @@ _ensure_calendar_tasks_table()
 _ensure_ai_assistant_cache_table()
 _ensure_document_relationships_table()
 _ensure_document_relationships_v2_columns()
+_ensure_transaction_packages_table()
+_ensure_transaction_package_documents_table()
 
 @app.route('/')
 def hello_world():
