@@ -1,37 +1,10 @@
 import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { forkJoin, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
-
-// Display labels for the auditor's structured send-back request (Feature
-// 2) — machine keys mirror helpers/send_back.py exactly; this is the
-// Finance-side counterpart of the same lookup used in
-// auditor-record-detail.component.ts.
-const REASON_CATEGORY_LABELS: Record<string, string> = {
-  missing_document: 'Missing document',
-  incorrect_extracted_information: 'Incorrect extracted information',
-  invoice_po_gr_mismatch: 'Invoice / PO / GR mismatch',
-  possible_duplicate_invoice: 'Possible duplicate invoice',
-  authenticity_evidence_requires_clarification: 'Authenticity evidence requires clarification',
-  incorrect_supplier_information: 'Incorrect supplier information',
-  amount_or_quantity_requires_verification: 'Amount or quantity requires verification',
-  other: 'Other',
-};
-
-const REQUIRED_ACTION_LABELS: Record<string, string> = {
-  upload_missing_document: 'Upload missing document',
-  correct_extracted_information: 'Correct extracted information',
-  provide_written_explanation: 'Provide written explanation',
-  confirm_duplicate_submission: 'Confirm duplicate submission',
-  replace_incorrect_document: 'Replace incorrect document',
-  verify_amount_or_quantity: 'Verify amount or quantity',
-  confirm_supplier_information: 'Confirm supplier information',
-  other: 'Other',
-};
 
 @Component({
   selector: 'app-finance-ocr-review',
@@ -57,14 +30,6 @@ export class FinanceOcrReviewComponent implements OnInit {
     invoice_date: '', total_amount: '', tax_amount: ''
   };
   showTaxAmount: boolean = false;
-
-  // ── Returned for Correction (Features 2, 3) ──
-  // The current open send-back cycle for the selected document, if it
-  // was returned by the auditor — loaded fresh whenever a 'returned'
-  // document is selected. financeResponse is required before resubmit.
-  selectedDocCycle: any = null;
-  isLoadingCycle: boolean = false;
-  financeResponse: string = '';
 
   // PO
   poList: any[] = [];
@@ -95,7 +60,6 @@ export class FinanceOcrReviewComponent implements OnInit {
 
   constructor(
     private http: HttpClient,
-    private router: Router,
     private cdr: ChangeDetectorRef
   ) { }
 
@@ -125,15 +89,18 @@ export class FinanceOcrReviewComponent implements OnInit {
 
   // ── INVOICE ──────────────────────────────────────────────
 
+  // OCR extraction review only — a document that has been sent back by
+  // an auditor is handled exclusively in Finance Correction Center from
+  // here on, so 'returned' documents are deliberately excluded from
+  // this queue (see also: canSubmit/submitToAuditor below, which no
+  // longer have any correction-workflow branch).
   loadDocuments() {
     this.isLoading = true;
     this.http.get<any>(`${this.apiUrl}/documents/`, {
       headers: this.getHeaders()
     }).subscribe({
       next: (res) => {
-        this.documents = res.documents.filter((d: any) =>
-          d.status === 'ocr_done' || d.status === 'returned'
-        );
+        this.documents = res.documents.filter((d: any) => d.status === 'ocr_done');
         this.isLoading = false;
         this.cdr.detectChanges();
         this.loadGRList(); // ← 加这行
@@ -195,47 +162,7 @@ export class FinanceOcrReviewComponent implements OnInit {
     this.showTaxAmount = doc.tax_amount !== null && doc.tax_amount !== undefined && doc.tax_amount !== '';
     this.successMessage = '';
     this.errorMessage = '';
-    this.financeResponse = '';
-    this.selectedDocCycle = null;
-    if (doc.status === 'returned') this.loadSelectedDocCycle(doc.document_id);
     this.cdr.detectChanges();
-  }
-
-  // ── Returned for Correction (Features 2, 3) ──
-
-  get returnedDocuments() {
-    return this.documents.filter(d => d.status === 'returned');
-  }
-
-  loadSelectedDocCycle(documentId: number) {
-    this.isLoadingCycle = true;
-    this.http.get<any>(`${this.apiUrl}/reviews/send-back-cycles/${documentId}`, {
-      headers: this.getHeaders()
-    }).subscribe({
-      next: (res) => {
-        const cycles = res.cycles || [];
-        this.selectedDocCycle = cycles.length ? cycles[cycles.length - 1] : null;
-        this.isLoadingCycle = false;
-        this.cdr.detectChanges();
-      },
-      error: () => {
-        this.selectedDocCycle = null;
-        this.isLoadingCycle = false;
-        this.cdr.detectChanges();
-      }
-    });
-  }
-
-  reasonCategoryLabel(key: string): string {
-    return REASON_CATEGORY_LABELS[key] || key;
-  }
-
-  requiredActionLabel(key: string): string {
-    return REQUIRED_ACTION_LABELS[key] || key;
-  }
-
-  goToUpload() {
-    this.router.navigate(['/finance/upload']);
   }
 
   addTaxAmount() {
@@ -280,35 +207,26 @@ export class FinanceOcrReviewComponent implements OnInit {
   }
 
   canSubmit(): boolean {
-    const fieldsReady = !!(this.editFields.invoice_number && this.editFields.vendor_name &&
+    return !!(this.editFields.invoice_number && this.editFields.vendor_name &&
       this.editFields.total_amount && this.editFields.invoice_date);
-    if (this.selectedDoc?.status === 'returned') {
-      return fieldsReady && !!this.financeResponse.trim();
-    }
-    return fieldsReady;
   }
 
   submitToAuditor() {
     if (!this.selectedDoc || !this.canSubmit()) {
-      this.errorMessage = this.selectedDoc?.status === 'returned' && !this.financeResponse.trim()
-        ? 'Please add a Finance response before resubmitting.'
-        : 'Please fill in all required fields before submitting.';
+      this.errorMessage = 'Please fill in all required fields before submitting.';
       this.cdr.detectChanges();
       return;
     }
     this.isSubmitting = true;
-    const isReturned = this.selectedDoc.status === 'returned';
-    const url = isReturned
-      ? `${this.apiUrl}/reviews/resubmit/${this.selectedDoc.document_id}`
-      : `${this.apiUrl}/reviews/submit/${this.selectedDoc.document_id}`;
-    const body = isReturned ? { response: this.financeResponse.trim() } : {};
 
-    this.http.post<any>(url, body, { headers: this.getHeaders() }).subscribe({
+    this.http.post<any>(
+      `${this.apiUrl}/reviews/submit/${this.selectedDoc.document_id}`,
+      {},
+      { headers: this.getHeaders() }
+    ).subscribe({
       next: () => {
         this.isSubmitting = false;
-        this.successMessage = isReturned
-          ? 'Document resubmitted to Auditor successfully!'
-          : 'Document submitted to Auditor successfully!';
+        this.successMessage = 'Document submitted to Auditor successfully!';
         this.documents = this.documents.filter(d => d.document_id !== this.selectedDoc.document_id);
         this.grList = this.grList.filter(
           g => g.document_id !== this.selectedDoc.document_id
@@ -317,8 +235,6 @@ export class FinanceOcrReviewComponent implements OnInit {
           p => p.document_id !== this.selectedDoc.document_id
         );
         this.selectedDoc = null;
-        this.selectedDocCycle = null;
-        this.financeResponse = '';
         this.cdr.detectChanges();
         setTimeout(() => { this.successMessage = ''; this.cdr.detectChanges(); }, 4000);
       },
@@ -436,7 +352,7 @@ export class FinanceOcrReviewComponent implements OnInit {
     }).subscribe({
       next: (res) => {
         const allGR = res.goods_receipts || [];
-        // Only show GR whose invoice is still ocr_done or returned
+        // Only show GR whose invoice is still ocr_done (awaiting review)
         const pendingDocIds = this.documents.map((d: any) => d.document_id);
         this.grList = allGR.filter((g: any) =>
           pendingDocIds.includes(g.document_id)
@@ -525,15 +441,11 @@ export class FinanceOcrReviewComponent implements OnInit {
     if (!doc.vendor_name) return 'Missing Vendor';
     if (!doc.total_amount) return 'Missing Amount';
     if (parseFloat(doc.ocr_confidence) < 60) return 'Low OCR Confidence';
-    if (doc.status === 'returned') return 'Returned';
     return 'Ready';
   }
 
   getErrorClass(doc: any): string {
-    const err = this.getErrorType(doc);
-    if (err === 'Ready') return 'badge-ready';
-    if (err === 'Returned') return 'badge-returned';
-    return 'badge-error';
+    return this.getErrorType(doc) === 'Ready' ? 'badge-ready' : 'badge-error';
   }
 
   // ── PO / GR related-doc status pills ─────────────────────

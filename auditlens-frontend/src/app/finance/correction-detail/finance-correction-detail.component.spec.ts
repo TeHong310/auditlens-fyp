@@ -121,7 +121,7 @@ describe('FinanceCorrectionDetailComponent', () => {
     component.financeResponse = '   ';
     component.resubmit();
 
-    expect(component.errorMessage).toBe('Please add a Finance response before resubmitting.');
+    expect(component.errorMessage).toBe('Please add a Finance response before submitting.');
     httpMock.expectNone(`${environment.apiUrl}/reviews/resubmit/42`);
   });
 
@@ -135,7 +135,7 @@ describe('FinanceCorrectionDetailComponent', () => {
     req.flush({ message: 'Document resubmitted for review', status: 'resubmitted' });
 
     expect(component.isSubmitting).toBe(false);
-    expect(component.successMessage).toBe('Invoice resubmitted to Auditor successfully!');
+    expect(component.successMessage).toBe('Correction submitted for auditor review successfully!');
   });
 
   it('resubmit surfaces a server-side error and does not navigate away', () => {

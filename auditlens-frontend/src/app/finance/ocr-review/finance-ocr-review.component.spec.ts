@@ -1,16 +1,16 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
-import { Router } from '@angular/router';
 
 import { FinanceOcrReviewComponent } from './finance-ocr-review.component';
 import { environment } from '../../../environments/environment';
 
-// Returned-for-Correction + Finance Response + Resubmission tests
-// (Features 2, 3). All HTTP calls are mocked — no real backend, no AI
-// calls.
-
-describe('FinanceOcrReviewComponent — Returned for Correction workflow', () => {
+// OCR extraction review + field editing only — the returned-invoice
+// correction workflow (Auditor Request card, Finance Response field,
+// Resubmit to Auditor) has moved to Finance Correction Center
+// (finance/correction-detail.component.ts) and no longer exists here.
+// All HTTP calls are mocked — no real backend, no AI calls.
+describe('FinanceOcrReviewComponent — OCR review only (correction workflow removed)', () => {
   let component: FinanceOcrReviewComponent;
   let httpMock: HttpTestingController;
 
@@ -20,7 +20,6 @@ describe('FinanceOcrReviewComponent — Returned for Correction workflow', () =>
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
-        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
       ],
     }).compileComponents();
 
@@ -35,80 +34,48 @@ describe('FinanceOcrReviewComponent — Returned for Correction workflow', () =>
     httpMock.verify();
   });
 
-  it('returnedDocuments filters to only status === "returned"', () => {
-    component.documents = [
-      { document_id: 1, status: 'ocr_done' },
-      { document_id: 2, status: 'returned' },
-      { document_id: 3, status: 'returned' },
-      { document_id: 4, status: 'under_review' },
-    ];
-    expect(component.returnedDocuments.length).toBe(2);
-    expect(component.returnedDocuments.map(d => d.document_id)).toEqual([2, 3]);
-  });
+  it('loadDocuments only includes ocr_done documents — returned invoices never appear here', () => {
+    component.loadDocuments();
 
-  it('selecting a returned document loads its send-back cycle and shows the latest one', () => {
-    const doc = { document_id: 5, status: 'returned', invoice_number: 'INV-1', vendor_name: 'Acme' };
-    component.documents = [doc];
-
-    component.selectDocument(doc);
-
-    const req = httpMock.expectOne(`${environment.apiUrl}/reviews/send-back-cycles/5`);
+    const req = httpMock.expectOne(`${environment.apiUrl}/documents/`);
     expect(req.request.method).toBe('GET');
     req.flush({
-      document_id: 5,
-      cycles: [
-        { cycle_number: 1, cycle_status: 'resolved', auditor_instruction: 'First instruction' },
-        { cycle_number: 2, cycle_status: 'action_required', auditor_instruction: 'Second instruction',
-          return_reason_category: 'possible_duplicate_invoice', priority: 'high',
-          required_actions: ['provide_written_explanation'] },
-      ],
+      documents: [
+        { document_id: 1, status: 'ocr_done', invoice_number: 'INV-1' },
+        { document_id: 2, status: 'returned', invoice_number: 'INV-2' },
+        { document_id: 3, status: 'under_review', invoice_number: 'INV-3' },
+        { document_id: 4, status: 'approved', invoice_number: 'INV-4' },
+      ]
     });
 
-    expect(component.selectedDocCycle).toBeTruthy();
-    expect(component.selectedDocCycle.cycle_number).toBe(2);
-    expect(component.selectedDocCycle.auditor_instruction).toBe('Second instruction');
+    // loadDocuments() also kicks off related-docs/PO/GR requests for
+    // the ocr_done set — flush the ones triggered so httpMock.verify()
+    // in afterEach doesn't fail on outstanding requests.
+    httpMock.match(() => true).forEach(req => req.flush({}));
+
+    expect(component.documents.length).toBe(1);
+    expect(component.documents[0].document_id).toBe(1);
   });
 
-  it('selecting a non-returned document does not fetch any cycle', () => {
-    const doc = { document_id: 6, status: 'ocr_done' };
+  it('selecting a document never fetches any send-back cycle data', () => {
+    const doc = { document_id: 5, status: 'ocr_done', invoice_number: 'INV-5', vendor_name: 'Acme' };
     component.documents = [doc];
+
     component.selectDocument(doc);
-    expect(component.selectedDocCycle).toBeNull();
-    httpMock.expectNone(`${environment.apiUrl}/reviews/send-back-cycles/6`);
+
+    expect(component.selectedDoc).toBe(doc);
+    httpMock.expectNone(r => r.url.includes('/reviews/send-back-cycles/'));
   });
 
-  it('canSubmit requires a Finance response only when the document was returned', () => {
-    component.editFields = { invoice_number: 'INV-1', vendor_name: 'Acme', invoice_date: '2026-07-01', total_amount: '100' };
-
-    component.selectedDoc = { document_id: 1, status: 'ocr_done' };
-    expect(component.canSubmit()).toBe(true);
-
-    component.selectedDoc = { document_id: 2, status: 'returned' };
-    component.financeResponse = '';
+  it('canSubmit only checks that required fields are filled — no Finance-response requirement remains', () => {
+    component.editFields = { invoice_number: '', vendor_name: 'Acme', invoice_date: '2026-07-01', total_amount: '100' };
     expect(component.canSubmit()).toBe(false);
 
-    component.financeResponse = 'The duplicate invoice was withdrawn.';
+    component.editFields = { invoice_number: 'INV-1', vendor_name: 'Acme', invoice_date: '2026-07-01', total_amount: '100' };
     expect(component.canSubmit()).toBe(true);
   });
 
-  it('submitToAuditor sends the Finance response to /reviews/resubmit/<id> for a returned document', () => {
-    component.editFields = { invoice_number: 'INV-1', vendor_name: 'Acme', invoice_date: '2026-07-01', total_amount: '100' };
-    component.selectedDoc = { document_id: 7, status: 'returned' };
-    component.financeResponse = 'This invoice was accidentally uploaded twice.';
-    component.documents = [component.selectedDoc];
-
-    component.submitToAuditor();
-
-    const req = httpMock.expectOne(`${environment.apiUrl}/reviews/resubmit/7`);
-    expect(req.request.method).toBe('POST');
-    expect(req.request.body).toEqual({ response: 'This invoice was accidentally uploaded twice.' });
-    req.flush({ message: 'ok' });
-
-    expect(component.selectedDoc).toBeNull();
-    expect(component.financeResponse).toBe('');
-  });
-
-  it('submitToAuditor sends an empty body to /reviews/submit/<id> for a first-time (non-returned) submission', () => {
+  it('submitToAuditor always POSTs an empty body to /reviews/submit/<id>', () => {
     component.editFields = { invoice_number: 'INV-1', vendor_name: 'Acme', invoice_date: '2026-07-01', total_amount: '100' };
     component.selectedDoc = { document_id: 8, status: 'ocr_done' };
     component.documents = [component.selectedDoc];
@@ -119,22 +86,35 @@ describe('FinanceOcrReviewComponent — Returned for Correction workflow', () =>
     expect(req.request.method).toBe('POST');
     expect(req.request.body).toEqual({});
     req.flush({ message: 'ok' });
+
+    expect(component.successMessage).toBe('Document submitted to Auditor successfully!');
+    expect(component.selectedDoc).toBeNull();
   });
 
-  it('blocks resubmission and shows a clear message when no Finance response was written', () => {
-    component.editFields = { invoice_number: 'INV-1', vendor_name: 'Acme', invoice_date: '2026-07-01', total_amount: '100' };
-    component.selectedDoc = { document_id: 9, status: 'returned' };
-    component.financeResponse = '';
+  it('blocks submission with a clear message when required fields are missing', () => {
+    component.editFields = { invoice_number: '', vendor_name: '', invoice_date: '', total_amount: '' };
+    component.selectedDoc = { document_id: 9, status: 'ocr_done' };
 
     component.submitToAuditor();
 
-    expect(component.errorMessage).toContain('Finance response');
-    httpMock.expectNone(`${environment.apiUrl}/reviews/resubmit/9`);
+    expect(component.errorMessage).toBe('Please fill in all required fields before submitting.');
+    httpMock.expectNone(`${environment.apiUrl}/reviews/submit/9`);
   });
 
-  it('maps machine-readable reason/action keys to human-readable labels', () => {
-    expect(component.reasonCategoryLabel('possible_duplicate_invoice')).toBe('Possible duplicate invoice');
-    expect(component.requiredActionLabel('confirm_duplicate_submission')).toBe('Confirm duplicate submission');
-    expect(component.reasonCategoryLabel('unknown_key')).toBe('unknown_key');
+  it('getErrorType never reports "Returned" — that state cannot reach this page anymore', () => {
+    const doc = { invoice_number: 'INV-1', vendor_name: 'Acme', total_amount: 100, ocr_confidence: 90, status: 'ocr_done' };
+    expect(component.getErrorType(doc)).toBe('Ready');
+    expect(component.getErrorClass(doc)).toBe('badge-ready');
+  });
+
+  it('(FinanceOcrReviewComponent as any) no longer exposes the removed correction-workflow API', () => {
+    const anyComponent = component as any;
+    expect(anyComponent.returnedDocuments).toBeUndefined();
+    expect(anyComponent.loadSelectedDocCycle).toBeUndefined();
+    expect(anyComponent.reasonCategoryLabel).toBeUndefined();
+    expect(anyComponent.requiredActionLabel).toBeUndefined();
+    expect(anyComponent.goToUpload).toBeUndefined();
+    expect(anyComponent.financeResponse).toBeUndefined();
+    expect(anyComponent.selectedDocCycle).toBeUndefined();
   });
 });

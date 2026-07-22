@@ -7841,3 +7841,101 @@ Setup/config needed:
   1. Redeploy the Render FRONTEND.
   2. No backend redeploy needed (no backend changes).
   3. No config changes needed.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-22 (later same day)
+
+What was changed:
+  Frontend (auditlens-frontend/) — 7 files, ZERO backend/database/AI
+  changes:
+    OCR Review (finance-ocr-review.component.*) — now OCR extraction
+    review and field editing ONLY:
+      - loadDocuments() filter changed from `status === 'ocr_done' ||
+        status === 'returned'` to `status === 'ocr_done'` only — a
+        returned invoice can no longer even appear in this queue,
+        closing the gap where Finance could still stumble into a
+        half-working correction flow here after Correction Center was
+        built.
+      - Removed entirely: the "Returned for Correction" summary panel,
+        the "View Auditor Request" card (reason/instruction/required
+        actions/priority/due-date), the "Finance Response" textarea,
+        and the resubmit branch of the submit button (previously
+        "Resubmit to Auditor" vs "Submit to Auditor" depending on
+        status — now always "Submit to Auditor", always POSTs to the
+        existing /reviews/submit/<id>, never /reviews/resubmit/<id>).
+      - Removed the now-dead code those sections were the only callers
+        of: returnedDocuments getter, loadSelectedDocCycle(),
+        reasonCategoryLabel()/requiredActionLabel() + their
+        REASON_CATEGORY_LABELS/REQUIRED_ACTION_LABELS lookup tables,
+        goToUpload(), the selectedDocCycle/isLoadingCycle/
+        financeResponse state, the 'returned' branches of getErrorType/
+        getErrorClass (a doc with that status can't reach this
+        component anymore), and the now-unused Router import/injection
+        (nothing in this component navigates anywhere any longer).
+      - canSubmit()/submitToAuditor() simplified to their single
+        remaining path (no more per-status branching).
+      - CSS: removed the now-orphaned .returned-box/.returned-list/
+        .returned-item*/.badge-returned/.auditor-request-box/.ar-*/
+        .priority-*/.btn-upload-link/.finance-response-field/.field-
+        required/.field-textarea rules (every one of them was used
+        exclusively by the sections just removed).
+      - Rewrote finance-ocr-review.component.spec.ts: the old spec
+        exclusively tested the now-removed correction workflow: new
+        tests cover the filter excluding 'returned', selecting a
+        document never fetching cycle data, the simplified canSubmit/
+        submitToAuditor, and confirm the removed methods/state no
+        longer exist on the component.
+    Correction Center (finance-correction-detail.component.*) — the
+    ONLY remaining place for the returned-invoice correction workflow,
+    unchanged in substance (Auditor Request details, Finance Response,
+    AI Correction Assistant, and the resubmit call to POST /reviews/
+    resubmit/<id> were already here, added in earlier tasks):
+      - Renamed the submit button's visible text from "Resubmit to
+        Auditor" to "Submit Correction for Review" (loading state:
+        "Resubmitting..." -> "Submitting...").
+      - For wording consistency with the rename, also updated the
+        adjacent user-facing strings that referenced the old name: the
+        validation error ("...before resubmitting." -> "...before
+        submitting.") and the success message ("Invoice resubmitted to
+        Auditor successfully!" -> "Correction submitted for auditor
+        review successfully!"). The underlying resubmit()/canResubmit()
+        method names, the POST /reviews/resubmit/<id> endpoint, and its
+        payload shape are UNCHANGED — this is a display-text rename
+        only, not a workflow change.
+      - Updated finance-correction-detail.component.spec.ts's two
+        assertions that checked the old exact message text.
+
+Why:
+  OCR Review and Correction Center both contained a working path to
+  resolve a returned invoice (Auditor Request card, Finance Response
+  field, Resubmit to Auditor), which is exactly the duplicated-workflow
+  confusion this task was raised to fix — a Finance user could start
+  correcting a returned invoice in either page and get two different,
+  overlapping experiences for the same document. Excluding 'returned'
+  documents from OCR Review's own query removes the ambiguity at the
+  source instead of just hiding UI elements while leaving the document
+  still reachable there.
+
+Testing:
+  - `npx ng build --configuration production` — succeeded (exit 0;
+    same pre-existing budget warnings as prior tasks; main bundle
+    shrank from the removed code).
+  - `npx ng test --watch=false` — 94/95 pass. The 1 failure is the
+    same pre-existing, unrelated app.spec.ts issue seen throughout this
+    project's history.
+  - `python tests/extraction/run_all.py` (backend, run as a sanity
+    check even though no backend file was touched) — all 17 suites
+    still pass, confirming this task's frontend-only scope didn't
+    disturb anything server-side.
+  - `git diff --stat` confirms only the 7 frontend files listed above
+    changed — zero backend files, zero database/migration files, zero
+    AI-related files (helpers/ai_assistant.py, routes/ai_assistant.py)
+    of any kind touched. Extraction, matching, authenticity, anomaly
+    detection, and the send-back backend workflow (routes/reviews.py,
+    helpers/send_back.py) were never touched, imported, or referenced.
+
+Setup/config needed:
+  1. Redeploy the Render FRONTEND.
+  2. No backend redeploy needed (no backend changes).
+  3. No config changes needed.

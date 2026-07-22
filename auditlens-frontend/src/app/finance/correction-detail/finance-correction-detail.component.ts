@@ -281,11 +281,14 @@ export class FinanceCorrectionDetailComponent implements OnInit {
     });
   }
 
-  // ── Resubmit — reuses the EXACT same POST /reviews/resubmit/<id>
-  // endpoint (and payload shape) finance-ocr-review.component.ts
-  // already calls for a returned document. Requires a Finance response,
-  // same validation rule already enforced there and, server-side, by
-  // helpers/send_back.py::validate_finance_response_payload. ──
+  // ── Submit Correction for Review — reuses the EXACT same POST
+  // /reviews/resubmit/<id> endpoint (and payload shape) already
+  // established for the returned-invoice correction workflow, which now
+  // lives EXCLUSIVELY on this page (Correction Center) — OCR Review no
+  // longer handles returned documents or calls this endpoint at all.
+  // Requires a Finance response, same validation rule enforced
+  // server-side by helpers/send_back.py::validate_finance_response_
+  // payload. ──
 
   canResubmit(): boolean {
     return !!this.financeResponse.trim();
@@ -293,7 +296,7 @@ export class FinanceCorrectionDetailComponent implements OnInit {
 
   resubmit() {
     if (!this.documentId || !this.canResubmit()) {
-      this.errorMessage = 'Please add a Finance response before resubmitting.';
+      this.errorMessage = 'Please add a Finance response before submitting.';
       this.cdr.detectChanges();
       return;
     }
@@ -307,7 +310,7 @@ export class FinanceCorrectionDetailComponent implements OnInit {
     ).subscribe({
       next: () => {
         this.isSubmitting = false;
-        this.successMessage = 'Invoice resubmitted to Auditor successfully!';
+        this.successMessage = 'Correction submitted for auditor review successfully!';
         this.cdr.detectChanges();
         setTimeout(() => this.router.navigate(['/finance/corrections']), 1500);
       },

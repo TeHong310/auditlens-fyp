@@ -61,23 +61,6 @@
     </button>
   </div>
 
-  <!-- ── Returned for Correction (Feature 2) ── -->
-  <div class="returned-box" *ngIf="activeTab === 'invoice' && returnedDocuments.length > 0">
-    <h2 class="section-title"><i class="ph-duotone ph-arrow-u-up-left"></i> Returned for Correction</h2>
-    <p class="section-subtitle">These invoices were sent back by an auditor and need action before they can be resubmitted.</p>
-    <div class="returned-list">
-      <div class="returned-item" *ngFor="let doc of returnedDocuments"
-           [class.selected-row]="selectedDoc?.document_id === doc.document_id"
-           (click)="selectDocument(doc)">
-        <div class="returned-item-main">
-          <span class="returned-item-invoice">{{ doc.invoice_number || doc.file_name }}</span>
-          <span class="returned-item-vendor">{{ doc.vendor_name || 'Unknown vendor' }}</span>
-        </div>
-        <span class="badge badge-returned">Action Required</span>
-      </div>
-    </div>
-  </div>
-
   <!-- ── INVOICE TAB ── -->
   <div class="content-row" *ngIf="activeTab === 'invoice'">
     <div class="list-card">
@@ -167,31 +150,6 @@
       <div class="success-box" *ngIf="successMessage"><i class="ph-duotone ph-check-circle"></i> {{ successMessage }}</div>
       <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
 
-      <!-- Auditor Request (Feature 2) — the exact reason and required
-           action the auditor sent back, plus priority/due date. -->
-      <div class="auditor-request-box" *ngIf="selectedDoc.status === 'returned'">
-        <h3 class="ar-title"><i class="ph-duotone ph-user-circle-gear"></i> View Auditor Request</h3>
-        <p class="ar-loading" *ngIf="isLoadingCycle">Loading auditor request…</p>
-        <ng-container *ngIf="!isLoadingCycle && selectedDocCycle">
-          <div class="ar-meta-row">
-            <span class="badge" [ngClass]="'priority-' + selectedDocCycle.priority">{{ selectedDocCycle.priority }} priority</span>
-            <span class="badge badge-returned" *ngIf="selectedDocCycle.is_overdue">Overdue</span>
-            <span class="ar-due" *ngIf="selectedDocCycle.response_due_date">Due {{ formatDate(selectedDocCycle.response_due_date) }}</span>
-          </div>
-          <p class="ar-label">Return reason</p>
-          <p class="ar-value">{{ reasonCategoryLabel(selectedDocCycle.return_reason_category) }}</p>
-          <p class="ar-label">Auditor instruction</p>
-          <p class="ar-value">{{ selectedDocCycle.auditor_instruction }}</p>
-          <p class="ar-label">Required actions</p>
-          <ul class="ar-actions-list">
-            <li *ngFor="let action of selectedDocCycle.required_actions">{{ requiredActionLabel(action) }}</li>
-          </ul>
-          <button type="button" class="btn-upload-link" (click)="goToUpload()">
-            <i class="ph-duotone ph-upload-simple"></i> Upload Supporting Document
-          </button>
-        </ng-container>
-      </div>
-
       <div class="fields-list">
         <div class="field-item">
           <label class="field-label">Invoice Number</label>
@@ -222,26 +180,16 @@
         </button>
       </div>
 
-      <!-- Finance Response (Feature 3) — required before resubmission -->
-      <div class="field-item finance-response-field" *ngIf="selectedDoc.status === 'returned'">
-        <label class="field-label">Finance Response <span class="field-required">*</span></label>
-        <textarea class="field-textarea" rows="3" [(ngModel)]="financeResponse"
-          placeholder='e.g. "This invoice was accidentally uploaded twice. The duplicate record has been withdrawn and no payment was processed."'></textarea>
-      </div>
-
       <div class="submit-section">
         <button class="btn-save" (click)="saveChanges()" [disabled]="isSaving">
           {{ isSaving ? 'Saving...' : 'Save Changes' }}
         </button>
         <p class="prototype-note">Save any corrections first, then submit to Auditor when ready.</p>
         <button class="btn-submit" (click)="submitToAuditor()" [disabled]="isSubmitting || !canSubmit()">
-          {{ isSubmitting ? 'Submitting...' : selectedDoc?.status === 'returned' ? 'Resubmit to Auditor' : 'Submit to Auditor' }}
+          {{ isSubmitting ? 'Submitting...' : 'Submit to Auditor' }}
         </button>
-        <p class="submit-note" *ngIf="!canSubmit() && selectedDoc?.status !== 'returned'">
+        <p class="submit-note" *ngIf="!canSubmit()">
           <i class="ph-duotone ph-warning"></i> Fill in Invoice Number, Vendor, Date and Amount before submitting.
-        </p>
-        <p class="submit-note" *ngIf="!canSubmit() && selectedDoc?.status === 'returned'">
-          <i class="ph-duotone ph-warning"></i> Fill in all required fields and add a Finance Response before resubmitting.
         </p>
       </div>
     </div>

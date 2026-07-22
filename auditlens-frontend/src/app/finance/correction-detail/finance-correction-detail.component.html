@@ -214,7 +214,7 @@
 
         <div class="submit-section">
           <button class="btn-submit" (click)="resubmit()" [disabled]="isSubmitting || !canResubmit()">
-            {{ isSubmitting ? 'Resubmitting...' : 'Resubmit to Auditor' }}
+            {{ isSubmitting ? 'Submitting...' : 'Submit Correction for Review' }}
           </button>
           <p class="submit-note" *ngIf="!canResubmit()">
             <i class="ph-duotone ph-warning"></i> Add a Finance Response before resubmitting.
