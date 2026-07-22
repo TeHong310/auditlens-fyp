@@ -13,6 +13,7 @@ from routes.auditor import auditor_bp
 from routes.anomalies import anomalies_bp
 from routes.authenticity import authenticity_bp
 from routes.calendar import calendar_bp
+from routes.ai_assistant import ai_assistant_bp
 
 
 def _ensure_anomalies_table():
@@ -453,6 +454,38 @@ def _ensure_calendar_tasks_table():
         print(f'WARNING: could not create calendar_tasks table: {type(e).__name__}: {e}')
 
 
+def _ensure_ai_assistant_cache_table():
+    """AI Audit Assistant response cache (helpers/ai_assistant.py,
+    routes/ai_assistant.py) — same DB-backed pattern as claude_cache.py/
+    gemini_cache.py/authenticity_cache.py (Gunicorn workers don't share
+    memory, Render's free-tier disk is ephemeral), so an unchanged case
+    + the same button/question never re-spends a Claude/Gemini call.
+    context_hash already encodes the full case data + question, so this
+    needs no separate invalidation logic: any change to the underlying
+    case (new matching result, new authenticity/anomaly finding, a
+    different question) naturally produces a new hash."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ai_assistant_cache (
+                id SERIAL PRIMARY KEY,
+                document_id INTEGER NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+                action VARCHAR(30) NOT NULL,
+                context_hash VARCHAR(64) NOT NULL,
+                response JSONB NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(document_id, action, context_hash)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_ai_assistant_cache_document ON ai_assistant_cache(document_id)')
+        conn.commit()
+        conn.close()
+        print('ai_assistant_cache table ready')
+    except Exception as e:
+        print(f'WARNING: could not create ai_assistant_cache table: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -471,6 +504,7 @@ app.register_blueprint(auditor_bp,    url_prefix='/auditor')
 app.register_blueprint(anomalies_bp,  url_prefix='/anomalies')
 app.register_blueprint(authenticity_bp, url_prefix='/authenticity')
 app.register_blueprint(calendar_bp,   url_prefix='/calendar')
+app.register_blueprint(ai_assistant_bp, url_prefix='/ai-assistant')
 
 _ensure_anomalies_table()
 _ensure_authenticity_checks_table()
@@ -485,6 +519,7 @@ _ensure_claude_cache_table()
 _ensure_authenticity_cache_table()
 _ensure_send_back_cycles_table()
 _ensure_calendar_tasks_table()
+_ensure_ai_assistant_cache_table()
 
 @app.route('/')
 def hello_world():

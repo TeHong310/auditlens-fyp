@@ -396,6 +396,69 @@
           <p class="suggested-action-text">{{ suggestedAction }}</p>
         </div>
 
+        <!-- AI Audit Assistant — contextual help for THIS case only,
+             called ONLY when the auditor clicks a button below (never
+             on page load). Every action reads the same comparison/
+             authenticity/anomaly data already loaded elsewhere on this
+             page; nothing is fabricated and no decision is made by the
+             AI — approval/send-back remain fully manual actions taken
+             by the auditor below. -->
+        <div class="ai-assistant-card">
+          <p class="subsection-title"><i class="ph-duotone ph-robot"></i> AI Audit Assistant</p>
+          <p class="ai-assistant-subtitle">Need help understanding this case?</p>
+
+          <div class="ai-assistant-actions">
+            <button class="btn-ai-action" (click)="explainException()" [disabled]="aiActionLoading['explain_exception']">
+              <ng-container *ngIf="!aiActionLoading['explain_exception']"><i class="ph-duotone ph-file-magnifying-glass"></i> Explain Exception</ng-container>
+              <ng-container *ngIf="aiActionLoading['explain_exception']">Thinking…</ng-container>
+            </button>
+            <button class="btn-ai-action" (click)="explainRisk()" [disabled]="aiActionLoading['explain_risk']">
+              <ng-container *ngIf="!aiActionLoading['explain_risk']"><i class="ph-duotone ph-warning-octagon"></i> Explain Risk</ng-container>
+              <ng-container *ngIf="aiActionLoading['explain_risk']">Thinking…</ng-container>
+            </button>
+            <button class="btn-ai-action" (click)="generateAuditRemark()" [disabled]="aiActionLoading['generate_remark']">
+              <ng-container *ngIf="!aiActionLoading['generate_remark']"><i class="ph-duotone ph-pencil-simple-line"></i> Generate Audit Remark</ng-container>
+              <ng-container *ngIf="aiActionLoading['generate_remark']">Thinking…</ng-container>
+            </button>
+            <button class="btn-ai-action" (click)="prepareSendBackInstruction()" [disabled]="aiActionLoading['prepare_send_back']">
+              <ng-container *ngIf="!aiActionLoading['prepare_send_back']"><i class="ph-duotone ph-arrow-u-up-left"></i> Prepare Send Back Instruction</ng-container>
+              <ng-container *ngIf="aiActionLoading['prepare_send_back']">Thinking…</ng-container>
+            </button>
+          </div>
+
+          <div class="ai-error-box" *ngIf="aiError"><i class="ph-duotone ph-x-circle"></i> {{ aiError }}</div>
+
+          <div class="ai-answer-box" *ngIf="aiExceptionAnswer">
+            <p class="ai-answer-label"><i class="ph-duotone ph-file-magnifying-glass"></i> Case Summary</p>
+            <p class="ai-answer-text">{{ aiExceptionAnswer }}</p>
+          </div>
+
+          <div class="ai-answer-box" *ngIf="aiRisk">
+            <p class="ai-answer-label"><i class="ph-duotone ph-warning-octagon"></i> Risk Explanation</p>
+            <span class="risk-chip" [ngClass]="exceptionRiskClass(aiRisk.risk_level)">{{ aiRisk.risk_level }}</span>
+            <ul class="ai-risk-reasons" *ngIf="aiRisk.reasons.length">
+              <li *ngFor="let r of aiRisk.reasons">{{ r }}</li>
+            </ul>
+            <p class="ai-answer-text" *ngIf="aiRisk.potential_impact"><strong>Potential impact:</strong> {{ aiRisk.potential_impact }}</p>
+          </div>
+
+          <div class="ai-conversation" *ngIf="aiConversation.length">
+            <div class="ai-qa-pair" *ngFor="let qa of aiConversation">
+              <p class="ai-question"><i class="ph-duotone ph-chat-circle"></i> {{ qa.question }}</p>
+              <p class="ai-answer-text">{{ qa.answer }}</p>
+            </div>
+          </div>
+
+          <div class="ai-ask-row">
+            <input class="ai-ask-input" type="text" [(ngModel)]="aiQuestion" placeholder="Ask about this case…"
+                   (keydown.enter)="askAiQuestion()" [disabled]="aiActionLoading['ask']" />
+            <button class="btn-ai-send" (click)="askAiQuestion()" [disabled]="aiActionLoading['ask'] || !aiQuestion.trim()">
+              <ng-container *ngIf="!aiActionLoading['ask']">Send</ng-container>
+              <ng-container *ngIf="aiActionLoading['ask']">…</ng-container>
+            </button>
+          </div>
+        </div>
+
         <!-- Audit Note -->
         <div class="note-section">
           <label class="note-label">Remarks / Notes</label>

@@ -228,6 +228,45 @@ extract_with_claude_test = extract_with_claude
 
 
 # ============================================================
+# TEXT-ONLY COMPLETION — used by helpers/ai_assistant.py (AI Audit
+# Assistant). No image, no extraction schema — just a system prompt +
+# user text in, plain response text out. Reuses the SAME client/call/
+# error-handling shape as extract_with_claude/analyze_document_
+# authenticity above rather than opening a second way to talk to the
+# Anthropic Messages API.
+# ============================================================
+
+def ask_claude_text(system_prompt, user_text, max_tokens=1024):
+    """Text-only Claude call. Returns the raw response text (str), or
+    None on any failure (no API key, network, timeout) — same fail-soft
+    contract as every other function in this module; callers decide
+    what to do next (helpers/ai_assistant.py falls back to Gemini)."""
+    client = _get_claude_client()
+    if client is None:
+        print("DEBUG CLAUDE TEXT | skipped: ANTHROPIC_API_KEY not set")
+        return None
+
+    print(f"DEBUG CLAUDE TEXT REQUEST | model={Config.CLAUDE_MODEL!r} | prompt_len={len(user_text)}")
+
+    try:
+        response = client.messages.create(
+            model=Config.CLAUDE_MODEL,
+            max_tokens=max_tokens,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_text}],
+            timeout=CLAUDE_TIMEOUT_S,
+        )
+    except Exception as e:
+        print(f"DEBUG CLAUDE TEXT REQUEST error: {type(e).__name__}: {e}")
+        return None
+
+    text = "".join(block.text for block in response.content if getattr(block, 'type', None) == 'text')
+    _raw_preview = text if len(text) <= 1500 else text[:1500] + '...<truncated>'
+    print(f"DEBUG CLAUDE TEXT RESPONSE | text={_raw_preview!r}")
+    return text.strip()
+
+
+# ============================================================
 # AUTHENTICATION / VISUAL VERIFICATION
 #
 # Separate prompt+schema from CLAUDE_SYSTEM_PROMPT above — this is a

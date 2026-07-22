@@ -221,3 +221,133 @@ describe('AuditorRecordDetailComponent — Send-Back workflow', () => {
     expect(component.sendBackButtonLabel).toBe('Send Back Again');
   });
 });
+
+// AI Audit Assistant tests — every action is triggered ONLY by an
+// explicit method call (mirroring a button click), never by ngOnInit.
+// All HTTP calls are mocked via HttpTestingController — no real
+// backend, no real Claude/Gemini calls.
+describe('AuditorRecordDetailComponent — AI Audit Assistant', () => {
+  let component: AuditorRecordDetailComponent;
+  let httpMock: HttpTestingController;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [AuditorRecordDetailComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+      ],
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(AuditorRecordDetailComponent);
+    component = fixture.componentInstance;
+    httpMock = TestBed.inject(HttpTestingController);
+    component.documentId = 1;
+  });
+
+  afterEach(() => {
+    httpMock.verify();
+  });
+
+  it('never calls the AI Assistant automatically — no request fires without an explicit action', () => {
+    // Component is fully constructed (as if the page just loaded) and
+    // no AI method has been called yet.
+    httpMock.expectNone(r => r.url.includes('/ai-assistant/'));
+  });
+
+  it('explainException POSTs to /ai-assistant/<id>/explain-exception and stores the answer', () => {
+    component.explainException();
+    expect(component.aiActionLoading['explain_exception']).toBe(true);
+
+    const req = httpMock.expectOne(`${environment.apiUrl}/ai-assistant/1/explain-exception`);
+    expect(req.request.method).toBe('POST');
+    req.flush({ answer: 'This invoice is missing its PO and GR.', provider: 'claude', cached: false });
+
+    expect(component.aiActionLoading['explain_exception']).toBe(false);
+    expect(component.aiExceptionAnswer).toBe('This invoice is missing its PO and GR.');
+  });
+
+  it('explainRisk POSTs to /ai-assistant/<id>/explain-risk and stores the structured risk result', () => {
+    component.explainRisk();
+    const req = httpMock.expectOne(`${environment.apiUrl}/ai-assistant/1/explain-risk`);
+    req.flush({
+      risk_level: 'Medium',
+      reasons: ['Missing PO', 'Missing GR'],
+      potential_impact: 'Incorrect payment approval.',
+      provider: 'claude', cached: false,
+    });
+
+    expect(component.aiRisk).toEqual({
+      risk_level: 'Medium',
+      reasons: ['Missing PO', 'Missing GR'],
+      potential_impact: 'Incorrect payment approval.',
+    });
+  });
+
+  it('generateAuditRemark POSTs to /ai-assistant/<id>/generate-remark and fills the EXISTING Remarks textarea', () => {
+    component.auditNote = '';
+    component.generateAuditRemark();
+
+    const req = httpMock.expectOne(`${environment.apiUrl}/ai-assistant/1/generate-remark`);
+    expect(req.request.method).toBe('POST');
+    req.flush({ remark: 'Invoice review is pending due to missing supporting documents.', provider: 'claude', cached: false });
+
+    expect(component.auditNote).toBe('Invoice review is pending due to missing supporting documents.');
+  });
+
+  it('prepareSendBackInstruction POSTs to /ai-assistant/<id>/prepare-send-back and opens the EXISTING Send Back modal pre-filled, without submitting it', () => {
+    component.showSendBackModal = false;
+    component.prepareSendBackInstruction();
+
+    const req = httpMock.expectOne(`${environment.apiUrl}/ai-assistant/1/prepare-send-back`);
+    expect(req.request.method).toBe('POST');
+    req.flush({
+      reason_category: 'missing_document',
+      required_actions: ['upload_missing_document'],
+      priority: 'medium',
+      instruction: 'Please provide supporting documents for completion of three-way matching review.',
+      provider: 'claude', cached: false,
+    });
+
+    expect(component.showSendBackModal).toBe(true);
+    expect(component.sendBack.reasonCategory).toBe('missing_document');
+    expect(component.sendBack.requiredActions).toEqual(['upload_missing_document']);
+    expect(component.sendBack.priority).toBe('medium');
+    expect(component.sendBack.instruction).toBe('Please provide supporting documents for completion of three-way matching review.');
+    // Never auto-submitted — the actual send happens only via the
+    // existing submitSendBack() flow when the auditor clicks the button.
+    httpMock.expectNone(`${environment.apiUrl}/reviews/return/1`);
+  });
+
+  it('askAiQuestion POSTs the question to /ai-assistant/<id>/ask and appends the Q&A to the conversation log', () => {
+    component.aiQuestion = 'What documents are missing?';
+    component.askAiQuestion();
+
+    const req = httpMock.expectOne(`${environment.apiUrl}/ai-assistant/1/ask`);
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({ question: 'What documents are missing?' });
+    req.flush({ answer: 'The Purchase Order and Goods Receipt are missing.', provider: 'claude', cached: false });
+
+    expect(component.aiConversation).toEqual([
+      { question: 'What documents are missing?', answer: 'The Purchase Order and Goods Receipt are missing.' }
+    ]);
+    // Input is cleared after a successful send.
+    expect(component.aiQuestion).toBe('');
+  });
+
+  it('askAiQuestion does nothing for a blank question', () => {
+    component.aiQuestion = '   ';
+    component.askAiQuestion();
+    httpMock.expectNone(r => r.url.includes('/ai-assistant/'));
+  });
+
+  it('surfaces a 502 AI-unavailable error without crashing, and clears the loading state', () => {
+    component.explainException();
+    const req = httpMock.expectOne(`${environment.apiUrl}/ai-assistant/1/explain-exception`);
+    req.flush({ error: 'AI Assistant is unavailable right now — see server logs' }, { status: 502, statusText: 'Bad Gateway' });
+
+    expect(component.aiActionLoading['explain_exception']).toBe(false);
+    expect(component.aiError).toBe('AI Assistant is unavailable right now — see server logs');
+  });
+});

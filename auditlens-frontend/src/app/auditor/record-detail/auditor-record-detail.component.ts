@@ -115,6 +115,16 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   cycles: any[] = [];
   reviewHistory: any[] = [];
 
+  // ── AI Audit Assistant — contextual help for THIS case only, called
+  // ONLY when the auditor clicks a button (see ngOnInit: no AI call is
+  // ever triggered on page load). Backed by POST /ai-assistant/<id>/*. ──
+  aiActionLoading: { [key: string]: boolean } = {};
+  aiError: string = '';
+  aiExceptionAnswer: string = '';
+  aiRisk: { risk_level: string; reasons: string[]; potential_impact: string } | null = null;
+  aiQuestion: string = '';
+  aiConversation: { question: string; answer: string }[] = [];
+
   // PDF quick-view modal
   showModal: boolean = false;
   modalDocType: DocType = 'invoice';
@@ -421,6 +431,138 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
 
   goBack() {
     this.router.navigate(['/auditor/home']);
+  }
+
+  // ── AI Audit Assistant ───────────────────────────────────
+  // Every method here is triggered ONLY by an explicit button click.
+  // Each POST call is scoped to this one document_id and returns a
+  // response derived only from data already computed by AuditLens'
+  // matching/authenticity/anomaly engines (backend: routes/ai_
+  // assistant.py). Final approval/send-back decisions remain fully
+  // manual — these only draft text/pre-fill fields for the auditor to
+  // review and edit.
+
+  explainException() {
+    if (!this.documentId) return;
+    this.aiActionLoading['explain_exception'] = true;
+    this.aiError = '';
+    this.http.post<any>(`${this.apiUrl}/ai-assistant/${this.documentId}/explain-exception`, {},
+      { headers: this.getHeaders() }
+    ).subscribe({
+      next: (res) => {
+        this.aiActionLoading['explain_exception'] = false;
+        this.aiExceptionAnswer = res.answer || '';
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.aiActionLoading['explain_exception'] = false;
+        this.aiError = err.error?.error || 'AI Assistant is unavailable right now.';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  explainRisk() {
+    if (!this.documentId) return;
+    this.aiActionLoading['explain_risk'] = true;
+    this.aiError = '';
+    this.http.post<any>(`${this.apiUrl}/ai-assistant/${this.documentId}/explain-risk`, {},
+      { headers: this.getHeaders() }
+    ).subscribe({
+      next: (res) => {
+        this.aiActionLoading['explain_risk'] = false;
+        this.aiRisk = {
+          risk_level: res.risk_level || 'Low',
+          reasons: res.reasons || [],
+          potential_impact: res.potential_impact || ''
+        };
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.aiActionLoading['explain_risk'] = false;
+        this.aiError = err.error?.error || 'AI Assistant is unavailable right now.';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  generateAuditRemark() {
+    if (!this.documentId) return;
+    this.aiActionLoading['generate_remark'] = true;
+    this.aiError = '';
+    this.http.post<any>(`${this.apiUrl}/ai-assistant/${this.documentId}/generate-remark`, {},
+      { headers: this.getHeaders() }
+    ).subscribe({
+      next: (res) => {
+        this.aiActionLoading['generate_remark'] = false;
+        // Populates the EXISTING Remarks/Notes textarea below — the
+        // auditor can still edit or clear it before approving/sending
+        // back; nothing here is auto-saved.
+        this.auditNote = res.remark || '';
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.aiActionLoading['generate_remark'] = false;
+        this.aiError = err.error?.error || 'AI Assistant is unavailable right now.';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  prepareSendBackInstruction() {
+    if (!this.documentId) return;
+    this.aiActionLoading['prepare_send_back'] = true;
+    this.aiError = '';
+    this.http.post<any>(`${this.apiUrl}/ai-assistant/${this.documentId}/prepare-send-back`, {},
+      { headers: this.getHeaders() }
+    ).subscribe({
+      next: (res) => {
+        this.aiActionLoading['prepare_send_back'] = false;
+        // Opens the EXISTING Send Back modal, pre-filled with the AI's
+        // suggestion — every field stays fully editable and nothing is
+        // sent until the auditor clicks "Send Back to Finance"
+        // themselves (existing submitSendBack() flow, untouched).
+        this.sendBack = {
+          reasonCategory: res.reason_category,
+          reasonOtherNote: '',
+          instruction: res.instruction || '',
+          requiredActions: res.required_actions || [],
+          requiredActionOtherNote: '',
+          priority: res.priority || 'normal',
+          dueDate: '',
+        };
+        this.sendBackErrors = [];
+        this.showSendBackModal = true;
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.aiActionLoading['prepare_send_back'] = false;
+        this.aiError = err.error?.error || 'AI Assistant is unavailable right now.';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  askAiQuestion() {
+    if (!this.documentId || !this.aiQuestion.trim() || this.aiActionLoading['ask']) return;
+    const question = this.aiQuestion.trim();
+    this.aiActionLoading['ask'] = true;
+    this.aiError = '';
+    this.http.post<any>(`${this.apiUrl}/ai-assistant/${this.documentId}/ask`, { question },
+      { headers: this.getHeaders() }
+    ).subscribe({
+      next: (res) => {
+        this.aiActionLoading['ask'] = false;
+        this.aiConversation.push({ question, answer: res.answer || '' });
+        this.aiQuestion = '';
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.aiActionLoading['ask'] = false;
+        this.aiError = err.error?.error || 'AI Assistant is unavailable right now.';
+        this.cdr.detectChanges();
+      }
+    });
   }
 
   // ── Overall status banner ───────────────────────────────

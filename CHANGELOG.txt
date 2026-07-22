@@ -7080,3 +7080,132 @@ Setup/config needed:
   1. Redeploy the Render FRONTEND.
   2. No backend redeploy needed (no backend changes).
   3. No config changes needed.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-22
+
+What was changed:
+  Backend (auditlens-backend/) — new files:
+    - helpers/ai_assistant.py: prompt templates + Claude-primary/Gemini-
+      fallback orchestration for the AI Audit Assistant. Text-only calls
+      (no image) — reuses the same two providers already wired up
+      elsewhere, never a new SDK or AI provider. Every prompt is
+      instructed to use ONLY the case data it's given, never invent a
+      fact, and never declare an approve/reject/fraud verdict (assistant,
+      not decision-maker).
+    - routes/ai_assistant.py: new blueprint, 5 auditor-only POST
+      endpoints — /ai-assistant/<id>/explain-exception, /explain-risk,
+      /generate-remark, /prepare-send-back, /ask. Builds a structured
+      case-context object by REUSING routes/auditor.py's existing
+      _build_comparison/_classify_exception (three-way matching +
+      exception classification — imported, not duplicated or modified)
+      plus read-only queries against authenticity_checks/anomalies/
+      review_records. Every response is cached in a new ai_assistant_
+      cache table, keyed by a hash of (document_id, action, full case
+      data, question) — an unchanged case + the same button/question
+      never re-spends a Claude/Gemini call. AI is called ONLY from these
+      endpoints, i.e. only when the auditor clicks a button — nothing
+      here runs automatically.
+    - migrations/2026-07-22_create_ai_assistant_cache_table.sql:
+      documentation-only copy of the table app.py creates automatically
+      at startup (this repo has no migration runner).
+    - tests/extraction/test_ai_assistant.py: 25 checks — Claude-success/
+      Claude-fail-then-Gemini/both-fail provider fallback, markdown-
+      fence stripping, send-back enum clamping (invalid/hallucinated AI
+      output falls back to a safe default derived from the case's own
+      exception classification), cache-key determinism, case-context
+      field mapping, and cache-hit-vs-cache-miss behavior of
+      _run_action. No real DB, no real Claude/Gemini calls — every
+      external call is monkey-patched with fakes/stubs, same style as
+      test_authenticity_siblings.py. Registered in tests/extraction/
+      run_all.py.
+  Backend — modified files (both changes are purely ADDITIVE — zero
+  lines removed from either file, confirmed via `git diff --stat`):
+    - helpers/claude_extractor.py: added ask_claude_text() — a text-
+      only sibling of the existing extract_with_claude()/analyze_
+      document_authenticity() vision functions, reusing the same
+      _get_claude_client()/error-handling shape. extract_with_claude and
+      analyze_document_authenticity themselves are UNCHANGED.
+    - app.py: registered the new ai_assistant_bp blueprint and added
+      _ensure_ai_assistant_cache_table() (same auto-create-on-startup
+      pattern as every other _ensure_ function). No existing route,
+      blueprint, or _ensure_ function was touched.
+  Frontend (auditlens-frontend/) — all changes confined to the Auditor
+  Record Detail page (auditor-record-detail.component.ts/html/css/
+  spec.ts):
+    - New "AI Audit Assistant" card in the decision column, below
+      Suggested Action and above the Remarks/Notes field: "Explain
+      Exception", "Explain Risk", "Generate Audit Remark", "Prepare
+      Send Back Instruction" buttons, plus a free-text "Ask about this
+      case…" box. Every button/Ask call maps to one POST call — none of
+      them fire on page load (ngOnInit is unchanged).
+    - "Generate Audit Remark" writes its result into the EXISTING
+      Remarks/Notes textarea (auditNote) — the auditor can still edit
+      or clear it before approving/sending back; nothing is auto-saved.
+    - "Prepare Send Back Instruction" opens the EXISTING Send Back
+      modal pre-filled with the AI's suggested reason/required actions/
+      priority/instruction — every field stays fully editable and
+      nothing is submitted until the auditor clicks "Send Back to
+      Finance" themselves (the existing submitSendBack()/POST /reviews/
+      return/<id> flow is completely untouched).
+    - New CSS for the card (.ai-assistant-card and its children),
+      styled with the existing --accent design tokens to read as a
+      distinct "helper" card, same dark theme, no new animations.
+    - New spec tests (11 cases) confirming: no AI call fires without an
+      explicit method call, each of the 5 actions POSTs to the correct
+      endpoint and updates the right piece of state, Prepare Send Back
+      never auto-submits to /reviews/return, and a 502 AI-unavailable
+      error is surfaced without crashing.
+
+Why:
+  Auditors reviewing an exception case (missing documents, a matching
+  mismatch, an authenticity/anomaly flag) had to manually re-read the
+  Field Comparison table, authenticity result, and anomaly findings
+  every time to write a remark or decide what to tell Finance. The AI
+  Audit Assistant is a contextual helper — NOT a general chatbot, NOT a
+  decision-maker — that summarizes and explains data AuditLens already
+  computed, drafts text the auditor can edit, and pre-fills the
+  existing Send Back form, while every actual audit decision (approve/
+  send back/what to tell Finance) stays a manual auditor action.
+
+Testing:
+  - Backend: `python tests/extraction/run_all.py` — all 17 suites pass
+    (including the new test_ai_assistant.py, 25/25 checks), zero real
+    Claude/Gemini API calls (every provider call mocked).
+  - `python -c "import app; print('APP IMPORT OK')"` — clean import,
+    ai_assistant_cache table created successfully against the local DB.
+  - Frontend: `npx ng build --configuration production` — succeeded
+    (exit 0; only the same pre-existing bundle-size budget warnings
+    seen in prior tasks, not new failures).
+  - Frontend: `npx ng test --watch=false` — 55/56 pass. The 1 failure
+    is the same pre-existing, unrelated app.spec.ts issue seen
+    throughout this project's history — confirmed via `git diff --stat`
+    showing zero changes to that file.
+  - `git diff --stat` confirms NONE of the following were touched:
+    OCR extraction logic, the Claude/Gemini EXTRACTION pipeline
+    (extract_with_claude/gemini_extract_*_full unchanged — only a new
+    sibling text-completion function was added), the authenticity
+    engine (helpers/authenticity_check.py, helpers/auth_rules.py), the
+    anomaly detection engine (helpers/anomaly_detector.py), the
+    three-way matching calculation (routes/auditor.py::_build_
+    comparison — imported and read, never modified), existing audit
+    workflow status transitions, or the send-back backend workflow
+    (routes/reviews.py, helpers/send_back.py — only its already-public
+    enum lists are imported for validation).
+  - Zero unnecessary AI calls: every endpoint checks the DB-backed
+    cache (ai_assistant_cache) before calling Claude/Gemini, and the
+    frontend never calls any /ai-assistant/* endpoint outside an
+    explicit button click / Enter-key send — confirmed by a dedicated
+    spec test asserting httpMock.expectNone() immediately after the
+    component is constructed.
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND — a new table (ai_assistant_cache) is
+     created automatically at startup, no manual migration needed.
+  2. Redeploy the Render FRONTEND.
+  3. For the AI Audit Assistant to actually respond (rather than
+     returning a 502 "AI Assistant is unavailable"), ANTHROPIC_API_KEY
+     and/or GEMINI_API_KEY must already be set on the Render backend —
+     both are pre-existing environment variables from earlier features
+     (extraction, authenticity), no new key is required.
