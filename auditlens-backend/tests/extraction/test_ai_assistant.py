@@ -307,6 +307,176 @@ def run_case_build_case_context_clean_pass_has_no_exception():
 
 
 # ============================================================
+# routes/ai_assistant.py — _classify_anomaly() blocking vs informational
+# ============================================================
+
+def run_case_classify_anomaly_reviewed_is_always_informational():
+    print('Case: a reviewed/dismissed anomaly is informational regardless of severity or type')
+    check('reviewed high-severity duplicate -> informational',
+          ra._classify_anomaly({'status': 'reviewed', 'severity': 'high', 'anomaly_type': 'duplicate'}) == 'informational')
+    check('dismissed high-severity amount -> informational',
+          ra._classify_anomaly({'status': 'dismissed', 'severity': 'high', 'anomaly_type': 'amount'}) == 'informational')
+
+
+def run_case_classify_anomaly_pending_high_severity_is_blocking():
+    print('Case: a pending high-severity anomaly is blocking regardless of type')
+    check('pending high-severity round-number anomaly -> blocking',
+          ra._classify_anomaly({'status': 'pending', 'severity': 'high', 'anomaly_type': 'round'}) == 'blocking')
+
+
+def run_case_classify_anomaly_pending_duplicate_or_amount_is_blocking():
+    print('Case: a pending duplicate/amount anomaly is blocking even at low/medium severity')
+    check('pending low-severity duplicate -> blocking (unresolved duplicate)',
+          ra._classify_anomaly({'status': 'pending', 'severity': 'low', 'anomaly_type': 'duplicate'}) == 'blocking')
+    check('pending medium-severity amount -> blocking (amount inconsistency)',
+          ra._classify_anomaly({'status': 'pending', 'severity': 'medium', 'anomaly_type': 'amount'}) == 'blocking')
+
+
+def run_case_classify_anomaly_pending_low_pattern_is_informational():
+    print('Case: a pending low/medium-severity round/weekend pattern is informational')
+    check('pending low-severity round-number pattern -> informational',
+          ra._classify_anomaly({'status': 'pending', 'severity': 'low', 'anomaly_type': 'round'}) == 'informational')
+    check('pending medium-severity weekend pattern -> informational',
+          ra._classify_anomaly({'status': 'pending', 'severity': 'medium', 'anomaly_type': 'weekend'}) == 'informational')
+
+
+# ============================================================
+# routes/ai_assistant.py — _build_case_context() audit_status
+# (the 4 scenarios the task explicitly asks to test)
+# ============================================================
+
+def _pass_comparison(invoice_no='INV-PASS'):
+    return {
+        'invoice': {'invoice_no': invoice_no, 'vendor_name': 'Vendor A', 'total_amount': 100.0,
+                    'currency': 'RM', 'invoice_date': '2026-07-01'},
+        'po': {'po_no': 'PO-1'}, 'gr': {'gr_no': 'GR-1'},
+        'match_result': {'overall_status': 'PASS', 'vendor_match': True, 'amount_match': True,
+                          'po_reference_match': True, 'line_items_match': True, 'line_items_price_match': True},
+    }
+
+
+def run_case_audit_status_full_pass_document():
+    print('Case 1/4: Full PASS document (matching PASS, authenticity PASS, no missing docs, no anomalies) -> PASS')
+    doc_row = {'document_id': 1, 'uploaded_at': None, 'status': 'under_review'}
+    cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[{'document_type': 'invoice', 'authenticity_status': 'passed', 'risk_level': 'low'}],
+                          anomaly_rows=[], history_rows=[])
+    with _Patched(ra, _build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
+        context = ra._build_case_context(cursor, 1)
+    check('audit_status is PASS', context['audit_status'] == 'PASS', context)
+
+
+def run_case_audit_status_full_pass_with_historical_reviewed_duplicate_is_still_pass():
+    print('Case 1b/4: PASS document + a REVIEWED historical duplicate anomaly -> still PASS (the original bug report)')
+    doc_row = {'document_id': 1, 'uploaded_at': None, 'status': 'under_review'}
+    reviewed_duplicate = {'anomaly_type': 'duplicate', 'severity': 'medium', 'detected_pattern': 'similar invoice found',
+                           'ai_explanation': 'x', 'status': 'reviewed'}
+    cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[{'document_type': 'invoice', 'authenticity_status': 'passed', 'risk_level': 'low'}],
+                          anomaly_rows=[reviewed_duplicate], history_rows=[])
+    with _Patched(ra, _build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
+        context = ra._build_case_context(cursor, 1)
+    check('audit_status is still PASS despite the historical duplicate finding',
+          context['audit_status'] == 'PASS', context)
+    check('the anomaly is classified informational, not blocking',
+          context['anomalies'][0]['classification'] == 'informational', context['anomalies'])
+
+
+def run_case_audit_status_missing_po_gr_document():
+    print('Case 2/4: Missing PO/GR document -> REVIEW REQUIRED')
+    fake_comparison = {
+        'invoice': {'invoice_no': 'INV-MISSING', 'vendor_name': 'Vendor A', 'total_amount': 100.0,
+                    'currency': 'RM', 'invoice_date': '2026-07-01'},
+        'po': None, 'gr': None,
+        'match_result': {'overall_status': 'PARTIAL', 'vendor_match': None, 'amount_match': None,
+                          'po_reference_match': None, 'line_items_match': None, 'line_items_price_match': None},
+    }
+    doc_row = {'document_id': 2, 'uploaded_at': None, 'status': 'under_review'}
+    classified = (3, 'missing_document', 'Missing PO and GR', 'Invoice uploaded but PO and GR not yet received', 'medium')
+    cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[], anomaly_rows=[], history_rows=[])
+    with _Patched(ra, _build_comparison=lambda c, d: fake_comparison, _classify_exception=lambda c, d, cmp: classified):
+        context = ra._build_case_context(cursor, 2)
+    check('audit_status is REVIEW REQUIRED', context['audit_status'] == 'REVIEW REQUIRED', context)
+    check('reasons mention the missing documents',
+          any('Missing' in r for r in context['audit_status_reasons']), context['audit_status_reasons'])
+
+
+def run_case_audit_status_duplicate_invoice_document():
+    print('Case 3/4: Duplicate invoice document (pending, unresolved) -> REVIEW REQUIRED')
+    doc_row = {'document_id': 3, 'uploaded_at': None, 'status': 'under_review'}
+    pending_duplicate = {'anomaly_type': 'duplicate', 'severity': 'medium', 'detected_pattern': 'possible duplicate',
+                          'ai_explanation': 'x', 'status': 'pending'}
+    cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[{'document_type': 'invoice', 'authenticity_status': 'passed', 'risk_level': 'low'}],
+                          anomaly_rows=[pending_duplicate], history_rows=[])
+    with _Patched(ra, _build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
+        context = ra._build_case_context(cursor, 3)
+    check('audit_status is REVIEW REQUIRED for an unresolved duplicate',
+          context['audit_status'] == 'REVIEW REQUIRED', context)
+    check('the anomaly is classified blocking', context['anomalies'][0]['classification'] == 'blocking', context['anomalies'])
+    check('reasons mention the unresolved duplicate anomaly',
+          any('duplicate' in r for r in context['audit_status_reasons']), context['audit_status_reasons'])
+
+
+def run_case_audit_status_sent_back_document():
+    print('Case 4/4: Sent-back document (status=returned) -> REVIEW REQUIRED')
+    doc_row = {'document_id': 4, 'uploaded_at': None, 'status': 'returned'}
+    cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[{'document_type': 'invoice', 'authenticity_status': 'passed', 'risk_level': 'low'}],
+                          anomaly_rows=[], history_rows=[])
+    with _Patched(ra, _build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
+        context = ra._build_case_context(cursor, 4)
+    check('audit_status is REVIEW REQUIRED for a sent-back document',
+          context['audit_status'] == 'REVIEW REQUIRED', context)
+    check('reasons mention the send-back',
+          any('sent back' in r.lower() for r in context['audit_status_reasons']), context['audit_status_reasons'])
+
+
+def run_case_audit_status_authenticity_warning_forces_review():
+    print('Case: an authenticity warning alone (everything else clean) -> REVIEW REQUIRED')
+    doc_row = {'document_id': 5, 'uploaded_at': None, 'status': 'under_review'}
+    cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[{'document_type': 'invoice', 'authenticity_status': 'warning', 'risk_level': 'medium'}],
+                          anomaly_rows=[], history_rows=[])
+    with _Patched(ra, _build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
+        context = ra._build_case_context(cursor, 5)
+    check('audit_status is REVIEW REQUIRED for an authenticity warning',
+          context['audit_status'] == 'REVIEW REQUIRED', context)
+
+
+# ============================================================
+# routes/ai_assistant.py — _clamp_explain_exception_result()
+# ============================================================
+
+def run_case_clamp_explain_exception_overrides_wrong_ai_verdict():
+    print("Case: the AI's own audit_status guess is IGNORED — the deterministic context value always wins")
+    context = {'audit_status': 'PASS', 'audit_status_reasons': ['All core checks passed and no blocking findings']}
+    ai_result = {'audit_status': 'REVIEW REQUIRED', 'reason': 'AI incorrectly thinks this needs review',
+                 'recommended_action': 'AI incorrectly suggests holding it'}
+    clamped = ra._clamp_explain_exception_result(ai_result, context)
+    check('audit_status is forced to the deterministic PASS, not the AI\'s guess',
+          clamped['audit_status'] == 'PASS', clamped)
+
+
+def run_case_clamp_explain_exception_fills_blank_fields():
+    print('Case: blank reason/recommended_action from the AI get sensible defaults')
+    context = {'audit_status': 'PASS', 'audit_status_reasons': ['All core checks passed and no blocking findings']}
+    clamped = ra._clamp_explain_exception_result({'reason': '', 'recommended_action': ''}, context)
+    check('reason falls back to the deterministic reasons', bool(clamped['reason'].strip()), clamped)
+    check('recommended_action falls back to a PASS-appropriate default',
+          'ready for approval' in clamped['recommended_action'].lower(), clamped)
+
+    review_context = {'audit_status': 'REVIEW REQUIRED', 'audit_status_reasons': ['Missing: Purchase Order']}
+    clamped_review = ra._clamp_explain_exception_result({'reason': '', 'recommended_action': ''}, review_context)
+    check('REVIEW REQUIRED default recommended_action is not the PASS message',
+          'ready for approval' not in clamped_review['recommended_action'].lower(), clamped_review)
+
+
+def run_case_clamp_explain_exception_handles_none_result():
+    print('Case: clamp never crashes even if the AI returned nothing usable at all')
+    context = {'audit_status': 'REVIEW REQUIRED', 'audit_status_reasons': ['Missing: Purchase Order']}
+    clamped = ra._clamp_explain_exception_result(None, context)
+    check('audit_status still comes from context', clamped['audit_status'] == 'REVIEW REQUIRED', clamped)
+    check('reason is non-empty', bool(clamped['reason'].strip()), clamped)
+    check('recommended_action is non-empty', bool(clamped['recommended_action'].strip()), clamped)
+
+
+# ============================================================
 # routes/ai_assistant.py — _run_action() cache hit/miss behaviour
 # ============================================================
 
@@ -324,7 +494,10 @@ def run_case_run_action_cache_hit_never_calls_ai():
             def cursor(self, **k): return None
             def close(self): pass
         ra.get_db_connection = lambda: _Conn()
-        response, status = ra._run_action(1, 'explain_exception')
+        # 'ask' is used here (not 'explain_exception') because this test
+        # is about the generic cache mechanism, not the explain_exception-
+        # specific audit_status clamp tested separately below.
+        response, status = ra._run_action(1, 'ask')
     check('status is 200', status == 200, status)
     check('response is served from cache', response.get('cached') is True, response)
     check('AI was never called', ai_call_count == [], ai_call_count)
@@ -345,7 +518,7 @@ def run_case_run_action_cache_miss_calls_ai_and_saves():
                   _get_cached=lambda c, doc_id, action, h: None,
                   ask_ai_assistant=lambda action, ctx, question=None: ({'answer': 'fresh answer'}, 'claude'),
                   _save_cache=lambda doc_id, action, h, resp: save_calls.append(resp)):
-        response, status = ra._run_action(1, 'explain_exception')
+        response, status = ra._run_action(1, 'ask')
     check('status is 200', status == 200, status)
     check('response reflects the fresh AI call', response.get('answer') == 'fresh answer', response)
     check('response is marked not cached', response.get('cached') is False, response)
@@ -363,7 +536,7 @@ def run_case_run_action_ai_failure_returns_502():
                   _cache_key=lambda ctx, q: 'fixed-hash',
                   _get_cached=lambda c, doc_id, action, h: None,
                   ask_ai_assistant=lambda action, ctx, question=None: (None, None)):
-        response, status = ra._run_action(1, 'explain_exception')
+        response, status = ra._run_action(1, 'ask')
     check('status is 502', status == 502, status)
     check('response has an error message', 'error' in response, response)
 
@@ -378,7 +551,7 @@ def run_case_run_action_document_not_found_returns_404():
                   get_db_connection=lambda: _Conn(),
                   _build_case_context=lambda c, d: None,
                   ask_ai_assistant=lambda *a, **k: ai_call_count.append(1)):
-        response, status = ra._run_action(999, 'explain_exception')
+        response, status = ra._run_action(999, 'ask')
     check('status is 404', status == 404, status)
     check('AI was never called', ai_call_count == [], ai_call_count)
 
@@ -406,6 +579,22 @@ if __name__ == '__main__':
     run_case_build_case_context_missing_documents_and_exception()
     run_case_build_case_context_returns_none_when_no_comparison()
     run_case_build_case_context_clean_pass_has_no_exception()
+
+    run_case_classify_anomaly_reviewed_is_always_informational()
+    run_case_classify_anomaly_pending_high_severity_is_blocking()
+    run_case_classify_anomaly_pending_duplicate_or_amount_is_blocking()
+    run_case_classify_anomaly_pending_low_pattern_is_informational()
+
+    run_case_audit_status_full_pass_document()
+    run_case_audit_status_full_pass_with_historical_reviewed_duplicate_is_still_pass()
+    run_case_audit_status_missing_po_gr_document()
+    run_case_audit_status_duplicate_invoice_document()
+    run_case_audit_status_sent_back_document()
+    run_case_audit_status_authenticity_warning_forces_review()
+
+    run_case_clamp_explain_exception_overrides_wrong_ai_verdict()
+    run_case_clamp_explain_exception_fills_blank_fields()
+    run_case_clamp_explain_exception_handles_none_result()
 
     run_case_run_action_cache_hit_never_calls_ai()
     run_case_run_action_cache_miss_calls_ai_and_saves()

@@ -7209,3 +7209,131 @@ Setup/config needed:
      and/or GEMINI_API_KEY must already be set on the Render backend —
      both are pre-existing environment variables from earlier features
      (extraction, authenticity), no new key is required.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-22 (later same day)
+
+What was changed:
+  Bug fix: the AI Audit Assistant was describing a fully clean record
+  (three-way matching PASS, authenticity PASS, no missing documents, no
+  unresolved send-back) as a failed/incomplete audit whenever ANY
+  anomaly record existed for it — even a historical duplicate finding
+  an auditor had already reviewed and dismissed. The AI was left to
+  infer PASS-vs-REVIEW-REQUIRED itself from raw fields, so an unrelated
+  anomaly row could tip a case summary or risk explanation toward
+  "failed" language.
+
+  Backend (auditlens-backend/) — no new files, no schema/cache-structure
+  change (routes, table, hashing, hit/miss mechanics are all unchanged):
+    - routes/ai_assistant.py:
+        - New _classify_anomaly(anomaly): a DETERMINISTIC (not AI-
+          judged) blocking-vs-informational classifier per each
+          anomaly's own status/severity/type — "informational" once an
+          auditor has reviewed/dismissed it, or a low/medium-severity
+          round/weekend pattern; "blocking" only for a still-pending
+          high-severity, duplicate, or amount-type finding. Each
+          anomaly in the context now carries this as a `classification`
+          field.
+        - New _compute_audit_status(...): computes "PASS" only when
+          three-way matching is PASS, authenticity has no warning, no
+          PO/GR is missing, the document isn't currently sent back
+          ('returned'), AND no anomaly is classified "blocking" —
+          otherwise "REVIEW REQUIRED", with an explicit
+          `audit_status_reasons` list naming exactly which condition(s)
+          failed. _build_case_context now includes `audit_status` and
+          `audit_status_reasons` in the context every AI prompt reads.
+        - New _clamp_explain_exception_result(result, context): the
+          actual fix, not just better prompt wording — the AI's own
+          audit_status guess for the "Explain Exception" action is
+          ALWAYS discarded and replaced with the deterministic
+          context['audit_status'], so the label shown to the auditor
+          can never be wrong regardless of what the AI narrates. Blank
+          reason/recommended_action fall back to audit_status_reasons /
+          a PASS-or-REVIEW-appropriate default sentence. Wired into
+          _run_action the same way _clamp_send_back_result already is.
+        - explain-exception's response shape changed from {"answer":
+          "..."} to {"audit_status", "reason", "recommended_action"} —
+          matching the task's required "Audit Status / Reason /
+          Recommended Action" format.
+    - helpers/ai_assistant.py:
+        - _SYSTEM_PREAMBLE gained an "AUDIT STATUS INTERPRETATION
+          RULES" section instructing every action to treat the case's
+          already-computed audit_status/audit_status_reasons and each
+          anomaly's classification as authoritative, describe a PASS
+          case as "validated"/"passed core checks", and never describe
+          an "informational" anomaly as a reason for REVIEW REQUIRED.
+        - explain_exception/explain_risk/generate_remark prompts
+          updated to match (explain_risk: an informational anomaly
+          alone must not raise the risk level; generate_remark: state
+          "passed core checks" for a PASS case instead of writing a
+          pending-review remark).
+    - tests/extraction/test_ai_assistant.py: +22 new checks (47 total,
+      up from 25) covering _classify_anomaly's blocking/informational
+      rules, and the exact 4 scenarios the task asked to test: (1) a
+      full PASS document, including the specific historical-reviewed-
+      duplicate case from the bug report (stays PASS), (2) a missing
+      PO/GR document (REVIEW REQUIRED), (3) a duplicate invoice
+      document that's still pending (REVIEW REQUIRED, classified
+      blocking), (4) a sent-back document (REVIEW REQUIRED) — plus
+      _clamp_explain_exception_result tests proving the AI's own wrong
+      verdict is always overridden by the deterministic value. The 4
+      existing generic _run_action cache-mechanism tests were switched
+      from action 'explain_exception' to 'ask' so they stay decoupled
+      from the new explain_exception-specific response clamp.
+  Frontend (auditlens-frontend/) — Record Detail page only:
+    - auditor-record-detail.component.ts: aiExceptionAnswer (string)
+      replaced with aiCaseSummary ({audit_status, reason,
+      recommended_action}); explainException() reads the new response
+      shape. New auditStatusClass() helper reuses the existing risk-
+      chip color classes (PASS -> green, REVIEW REQUIRED -> amber) — no
+      new color tokens.
+    - auditor-record-detail.component.html: Case Summary box now shows
+      an "Audit Status" chip plus explicit Reason/Recommended Action
+      lines instead of one paragraph.
+    - auditor-record-detail.component.css: +7 lines, one small
+      flex-row rule for the new Audit Status chip line — reuses every
+      other existing class.
+    - auditor-record-detail.component.spec.ts: updated the
+      explainException test to the new response shape, added a
+      dedicated PASS-case test asserting the audit_status/color
+      mapping.
+
+Why:
+  An AI narrative should never contradict a deterministic fact
+  AuditLens already computed. Server-side clamping (not just better
+  prompt wording) is what actually guarantees a clean record is never
+  mislabeled — prompt instructions alone are advisory and the exact
+  class of bug this task reports (over-eager anomaly-as-exception
+  narration) was already evidence that prompting alone isn't reliable
+  enough for a business rule with a precise definition.
+
+Testing:
+  - Backend: `python tests/extraction/run_all.py` — all 17 suites pass
+    (test_ai_assistant.py: 47/47 checks, up from 25), zero real Claude/
+    Gemini calls.
+  - `python -c "import app; print('APP IMPORT OK')"` — clean import.
+  - Frontend: `npx ng build --configuration production` — succeeded
+    (exit 0; same pre-existing budget warnings as prior tasks).
+  - Frontend: `npx ng test --watch=false` — 56/57 pass; the 1 failure
+    is the same pre-existing, unrelated app.spec.ts issue seen
+    throughout this project's history.
+  - `git diff --stat` confirms only auditlens-backend/{helpers,routes}/
+    ai_assistant.py, its test file, and the 4 Record Detail frontend
+    files changed — zero changes to extraction, matching, authenticity,
+    or anomaly engine files, and zero changes to the cache table/
+    hashing/hit-miss mechanics (only new fields added to the context
+    dict those mechanics already hash and store).
+  - Tested exactly the 4 scenarios the task named: full PASS document
+    (incl. a historical/reviewed duplicate anomaly — stays PASS),
+    missing PO/GR document (REVIEW REQUIRED), duplicate invoice
+    document still pending (REVIEW REQUIRED), sent-back document
+    (REVIEW REQUIRED) — all as automated checks in test_ai_assistant.py
+    since no live database with these exact records exists in this
+    sandbox.
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND — no schema change (existing
+     ai_assistant_cache table unchanged), no new environment variables.
+  2. Redeploy the Render FRONTEND.
+  3. No config changes needed.

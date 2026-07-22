@@ -256,16 +256,40 @@ describe('AuditorRecordDetailComponent — AI Audit Assistant', () => {
     httpMock.expectNone(r => r.url.includes('/ai-assistant/'));
   });
 
-  it('explainException POSTs to /ai-assistant/<id>/explain-exception and stores the answer', () => {
+  it('explainException POSTs to /ai-assistant/<id>/explain-exception and stores the structured audit-status summary', () => {
     component.explainException();
     expect(component.aiActionLoading['explain_exception']).toBe(true);
 
     const req = httpMock.expectOne(`${environment.apiUrl}/ai-assistant/1/explain-exception`);
     expect(req.request.method).toBe('POST');
-    req.flush({ answer: 'This invoice is missing its PO and GR.', provider: 'claude', cached: false });
+    req.flush({
+      audit_status: 'REVIEW REQUIRED',
+      reason: 'The Purchase Order and Goods Receipt are missing.',
+      recommended_action: 'Request the missing documents from Finance before approval.',
+      provider: 'claude', cached: false,
+    });
 
     expect(component.aiActionLoading['explain_exception']).toBe(false);
-    expect(component.aiExceptionAnswer).toBe('This invoice is missing its PO and GR.');
+    expect(component.aiCaseSummary).toEqual({
+      audit_status: 'REVIEW REQUIRED',
+      reason: 'The Purchase Order and Goods Receipt are missing.',
+      recommended_action: 'Request the missing documents from Finance before approval.',
+    });
+  });
+
+  it('explainException reflects a PASS audit_status for a validated document (does not mistreat informational anomalies as failures)', () => {
+    component.explainException();
+    const req = httpMock.expectOne(`${environment.apiUrl}/ai-assistant/1/explain-exception`);
+    req.flush({
+      audit_status: 'PASS',
+      reason: 'Three-way matching, authenticity, and document completeness all passed core checks. A historical duplicate finding was already reviewed and is informational only.',
+      recommended_action: 'No action required — ready for approval.',
+      provider: 'claude', cached: false,
+    });
+
+    expect(component.aiCaseSummary?.audit_status).toBe('PASS');
+    expect(component.auditStatusClass('PASS')).toBe('risk-low');
+    expect(component.auditStatusClass('REVIEW REQUIRED')).toBe('risk-medium');
   });
 
   it('explainRisk POSTs to /ai-assistant/<id>/explain-risk and stores the structured risk result', () => {

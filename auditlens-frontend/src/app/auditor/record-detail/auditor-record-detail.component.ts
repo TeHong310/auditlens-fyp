@@ -120,7 +120,7 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   // ever triggered on page load). Backed by POST /ai-assistant/<id>/*. ──
   aiActionLoading: { [key: string]: boolean } = {};
   aiError: string = '';
-  aiExceptionAnswer: string = '';
+  aiCaseSummary: { audit_status: string; reason: string; recommended_action: string } | null = null;
   aiRisk: { risk_level: string; reasons: string[]; potential_impact: string } | null = null;
   aiQuestion: string = '';
   aiConversation: { question: string; answer: string }[] = [];
@@ -451,7 +451,15 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     ).subscribe({
       next: (res) => {
         this.aiActionLoading['explain_exception'] = false;
-        this.aiExceptionAnswer = res.answer || '';
+        // audit_status is server-computed deterministically (never the
+        // AI's own guess — see routes/ai_assistant.py::_clamp_explain_
+        // exception_result) so this label can never contradict the
+        // actual matching/authenticity/anomaly state.
+        this.aiCaseSummary = {
+          audit_status: res.audit_status || 'REVIEW REQUIRED',
+          reason: res.reason || '',
+          recommended_action: res.recommended_action || ''
+        };
         this.cdr.detectChanges();
       },
       error: (err) => {
@@ -657,6 +665,13 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     if (level === 'High') return 'risk-high';
     if (level === 'Medium') return 'risk-medium';
     return 'risk-low';
+  }
+
+  // Reuses the same risk-chip color classes as exceptionRiskClass above —
+  // PASS reads as "low risk" (green), REVIEW REQUIRED as "needs attention"
+  // (amber) — no new CSS needed.
+  auditStatusClass(status: string): string {
+    return status === 'PASS' ? 'risk-low' : 'risk-medium';
   }
 
   get evidenceListLabel(): string {

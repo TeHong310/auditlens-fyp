@@ -46,31 +46,63 @@ STRICT RULES:
 - Return ONLY valid JSON, no markdown, no code fences, no explanation
   outside the JSON.
 
+AUDIT STATUS INTERPRETATION RULES:
+- The CASE DATA below already includes "audit_status" ("PASS" or
+  "REVIEW REQUIRED") and "audit_status_reasons" — a verdict AuditLens
+  computed deterministically from three-way matching, authenticity,
+  missing documents, unresolved send-backs, and blocking anomalies.
+  Treat it as authoritative: never contradict it or compute your own
+  conflicting verdict.
+- When audit_status is "PASS", describe the document as "validated" or
+  having "passed core checks" — never as a failed or incomplete audit.
+- Each entry in "anomalies" already has a "classification": "blocking"
+  (requires auditor action — an unresolved high-risk, duplicate, or
+  amount-inconsistency finding) or "informational" (a historical/low-
+  risk finding, or one already reviewed/dismissed). Mention
+  "informational" anomalies only briefly as background context — NEVER
+  as a reason the audit failed or needs action.
+- Only "blocking" anomalies and the items listed in
+  "audit_status_reasons" may be described as requiring auditor
+  attention. Do not invent or imply any other exception.
+
 CASE DATA (JSON):
 {context_json}
 """
 
 _ACTION_INSTRUCTIONS = {
     'explain_exception': (
-        'Summarize this audit case in 3-5 sentences: what the invoice is, '
-        'the vendor and amount, which supporting documents are missing (if '
-        'any), the three-way matching result, the authenticity result (if '
-        'available), the anomaly result (if available), and the impact on '
-        'approval.\nReturn ONLY: {"answer": "string"}'
+        'Summarize this audit case for the auditor using the CASE DATA\'s '
+        'already-computed "audit_status" verbatim.\n'
+        'reason: 2-4 sentences covering what the invoice is (vendor, '
+        'amount), the three-way matching/authenticity/missing-document/'
+        'send-back status, and any BLOCKING anomaly. Mention informational '
+        'anomalies only briefly as context, never as a reason for '
+        '"REVIEW REQUIRED". If audit_status is "PASS", describe the '
+        'document as validated / having passed core checks.\n'
+        'recommended_action: one short sentence — what the auditor should '
+        'do next (e.g. "No action required, ready for approval" when '
+        'audit_status is "PASS").\n'
+        'Return ONLY: {"audit_status": "PASS" or "REVIEW REQUIRED", '
+        '"reason": "string", "recommended_action": "string"}'
     ),
     'explain_risk': (
         'Explain the audit risk of this case. Base the risk level and '
-        'reasons only on the CASE DATA (missing documents, matching '
-        'mismatches, authenticity warnings, anomalies). If nothing is '
-        'unusual, the risk is "Low".\n'
+        'reasons only on audit_status/audit_status_reasons and any '
+        '"blocking" anomaly — an "informational" anomaly alone must NOT '
+        'raise the risk level. If audit_status is "PASS", the risk level '
+        'should normally be "Low".\n'
         'Return ONLY: {"risk_level": "Low" or "Medium" or "High", '
         '"reasons": ["string", ...], "potential_impact": "string"}'
     ),
     'generate_remark': (
         "Write a short, professional auditor remark (2-4 sentences) "
-        "suitable to paste directly into this case's Remarks/Notes field, "
-        'explaining the current review status and, if applicable, what is '
-        'being requested from Finance before approval.\n'
+        "suitable to paste directly into this case's Remarks/Notes field. "
+        'If audit_status is "PASS", state that the document passed core '
+        'checks / is validated (an informational anomaly, if any, may be '
+        'mentioned briefly but not as a blocker). If audit_status is '
+        '"REVIEW REQUIRED", explain the current review status and, if '
+        'applicable, what is being requested from Finance before '
+        'approval.\n'
         'Return ONLY: {"remark": "string"}'
     ),
     'ask': (

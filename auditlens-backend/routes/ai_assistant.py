@@ -25,6 +25,63 @@ from routes.auditor import _build_comparison, _classify_exception
 ai_assistant_bp = Blueprint('ai_assistant', __name__)
 
 
+def _classify_anomaly(anomaly):
+    """Blocking vs informational — a DETERMINISTIC classification (never
+    left to the AI to judge), so a historical/already-handled anomaly
+    can never be narrated as an active exception:
+      - 'informational': already reviewed or dismissed by an auditor
+        (status != 'pending'), or a pending low/medium-severity finding
+        of a type that isn't inherently high-stakes (e.g. a round-number
+        or weekend-submission pattern).
+      - 'blocking': still pending AND either high severity, or an
+        amount/duplicate finding — types that map directly to the
+        task's "unresolved duplicate" / "amount inconsistency" /
+        "high risk anomaly" categories.
+    """
+    if anomaly.get('status') != 'pending':
+        return 'informational'  # already reviewed issue
+    if anomaly.get('severity') == 'high':
+        return 'blocking'  # high risk anomaly requiring action
+    if anomaly.get('anomaly_type') in ('duplicate', 'amount'):
+        return 'blocking'  # unresolved duplicate / amount inconsistency
+    return 'informational'  # low risk pattern
+
+
+def _compute_audit_status(mr, authenticity, missing_documents, document_status, anomalies):
+    """Deterministic PASS / REVIEW REQUIRED verdict, computed here in
+    Python (never left for the AI to infer) so the AI Assistant can
+    never narrate a clean record as a failed audit, or vice versa —
+    this is the actual fix for that class of bug, not just better
+    prompt wording. Returns (audit_status, reasons: list[str]).
+
+    PASS requires ALL of: three-way matching PASS, no authenticity
+    warning, no missing PO/GR, no unresolved send-back (document not
+    currently 'returned') — AND no 'blocking' anomaly (see
+    _classify_anomaly above). Anything else is REVIEW REQUIRED, with
+    `reasons` listing exactly which condition(s) failed — the ONLY
+    things the AI is allowed to describe as requiring auditor action.
+    """
+    authenticity_ok = not any((v or {}).get('status') == 'warning' for v in (authenticity or {}).values())
+    send_back_unresolved = document_status == 'returned'
+    blocking_anomalies = [a for a in anomalies if a.get('classification') == 'blocking']
+
+    reasons = []
+    if mr.get('overall_status') != 'PASS':
+        reasons.append(f"Three-way matching status is {mr.get('overall_status')}")
+    if not authenticity_ok:
+        reasons.append('Authenticity check flagged a warning')
+    if missing_documents:
+        reasons.append(f"Missing: {', '.join(missing_documents)}")
+    if send_back_unresolved:
+        reasons.append('Document is sent back to Finance and awaiting response')
+    for a in blocking_anomalies:
+        reasons.append(f"Unresolved {a.get('anomaly_type')} anomaly ({a.get('severity')} severity)")
+
+    if reasons:
+        return 'REVIEW REQUIRED', reasons
+    return 'PASS', ['All core checks passed and no blocking findings']
+
+
 def _build_case_context(cursor, document_id):
     """Structured, AI-facing snapshot of ONE case — every value here is
     read from data AuditLens already computed elsewhere (three-way
@@ -66,6 +123,12 @@ def _build_case_context(cursor, document_id):
         (document_id,)
     )
     anomalies = [dict(row) for row in cursor.fetchall()]
+    for a in anomalies:
+        a['classification'] = _classify_anomaly(a)
+
+    document_status = doc_row['status'] if doc_row else None
+    audit_status, audit_status_reasons = _compute_audit_status(
+        mr, authenticity, missing_documents, document_status, anomalies)
 
     cursor.execute(
         '''SELECT rr.action, rr.remarks, rr.reviewed_at, u.full_name AS reviewer_name
@@ -101,7 +164,9 @@ def _build_case_context(cursor, document_id):
         'authenticity':       authenticity or None,
         'anomalies':           anomalies,
         'audit_history':      audit_history,
-        'document_status':    doc_row['status'] if doc_row else None,
+        'document_status':    document_status,
+        'audit_status':          audit_status,
+        'audit_status_reasons':  audit_status_reasons,
     }
 
 
@@ -134,6 +199,34 @@ def _clamp_send_back_result(result, exception_info):
         'required_actions': required_actions,
         'priority':          priority,
         'instruction':       instruction,
+    }
+
+
+def _clamp_explain_exception_result(result, context):
+    """Never trust the AI's own PASS/REVIEW REQUIRED verdict — always
+    use the DETERMINISTICALLY computed context['audit_status'] instead,
+    regardless of what the AI narrated. This is what actually prevents
+    the AI from describing a clean record (matching PASS, authenticity
+    PASS, no missing documents, no unresolved send-back, no blocking
+    anomaly) as a failed audit just because an informational/already-
+    reviewed anomaly happens to exist — the wording can vary, but the
+    Audit Status label itself can never be wrong."""
+    result = result or {}
+    audit_status = context.get('audit_status', 'REVIEW REQUIRED')
+
+    reason = (result.get('reason') or '').strip()
+    if not reason:
+        reason = '; '.join(context.get('audit_status_reasons') or []) or 'See case details.'
+
+    recommended_action = (result.get('recommended_action') or '').strip()
+    if not recommended_action:
+        recommended_action = ('No action required — ready for approval.' if audit_status == 'PASS'
+                               else 'Review the flagged items before approving.')
+
+    return {
+        'audit_status':        audit_status,
+        'reason':              reason,
+        'recommended_action':  recommended_action,
     }
 
 
@@ -197,6 +290,8 @@ def _run_action(document_id, action, question=None):
 
     if action == 'prepare_send_back':
         result = _clamp_send_back_result(result, context.get('exception'))
+    elif action == 'explain_exception':
+        result = _clamp_explain_exception_result(result, context)
 
     response = {**result, 'provider': provider, 'cached': False}
     _save_cache(document_id, action, context_hash, response)

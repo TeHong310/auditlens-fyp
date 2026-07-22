@@ -428,9 +428,14 @@
 
           <div class="ai-error-box" *ngIf="aiError"><i class="ph-duotone ph-x-circle"></i> {{ aiError }}</div>
 
-          <div class="ai-answer-box" *ngIf="aiExceptionAnswer">
+          <div class="ai-answer-box" *ngIf="aiCaseSummary">
             <p class="ai-answer-label"><i class="ph-duotone ph-file-magnifying-glass"></i> Case Summary</p>
-            <p class="ai-answer-text">{{ aiExceptionAnswer }}</p>
+            <p class="ai-audit-status-row">
+              <span class="es-label">Audit Status</span>
+              <span class="risk-chip" [ngClass]="auditStatusClass(aiCaseSummary.audit_status)">{{ aiCaseSummary.audit_status }}</span>
+            </p>
+            <p class="ai-answer-text"><strong>Reason:</strong> {{ aiCaseSummary.reason }}</p>
+            <p class="ai-answer-text"><strong>Recommended Action:</strong> {{ aiCaseSummary.recommended_action }}</p>
           </div>
 
           <div class="ai-answer-box" *ngIf="aiRisk">
