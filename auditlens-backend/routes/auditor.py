@@ -1102,17 +1102,69 @@ def get_record_comparison(invoice_document_id):
         return jsonify({'error': str(e)}), 500
 
 
+def _matching_status_for_comparison(comparison):
+    """Enterprise V3 Phase 4 (STEP 1/3/5/6) — the single normalized
+    matching status ('PASS'|'REVIEW'|'FAIL'|'PARTIAL') for ONE
+    comparison result, preferring the Enterprise V2 engine's own
+    invoice-level verdict (invoice_result.status: 'PASS'|
+    'REVIEW_REQUIRED') when V2 actually ran for this invoice, and
+    falling back to the legacy match_result.overall_status otherwise.
+    Every V2-aware consumer (Report counts, exception classification,
+    Workflow Timeline, AI Assistant context via _build_case_context)
+    reads from this ONE function, so "use the active matching
+    dispatcher result, not raw legacy fields" only has to be true in a
+    single place."""
+    if comparison.get('engine_version') == 'v2' and comparison.get('invoice_result'):
+        return 'PASS' if comparison['invoice_result']['status'] == 'PASS' else 'REVIEW'
+    return comparison['match_result']['overall_status']
+
+
 # ------------------------------------------------------------
 # EXCEPTION DETECTION
 # Classifies one invoice's comparison result + document row into at
 # most one exception (highest severity wins), or None if clean.
 # Severity order: mismatch > sent_back = missing_document > low_confidence
+#
+# Enterprise V3 Phase 4 (STEP 3): when `comparison` is V2-shaped
+# (comparison['engine_version'] == 'v2'), the matching-related
+# candidates (mismatch/review/missing_document) are derived from V2's
+# own invoice_result.status/issues instead of the legacy match_result
+# fields — this is the actual fix for "do not create false exceptions
+# from legacy logic" (the PO3006231 example: legacy alone reports a
+# hard Amount mismatch because it only ever compares an invoice
+# against a PO's FULL total; V2 correctly sees the invoice as fully
+# allocated and PASS, so no matching-related exception is created at
+# all). sent_back and low_confidence are workflow/OCR-quality signals,
+# not "matching interpretation", so they are computed identically for
+# both engines, unchanged from before this phase.
 # ------------------------------------------------------------
 def _classify_exception(cursor, doc_row, comparison):
     candidates = []  # (rank, type, label, detail, severity)
     mr = comparison['match_result']
+    is_v2 = comparison.get('engine_version') == 'v2'
 
-    if mr['overall_status'] == 'FAIL':
+    if is_v2:
+        inv_result = comparison['invoice_result']
+        if inv_result['status'] != 'PASS':
+            reasons = list(inv_result['issues']) or ['Enterprise matching flagged this invoice for review']
+            evidence_parts = []
+            for pf in (comparison.get('po_fulfilment') or []):
+                evidence_parts.append(
+                    f"PO {pf.get('po_number') or pf.get('po_id')}: "
+                    f"invoiced {pf.get('invoiced_quantity_cumulative')}/{pf.get('ordered_quantity')}, "
+                    f"received {pf.get('received_quantity_cumulative')}/{pf.get('ordered_quantity')}, "
+                    f"remaining {pf.get('remaining_to_invoice')}"
+                )
+            detail = '; '.join(reasons)
+            if evidence_parts:
+                detail += ' | Evidence: ' + '; '.join(evidence_parts)
+            candidates.append((4, 'mismatch', 'Enterprise Matching Review Required', detail, 'high'))
+        # PASS under V2 -> no matching-related exception candidate at
+        # all (this is the fix: a missing-GR-only warning, or a PO that
+        # is only partially fulfilled overall, must NOT force an
+        # exception when this specific invoice is fully supported).
+
+    elif mr['overall_status'] == 'FAIL':
         parts = []
         label_parts = []
         if mr['vendor_match'] is False:
@@ -1161,8 +1213,9 @@ def _classify_exception(cursor, doc_row, comparison):
     # reasoning as overall_status above, surfaced here too so a record
     # showing an amber "Review Required" banner also shows up as an
     # exception, rather than only being visible if an auditor happens to
-    # open that specific record's detail page.
-    if mr['overall_status'] == 'REVIEW':
+    # open that specific record's detail page. Skipped entirely under
+    # V2 — the block above already covers V2's own review verdict.
+    if not is_v2 and mr['overall_status'] == 'REVIEW':
         parts = []
         label_parts = []
         if mr['po_reference_match'] is False:
@@ -1186,7 +1239,14 @@ def _classify_exception(cursor, doc_row, comparison):
         detail = remark_row['remarks'] if remark_row and remark_row['remarks'] else 'Sent back to Finance for correction'
         candidates.append((3, 'sent_back', 'Sent Back to Finance', detail, 'medium'))
 
-    if not comparison['po'] or not comparison['gr']:
+    # Skipped entirely under V2 — a missing PO is already covered by
+    # the V2 branch above ("No reliable PO relationship found" forces
+    # REVIEW_REQUIRED, rank 4, which always outranks this rank-3
+    # candidate anyway), and a missing GR alone is a non-blocking
+    # warning under V2 (matching this codebase's long-standing "missing
+    # GR/PO is PARTIAL, not FAIL" philosophy) — flagging it here too
+    # would be exactly the false exception STEP 3 exists to prevent.
+    if not is_v2 and (not comparison['po'] or not comparison['gr']):
         missing = []
         if not comparison['po']:
             missing.append('PO')
@@ -1352,20 +1412,35 @@ def get_report_summary():
         exception_count = 0
         # Audit Quality Overview (Report page) — three-way match PASS/
         # REVIEW counts, read from the SAME comparison already computed
-        # per document for exception_count below (no extra query, no
-        # change to _build_comparison/_classify_exception themselves —
-        # just reading the overall_status they already return).
+        # per document for exception_count below (no extra query).
+        # Enterprise V3 Phase 4 (STEP 5): uses the active matching
+        # dispatcher's own normalized status (_matching_status_for_
+        # comparison — V2's invoice_result.status when V2 ran for that
+        # invoice, else legacy's match_result.overall_status), not a
+        # raw legacy field directly, so these counts stay correct once
+        # ENTERPRISE_MATCHING_V2_ENABLED is turned on. single_document_
+        # match_count/multi_document_match_count (STEP 5's optional
+        # "Enterprise Matching Coverage") come from the SAME comparison
+        # dicts already in hand — relationship_mode is only ever True
+        # when V2 actually ran with real document_relationships data,
+        # never fabricated.
         match_pass_count = 0
         match_review_count = 0
+        single_document_match_count = 0
+        multi_document_match_count = 0
         for doc_row in doc_rows:
             comparison = build_comparison(cursor, doc_row['document_id'])
             if not comparison:
                 continue
-            overall_status = comparison['match_result']['overall_status']
+            overall_status = _matching_status_for_comparison(comparison)
             if overall_status == 'PASS':
                 match_pass_count += 1
             elif overall_status == 'REVIEW':
                 match_review_count += 1
+            if comparison.get('relationship_mode'):
+                multi_document_match_count += 1
+            else:
+                single_document_match_count += 1
             if _classify_exception(cursor, doc_row, comparison):
                 exception_count += 1
 
@@ -1376,6 +1451,10 @@ def get_report_summary():
             'exceptions':    exception_count,
             'match_pass':    match_pass_count,
             'match_review':  match_review_count,
+            'enterprise_matching_coverage': {
+                'single_document_matches': single_document_match_count,
+                'multi_document_matches':  multi_document_match_count,
+            },
         }
 
         # ── Timeline: always the last 30 days, regardless of `period` ──

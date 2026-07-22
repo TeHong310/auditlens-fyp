@@ -858,6 +858,19 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return Number.isInteger(n) ? String(n) : n.toFixed(2);
   }
 
+  // ── Enterprise Matching Summary (Phase 4) — status pill mapping for
+  // po_fulfilment.status, reusing the existing .match-pill/.pill-*
+  // classes so this section matches the page's existing visual style. ──
+  fulfilmentStatusText(status: string): string {
+    return (status || '').replace(/_/g, ' ');
+  }
+
+  fulfilmentStatusPillClass(status: string): string {
+    if (status === 'FULLY_FULFILLED' || status === 'FULLY_INVOICED' || status === 'FULLY_RECEIVED') return 'pill-match';
+    if (status === 'OVER_INVOICED' || status === 'OVER_RECEIVED' || status === 'REVIEW_REQUIRED') return 'pill-differ';
+    return 'pill-before';
+  }
+
   // ── Formatting ───────────────────────────────────────────
 
   formatAmount(amount: any, currency?: string | null): string {

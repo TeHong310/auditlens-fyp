@@ -1402,12 +1402,23 @@ def _build_timeline_events(context):
 
     # 3. Three-way Matching — missing PO/GR is an explicit Action
     # Required trigger (same as a real mismatch), not merely "pending".
+    # matching_status already reflects the active matching dispatcher's
+    # result (Enterprise V2's invoice_result.status when V2 ran for
+    # this invoice, else legacy — see routes.auditor._matching_status_
+    # for_comparison, computed once in _build_case_context()), so this
+    # step's completed/action_required/pending bucketing is already
+    # correct for both engines with no logic change here. Only the
+    # detail text is adjusted when relationship_mode is true (Enterprise
+    # V3 Phase 4, STEP 6), to name which engine actually evaluated it.
     matching_status = context.get('matching_status')
     missing_documents = context.get('missing_documents') or []
+    relationship_mode = context.get('relationship_mode')
     if matching_status == 'PASS':
-        mt_status, mt_detail = 'completed', 'Status: PASS'
+        mt_status = 'completed'
+        mt_detail = 'Enterprise three-way matching completed' if relationship_mode else 'Status: PASS'
     elif matching_status in ('REVIEW', 'FAIL'):
-        mt_status, mt_detail = 'action_required', 'Status: REVIEW REQUIRED'
+        mt_status = 'action_required'
+        mt_detail = 'Enterprise matching flagged for review' if relationship_mode else 'Status: REVIEW REQUIRED'
     elif missing_documents:
         mt_status, mt_detail = 'action_required', f"Missing: {', '.join(missing_documents)}"
     else:

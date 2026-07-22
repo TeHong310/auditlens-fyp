@@ -315,6 +315,85 @@
             </div>
           </div>
         </div>
+
+        <!-- Enterprise Matching Summary — Phase 4. Purely additive:
+             only rendered when the backend actually ran the Enterprise
+             V2 engine for this invoice (comparison.engine_version ===
+             'v2'), i.e. invisible unless ENTERPRISE_MATCHING_V2_ENABLED
+             is on AND this invoice has explicit document_relationships.
+             Uses ONLY fields already present in the existing comparison
+             response (GET /auditor/record/<id>/comparison already
+             returns build_comparison()'s result) — no new API call, no
+             new calculation performed here. -->
+        <div class="comparison-card" *ngIf="comparison.engine_version === 'v2'">
+          <div class="comparison-card-header">
+            <h2 class="comparison-title"><i class="ph-duotone ph-flow-arrow"></i> Enterprise Three-way Matching</h2>
+            <p class="comparison-subtitle">Cumulative matching across all related documents</p>
+          </div>
+
+          <div class="enterprise-status-row">
+            <span class="enterprise-status-label">Status</span>
+            <span class="match-pill" [ngClass]="matchPillClass(comparison.invoice_result.status === 'PASS' ? 'eq' : 'neq')">
+              <i class="ph-duotone" [ngClass]="comparison.invoice_result.status === 'PASS' ? 'ph-check' : 'ph-warning'"></i>
+              {{ comparison.invoice_result.status === 'PASS' ? 'PASS' : 'REVIEW REQUIRED' }}
+            </span>
+          </div>
+
+          <div class="enterprise-related-section" *ngIf="comparison.related_purchase_orders?.length || comparison.related_invoices?.length || comparison.related_goods_receipts?.length">
+            <h3 class="source-docs-title"><i class="ph-duotone ph-files"></i> Related Documents</h3>
+
+            <div class="enterprise-related-group" *ngIf="comparison.related_purchase_orders?.length">
+              <p class="enterprise-related-label">Purchase Orders</p>
+              <div class="enterprise-related-item" *ngFor="let relPo of comparison.related_purchase_orders">
+                <i class="ph-duotone ph-file-text enterprise-check-icon"></i>
+                <span class="enterprise-related-name">{{ relPo.po_number || ('PO #' + relPo.po_id) }}</span>
+              </div>
+            </div>
+
+            <div class="enterprise-related-group" *ngIf="comparison.related_invoices?.length">
+              <p class="enterprise-related-label">Invoices</p>
+              <div class="enterprise-related-item" *ngFor="let relInv of comparison.related_invoices">
+                <i class="ph-duotone ph-check-circle enterprise-check-icon"></i>
+                <span class="enterprise-related-name">{{ relInv.invoice_number || ('Invoice #' + relInv.document_id) }}</span>
+                <span class="enterprise-related-detail">Amount: {{ formatAmount(relInv.total_amount, relInv.currency) }}</span>
+              </div>
+            </div>
+
+            <div class="enterprise-related-group" *ngIf="comparison.related_goods_receipts?.length">
+              <p class="enterprise-related-label">Goods Receipts</p>
+              <div class="enterprise-related-item" *ngFor="let relGr of comparison.related_goods_receipts">
+                <i class="ph-duotone ph-check-circle enterprise-check-icon"></i>
+                <span class="enterprise-related-name">{{ relGr.gr_number || ('GR #' + relGr.gr_id) }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="enterprise-fulfilment-section" *ngFor="let pf of comparison.po_fulfilment">
+            <h3 class="source-docs-title"><i class="ph-duotone ph-chart-bar"></i> Fulfilment — {{ pf.po_number || ('PO #' + pf.po_id) }}</h3>
+            <div class="enterprise-fulfilment-grid">
+              <div class="enterprise-fulfilment-stat">
+                <span class="enterprise-stat-label">Ordered</span>
+                <span class="enterprise-stat-value">{{ formatQuantity(pf.ordered_quantity) }}</span>
+              </div>
+              <div class="enterprise-fulfilment-stat">
+                <span class="enterprise-stat-label">Invoiced</span>
+                <span class="enterprise-stat-value">{{ formatQuantity(pf.invoiced_quantity_cumulative) }}</span>
+              </div>
+              <div class="enterprise-fulfilment-stat">
+                <span class="enterprise-stat-label">Received</span>
+                <span class="enterprise-stat-value">{{ formatQuantity(pf.received_quantity_cumulative) }}</span>
+              </div>
+              <div class="enterprise-fulfilment-stat">
+                <span class="enterprise-stat-label">Remaining</span>
+                <span class="enterprise-stat-value">{{ formatQuantity(pf.remaining_to_invoice) }}</span>
+              </div>
+            </div>
+            <div class="enterprise-fulfilment-status-row">
+              <span class="enterprise-status-label">Status</span>
+              <span class="match-pill" [ngClass]="fulfilmentStatusPillClass(pf.status)">{{ fulfilmentStatusText(pf.status) }}</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Right: Audit Decision -->

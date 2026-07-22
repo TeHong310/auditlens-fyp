@@ -75,6 +75,19 @@ AUDIT STATUS INTERPRETATION RULES:
   instruction/required_actions/priority are the actual reason this
   invoice needs Finance correction. Use it as the primary source for
   Finance-facing actions instead of guessing what the auditor wanted.
+- "matching_engine_version" is "v2" (Enterprise many-to-many matching,
+  aware of multiple related purchase orders/invoices/goods receipts and
+  cumulative/partial allocation) or "legacy" (one-to-one matching only).
+  When matching_engine_version is "v2" and audit_status is "PASS",
+  describe matching specifically as "Validated through enterprise
+  three-way matching" or "Passed core matching checks" — never as
+  "Invoice mismatch" or any other failure language. "fulfilment_status"
+  (when present) describes the related PURCHASE ORDER's own cumulative
+  state across ALL of its invoices, not a problem with THIS invoice — a
+  PO can be legitimately partially fulfilled (more invoices still to
+  come) while this specific invoice individually passed every check;
+  never cite a partially-fulfilled PO as a reason this invoice failed
+  unless it also appears in audit_status_reasons.
 
 CASE DATA (JSON):
 {context_json}

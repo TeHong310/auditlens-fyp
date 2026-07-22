@@ -21,7 +21,7 @@ import psycopg2.extras
 from db import get_db_connection, get_user_by_id
 from helpers.ai_assistant import ask_ai_assistant
 from helpers.send_back import REASON_CATEGORIES, REQUIRED_ACTIONS, PRIORITIES
-from routes.auditor import build_comparison, _classify_exception
+from routes.auditor import build_comparison, _classify_exception, _matching_status_for_comparison
 
 ai_assistant_bp = Blueprint('ai_assistant', __name__)
 
@@ -48,7 +48,7 @@ def _classify_anomaly(anomaly):
     return 'informational'  # low risk pattern
 
 
-def _compute_audit_status(mr, authenticity, missing_documents, document_status, anomalies):
+def _compute_audit_status(comparison, authenticity, missing_documents, document_status, anomalies):
     """Deterministic PASS / REVIEW REQUIRED verdict, computed here in
     Python (never left for the AI to infer) so the AI Assistant can
     never narrate a clean record as a failed audit, or vice versa —
@@ -56,23 +56,38 @@ def _compute_audit_status(mr, authenticity, missing_documents, document_status, 
     prompt wording. Returns (audit_status, reasons: list[str]).
 
     PASS requires ALL of: three-way matching PASS, no authenticity
-    warning, no missing PO/GR, no unresolved send-back (document not
-    currently 'returned') — AND no 'blocking' anomaly (see
-    _classify_anomaly above). Anything else is REVIEW REQUIRED, with
-    `reasons` listing exactly which condition(s) failed — the ONLY
-    things the AI is allowed to describe as requiring auditor action.
+    warning, no unresolved send-back (document not currently
+    'returned') — AND no 'blocking' anomaly (see _classify_anomaly
+    above). Anything else is REVIEW REQUIRED, with `reasons` listing
+    exactly which condition(s) failed — the ONLY things the AI is
+    allowed to describe as requiring auditor action.
+
+    Enterprise V3 Phase 4: when `comparison` is V2-shaped (engine_
+    version == 'v2'), the matching contribution to `reasons` comes from
+    V2's own invoice_result.issues instead of legacy's overall_status +
+    missing_documents — this is what stops a missing-GR-only warning
+    (non-blocking under V2) or a partially-fulfilled PO (a PO-level
+    fact, not a per-invoice problem) from incorrectly forcing REVIEW
+    REQUIRED once V2 already correctly resolved the invoice as PASS.
     """
     authenticity_ok = not any((v or {}).get('status') == 'warning' for v in (authenticity or {}).values())
     send_back_unresolved = document_status == 'returned'
     blocking_anomalies = [a for a in anomalies if a.get('classification') == 'blocking']
 
     reasons = []
-    if mr.get('overall_status') != 'PASS':
-        reasons.append(f"Three-way matching status is {mr.get('overall_status')}")
+    if comparison.get('engine_version') == 'v2':
+        inv_result = comparison['invoice_result']
+        if inv_result['status'] != 'PASS':
+            reasons.extend(inv_result['issues'] or ['Enterprise matching flagged this invoice for review'])
+    else:
+        overall_status = comparison['match_result'].get('overall_status')
+        if overall_status != 'PASS':
+            reasons.append(f"Three-way matching status is {overall_status}")
+        if missing_documents:
+            reasons.append(f"Missing: {', '.join(missing_documents)}")
+
     if not authenticity_ok:
         reasons.append('Authenticity check flagged a warning')
-    if missing_documents:
-        reasons.append(f"Missing: {', '.join(missing_documents)}")
     if send_back_unresolved:
         reasons.append('Document is sent back to Finance and awaiting response')
     for a in blocking_anomalies:
@@ -81,6 +96,48 @@ def _compute_audit_status(mr, authenticity, missing_documents, document_status, 
     if reasons:
         return 'REVIEW REQUIRED', reasons
     return 'PASS', ['All core checks passed and no blocking findings']
+
+
+def _v2_ai_context_fields(comparison):
+    """Enterprise V3 Phase 4 (STEP 4) — additive AI-context fields,
+    populated only when the Enterprise V2 engine actually ran for this
+    invoice (comparison['engine_version'] == 'v2'); otherwise every
+    field is None/False so the AI Assistant's existing prompts are
+    completely unaffected until it's actually looking at a V2 case. No
+    AI call, no new architecture — this is pure Python data assembly
+    from fields build_comparison()/_build_comparison_v2() already
+    computed."""
+    if comparison.get('engine_version') != 'v2':
+        return {
+            'matching_engine_version': 'legacy',
+            'relationship_mode': False,
+            'related_document_count': None,
+            'related_invoice_count': None,
+            'related_gr_count': None,
+            'cumulative_po_quantity': None,
+            'cumulative_invoice_quantity': None,
+            'cumulative_received_quantity': None,
+            'remaining_quantity': None,
+            'fulfilment_status': None,
+        }
+
+    po_fulfilment = comparison.get('po_fulfilment') or []
+    related_invoices = comparison.get('related_invoices') or []
+    related_pos = comparison.get('related_purchase_orders') or []
+    related_grs = comparison.get('related_goods_receipts') or []
+
+    return {
+        'matching_engine_version': 'v2',
+        'relationship_mode': True,
+        'related_document_count': len(related_invoices) + len(related_pos) + len(related_grs),
+        'related_invoice_count': len(related_invoices),
+        'related_gr_count': len(related_grs),
+        'cumulative_po_quantity': sum((pf['ordered_quantity'] or 0) for pf in po_fulfilment) if po_fulfilment else None,
+        'cumulative_invoice_quantity': sum((pf['invoiced_quantity_cumulative'] or 0) for pf in po_fulfilment) if po_fulfilment else None,
+        'cumulative_received_quantity': sum((pf['received_quantity_cumulative'] or 0) for pf in po_fulfilment) if po_fulfilment else None,
+        'remaining_quantity': sum((pf['remaining_to_invoice'] or 0) for pf in po_fulfilment) if po_fulfilment else None,
+        'fulfilment_status': po_fulfilment[0]['status'] if po_fulfilment else None,
+    }
 
 
 def _build_case_context(cursor, document_id):
@@ -129,7 +186,7 @@ def _build_case_context(cursor, document_id):
 
     document_status = doc_row['status'] if doc_row else None
     audit_status, audit_status_reasons = _compute_audit_status(
-        mr, authenticity, missing_documents, document_status, anomalies)
+        comparison, authenticity, missing_documents, document_status, anomalies)
 
     cursor.execute(
         '''SELECT rr.action, rr.remarks, rr.reviewed_at, u.full_name AS reviewer_name
@@ -182,7 +239,7 @@ def _build_case_context(cursor, document_id):
         'po_uploaded':        comparison['po'] is not None,
         'gr_uploaded':        comparison['gr'] is not None,
         'missing_documents':  missing_documents,
-        'matching_status':    mr['overall_status'],
+        'matching_status':    _matching_status_for_comparison(comparison),
         'matching_details': {
             'vendor_match':           mr['vendor_match'],
             'amount_match':           mr['amount_match'],
@@ -198,6 +255,7 @@ def _build_case_context(cursor, document_id):
         'audit_status':          audit_status,
         'audit_status_reasons':  audit_status_reasons,
         'send_back_cycle':       send_back_cycle,
+        **_v2_ai_context_fields(comparison),
     }
 
 
