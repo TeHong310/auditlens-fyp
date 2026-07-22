@@ -132,11 +132,12 @@ class _FakeCursor:
                         for r in self.tables['document_relationships'])
             self._result = [(1,)] if match else []
         elif s.startswith('INSERT INTO document_relationships'):
-            pt, pid, ct, cid, rt, mq, ma, cs = params
+            pt, pid, ct, cid, rt, mq, ma, cs, rsrc, mreason = params
             new_id = len(self.tables['document_relationships']) + 1
             row = {'id': new_id, 'parent_type': pt, 'parent_id': pid, 'child_type': ct, 'child_id': cid,
                    'relationship_type': rt, 'matched_quantity': mq, 'matched_amount': ma,
-                   'confidence_score': cs, 'created_at': new_id, 'updated_at': new_id}
+                   'confidence_score': cs, 'relationship_source': rsrc, 'matching_reason': mreason,
+                   'created_at': new_id, 'updated_at': new_id}
             self.tables['document_relationships'].append(row)
             self._result = [row]
         elif s.startswith('DELETE FROM document_relationships WHERE id'):

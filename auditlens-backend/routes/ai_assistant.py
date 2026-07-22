@@ -2,7 +2,8 @@
 reviewing ONE invoice case (Record Detail page). NOT a general chatbot:
 every endpoint here is scoped to a single document_id and the AI only
 ever sees data AuditLens' OWN engines already computed (three-way
-matching via routes.auditor._build_comparison/_classify_exception,
+matching via routes.auditor.build_comparison (legacy _build_comparison,
+or the Enterprise V3 Phase 2 engine when enabled)/_classify_exception,
 authenticity_checks, anomalies, review_records) — nothing here adds to
 or changes extraction/matching/authenticity/anomaly logic.
 
@@ -20,7 +21,7 @@ import psycopg2.extras
 from db import get_db_connection, get_user_by_id
 from helpers.ai_assistant import ask_ai_assistant
 from helpers.send_back import REASON_CATEGORIES, REQUIRED_ACTIONS, PRIORITIES
-from routes.auditor import _build_comparison, _classify_exception
+from routes.auditor import build_comparison, _classify_exception
 
 ai_assistant_bp = Blueprint('ai_assistant', __name__)
 
@@ -88,7 +89,7 @@ def _build_case_context(cursor, document_id):
     matching, authenticity, anomaly detection); nothing is derived or
     guessed here. Returns None if the invoice document doesn't exist
     (same contract as _build_comparison)."""
-    comparison = _build_comparison(cursor, document_id)
+    comparison = build_comparison(cursor, document_id)
     if not comparison:
         return None
     mr = comparison['match_result']

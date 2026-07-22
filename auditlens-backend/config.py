@@ -72,6 +72,17 @@ class Config:
     # Temp diagnostic-endpoint guard (see routes/admin.py rerun-anomaly route)
     ADMIN_TOKEN = os.environ.get('ADMIN_TOKEN')
 
+    # Enterprise V3 Phase 2 — many-to-many matching engine (routes/
+    # auditor.py::build_comparison/_build_comparison_v2). Both default
+    # OFF: with V2_ENABLED false, every existing surface (Exception
+    # page, Report, Record Detail, AI Assistant, Workflow Timeline)
+    # keeps using the legacy _build_comparison() exactly as before.
+    # V2_SHADOW_MODE computes V2 alongside legacy for comparison/logging
+    # ONLY — it never changes what a user sees, even when V2_ENABLED is
+    # also false.
+    ENTERPRISE_MATCHING_V2_ENABLED = os.environ.get('ENTERPRISE_MATCHING_V2_ENABLED', 'false').strip().lower() == 'true'
+    ENTERPRISE_MATCHING_V2_SHADOW_MODE = os.environ.get('ENTERPRISE_MATCHING_V2_SHADOW_MODE', 'false').strip().lower() == 'true'
+
 
 # Startup log (once per process) so it's possible to confirm in Render logs
 # that every Gemini call in this process is using the same key and a

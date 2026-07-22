@@ -9,6 +9,7 @@ Does NOT replace or call _build_comparison() (routes/auditor.py) — the
 existing matching engine and every page built on it are untouched."""
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
+import psycopg2.extras
 from db import get_db_connection, get_user_by_id
 from helpers.document_relationships import (
     VALID_TYPES, RELATIONSHIP_TYPE_PAIRS, _ENTITY_TABLES,
@@ -16,6 +17,7 @@ from helpers.document_relationships import (
     get_related_documents, get_related_invoices, get_related_purchase_orders,
     get_related_goods_receipts,
 )
+from routes.auditor import build_comparison
 
 document_relationships_bp = Blueprint('document_relationships', __name__)
 
@@ -71,6 +73,31 @@ def get_document_relationships(document_id):
         'related_purchase_orders': get_related_purchase_orders('invoice', document_id),
         'related_goods_receipts': get_related_goods_receipts('invoice', document_id),
     }), 200
+
+
+@document_relationships_bp.route('/<int:document_id>/enterprise-matching', methods=['GET'])
+@jwt_required()
+def get_enterprise_matching(document_id):
+    """Enterprise V3 Phase 2 (STEP 12) — exposes build_comparison()'s
+    result (legacy shape, or the additive V2 shape when V2 is enabled
+    and this invoice has explicit document_relationships) directly,
+    since Phase 1's GET /<id>/relationships only returns raw links, not
+    the cumulative matching result. Same access control as every other
+    route in this file."""
+    _, err = _require_node_access('invoice', document_id)
+    if err:
+        return err
+
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        result = build_comparison(cursor, document_id)
+    finally:
+        conn.close()
+
+    if result is None:
+        return jsonify({'error': 'Invoice document not found'}), 404
+    return jsonify(result), 200
 
 
 @document_relationships_bp.route('/relationships', methods=['POST'])

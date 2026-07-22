@@ -277,7 +277,7 @@ def run_case_build_case_context_missing_documents_and_exception():
     classified = (3, 'missing_document', 'Missing PO and GR', 'Invoice uploaded but PO and GR not yet received', 'medium')
 
     cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[], anomaly_rows=[], history_rows=[])
-    with _Patched(ra, _build_comparison=lambda c, d: fake_comparison,
+    with _Patched(ra, build_comparison=lambda c, d: fake_comparison,
                   _classify_exception=lambda c, d, cmp: classified):
         context = ra._build_case_context(cursor, 1)
 
@@ -292,7 +292,7 @@ def run_case_build_case_context_missing_documents_and_exception():
 def run_case_build_case_context_returns_none_when_no_comparison():
     print('Case: _build_case_context returns None when the invoice document does not exist')
     cursor = _FakeCursor(doc_row=None, authenticity_rows=[], anomaly_rows=[], history_rows=[])
-    with _Patched(ra, _build_comparison=lambda c, d: None):
+    with _Patched(ra, build_comparison=lambda c, d: None):
         context = ra._build_case_context(cursor, 999)
     check('returns None for a nonexistent document', context is None, context)
 
@@ -309,7 +309,7 @@ def run_case_build_case_context_clean_pass_has_no_exception():
     }
     doc_row = {'document_id': 2, 'uploaded_at': None, 'status': 'under_review'}
     cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[], anomaly_rows=[], history_rows=[])
-    with _Patched(ra, _build_comparison=lambda c, d: fake_comparison,
+    with _Patched(ra, build_comparison=lambda c, d: fake_comparison,
                   _classify_exception=lambda c, d, cmp: None):
         context = ra._build_case_context(cursor, 2)
     check('no missing documents', context['missing_documents'] == [], context)
@@ -335,7 +335,7 @@ def run_case_build_case_context_includes_send_back_cycle_when_present():
     }
     classified = (3, 'missing_document', 'Missing PO and GR', 'x', 'medium')
     cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[], anomaly_rows=[], history_rows=[], cycle_row=cycle_row)
-    with _Patched(ra, _build_comparison=lambda c, d: fake_comparison, _classify_exception=lambda c, d, cmp: classified):
+    with _Patched(ra, build_comparison=lambda c, d: fake_comparison, _classify_exception=lambda c, d, cmp: classified):
         context = ra._build_case_context(cursor, 3)
 
     check('send_back_cycle populated', context['send_back_cycle'] is not None, context)
@@ -358,7 +358,7 @@ def run_case_build_case_context_send_back_cycle_none_when_never_returned():
     }
     doc_row = {'document_id': 4, 'uploaded_at': None, 'status': 'under_review'}
     cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[], anomaly_rows=[], history_rows=[])  # cycle_row defaults to None
-    with _Patched(ra, _build_comparison=lambda c, d: fake_comparison, _classify_exception=lambda c, d, cmp: None):
+    with _Patched(ra, build_comparison=lambda c, d: fake_comparison, _classify_exception=lambda c, d, cmp: None):
         context = ra._build_case_context(cursor, 4)
     check('send_back_cycle is None', context['send_back_cycle'] is None, context)
 
@@ -525,7 +525,7 @@ def run_case_audit_status_full_pass_document():
     doc_row = {'document_id': 1, 'uploaded_at': None, 'status': 'under_review'}
     cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[{'document_type': 'invoice', 'authenticity_status': 'passed', 'risk_level': 'low'}],
                           anomaly_rows=[], history_rows=[])
-    with _Patched(ra, _build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
+    with _Patched(ra, build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
         context = ra._build_case_context(cursor, 1)
     check('audit_status is PASS', context['audit_status'] == 'PASS', context)
 
@@ -537,7 +537,7 @@ def run_case_audit_status_full_pass_with_historical_reviewed_duplicate_is_still_
                            'ai_explanation': 'x', 'status': 'reviewed'}
     cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[{'document_type': 'invoice', 'authenticity_status': 'passed', 'risk_level': 'low'}],
                           anomaly_rows=[reviewed_duplicate], history_rows=[])
-    with _Patched(ra, _build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
+    with _Patched(ra, build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
         context = ra._build_case_context(cursor, 1)
     check('audit_status is still PASS despite the historical duplicate finding',
           context['audit_status'] == 'PASS', context)
@@ -558,7 +558,7 @@ def run_case_audit_status_missing_po_gr_document():
     doc_row = {'document_id': 2, 'uploaded_at': None, 'status': 'under_review'}
     classified = (3, 'missing_document', 'Missing PO and GR', 'Invoice uploaded but PO and GR not yet received', 'medium')
     cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[], anomaly_rows=[], history_rows=[])
-    with _Patched(ra, _build_comparison=lambda c, d: fake_comparison, _classify_exception=lambda c, d, cmp: classified):
+    with _Patched(ra, build_comparison=lambda c, d: fake_comparison, _classify_exception=lambda c, d, cmp: classified):
         context = ra._build_case_context(cursor, 2)
     check('audit_status is REVIEW REQUIRED', context['audit_status'] == 'REVIEW REQUIRED', context)
     check('reasons mention the missing documents',
@@ -572,7 +572,7 @@ def run_case_audit_status_duplicate_invoice_document():
                           'ai_explanation': 'x', 'status': 'pending'}
     cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[{'document_type': 'invoice', 'authenticity_status': 'passed', 'risk_level': 'low'}],
                           anomaly_rows=[pending_duplicate], history_rows=[])
-    with _Patched(ra, _build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
+    with _Patched(ra, build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
         context = ra._build_case_context(cursor, 3)
     check('audit_status is REVIEW REQUIRED for an unresolved duplicate',
           context['audit_status'] == 'REVIEW REQUIRED', context)
@@ -586,7 +586,7 @@ def run_case_audit_status_sent_back_document():
     doc_row = {'document_id': 4, 'uploaded_at': None, 'status': 'returned'}
     cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[{'document_type': 'invoice', 'authenticity_status': 'passed', 'risk_level': 'low'}],
                           anomaly_rows=[], history_rows=[])
-    with _Patched(ra, _build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
+    with _Patched(ra, build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
         context = ra._build_case_context(cursor, 4)
     check('audit_status is REVIEW REQUIRED for a sent-back document',
           context['audit_status'] == 'REVIEW REQUIRED', context)
@@ -599,7 +599,7 @@ def run_case_audit_status_authenticity_warning_forces_review():
     doc_row = {'document_id': 5, 'uploaded_at': None, 'status': 'under_review'}
     cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[{'document_type': 'invoice', 'authenticity_status': 'warning', 'risk_level': 'medium'}],
                           anomaly_rows=[], history_rows=[])
-    with _Patched(ra, _build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
+    with _Patched(ra, build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
         context = ra._build_case_context(cursor, 5)
     check('audit_status is REVIEW REQUIRED for an authenticity warning',
           context['audit_status'] == 'REVIEW REQUIRED', context)

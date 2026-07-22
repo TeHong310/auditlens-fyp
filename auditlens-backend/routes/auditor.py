@@ -1,6 +1,7 @@
 import re
 import csv
 import io
+from decimal import Decimal
 from datetime import datetime, timedelta, date
 from flask import Blueprint, jsonify, request, Response
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -8,6 +9,11 @@ import psycopg2.extras
 from db import get_db_connection, get_user_by_id
 from helpers.ocr_helper import split_item_code_prefix
 from helpers.entity_normalizer import is_same_company, log_entity_match_debug
+from helpers.document_relationships import (
+    get_related_documents, get_related_purchase_orders, get_related_goods_receipts, get_related_invoices,
+)
+from helpers.enterprise_matching import compute_po_fulfilment, compute_invoice_result
+from config import Config
 
 auditor_bp = Blueprint('auditor', __name__)
 
@@ -588,6 +594,364 @@ def _build_comparison(cursor, invoice_document_id):
 
 
 # ------------------------------------------------------------
+# ENTERPRISE V3 PHASE 2 — many-to-many matching engine.
+#
+# _build_comparison() above is COMPLETELY UNCHANGED (legacy, one-to-one,
+# always available as a fallback — see build_comparison() below). This
+# section adds a SEPARATE engine, _build_comparison_v2(), that computes
+# cumulative fulfilment across every PO/GR reachable via document_
+# relationships (Phase 1), and a shared dispatcher, build_comparison(),
+# that every consumer in this app should call instead of _build_
+# comparison() directly (see the 4 call sites in this file updated
+# below, plus routes/ai_assistant.py::_build_case_context).
+# ------------------------------------------------------------
+
+def _po_dict_for_fulfilment(po):
+    return {'po_id': po.get('po_id'), 'po_number': po.get('po_number'),
+            'quantity': po.get('quantity'), 'total_amount': po.get('total_amount')}
+
+
+def _build_comparison_v2(cursor, invoice_document_id):
+    """Enterprise V3 Phase 2 matching engine. Only ever invoked by
+    build_comparison() below when V2 is enabled/shadowed AND this
+    invoice has at least one explicit document_relationships row — an
+    invoice with none is left entirely to _build_comparison() (legacy),
+    which already handles that case correctly and cheaply, and Phase 1's
+    get_related_*() functions would just re-derive the same legacy
+    attachment anyway.
+
+    Preserves every key _build_comparison() returns (invoice/po/gr/
+    line_items/match_result — computed the same way as legacy, against
+    the relationship-selected PRIMARY po/gr) so every existing consumer
+    (_classify_exception, the Exception page, Report counts, the Record
+    Detail Field Comparison table) keeps working unchanged even when V2
+    is active. Adds the new Phase 2 fields additively: engine_version,
+    relationship_mode, invoice_result, po_fulfilment, related_invoices/
+    purchase_orders/goods_receipts, issues, warnings, evidence.
+
+    Known limitation: document_line_items has no po_id/gr_id column — it
+    is keyed by (invoice document_id, document_type), so line-item-level
+    detail is only available when the primary po/gr happens to be
+    co-located under THIS invoice's own document_id (the common case,
+    including every legacy-fallback invoice). For a genuinely cross-
+    invoice-shared PO/GR, line_items is left empty (line_items_match/
+    line_items_price_match = None, i.e. "not computed" — never a false
+    mismatch) rather than guessed.
+    """
+    cursor.execute(
+        '''SELECT d.document_id, d.file_name, d.uploaded_at,
+                  ef.invoice_number, ef.vendor_name, ef.invoice_date,
+                  ef.total_amount, ef.ocr_confidence, ef.currency,
+                  ef.po_reference, ef.item_description, ef.quantity
+           FROM documents d
+           LEFT JOIN extracted_fields ef ON d.document_id = ef.document_id
+           WHERE d.document_id = %s''',
+        (invoice_document_id,)
+    )
+    inv_row = cursor.fetchone()
+    if not inv_row:
+        return None
+
+    invoice = {
+        'document_id':      inv_row['document_id'],
+        'filename':         inv_row['file_name'],
+        'ocr_confidence':   float(inv_row['ocr_confidence']) if inv_row['ocr_confidence'] is not None else None,
+        'invoice_no':       inv_row['invoice_number'],
+        'vendor_name':      inv_row['vendor_name'],
+        'invoice_date':     inv_row['invoice_date'].isoformat() if inv_row['invoice_date'] else None,
+        'total_amount':     float(inv_row['total_amount']) if inv_row['total_amount'] is not None else None,
+        'currency':         _normalize_currency(inv_row['currency']),
+        'uploaded_at':      inv_row['uploaded_at'].isoformat() if inv_row['uploaded_at'] else None,
+        'po_reference':     inv_row['po_reference'],
+        'item_description': inv_row['item_description'],
+        'quantity':         float(inv_row['quantity']) if inv_row['quantity'] is not None else None,
+    }
+    invoice_raw = {'quantity': inv_row['quantity'], 'total_amount': inv_row['total_amount']}
+
+    related_pos = get_related_purchase_orders('invoice', invoice_document_id)
+    related_grs = get_related_goods_receipts('invoice', invoice_document_id)
+
+    sibling_invoices, seen_invoice_ids = [], {invoice_document_id}
+    for po in related_pos:
+        for inv in get_related_invoices('po', po['po_id']):
+            if inv['document_id'] not in seen_invoice_ids:
+                sibling_invoices.append(inv)
+                seen_invoice_ids.add(inv['document_id'])
+
+    # ── PO-level cumulative fulfilment: every invoice/GR linked to each
+    # related PO (not just this one), so the PO's totals reflect ALL its
+    # invoices/GRs — the actual many-to-many calculation. ──
+    po_fulfilment = []
+    po_allocations_for_this_invoice = []
+    for po in related_pos:
+        po_id = po['po_id']
+        invoice_allocations = []
+        this_invoice_alloc = None
+        for inv in get_related_invoices('po', po_id):
+            rel = inv.get('relationship')
+            if rel:
+                matched_qty, matched_amt = rel.get('matched_quantity'), rel.get('matched_amount')
+            else:
+                # Legacy fallback: this PO has no explicit relationships
+                # at all, so it's a pure one-to-one attachment — the
+                # single invoice gets full credit, same as legacy.
+                matched_qty, matched_amt = inv.get('quantity'), inv.get('total_amount')
+            alloc = {'document_id': inv['document_id'], 'matched_quantity': matched_qty, 'matched_amount': matched_amt}
+            invoice_allocations.append(alloc)
+            if inv['document_id'] == invoice_document_id:
+                this_invoice_alloc = alloc
+
+        gr_quantities = [gr.get('quantity') for gr in get_related_goods_receipts('po', po_id) if gr.get('quantity') is not None]
+
+        fulfilment = compute_po_fulfilment(_po_dict_for_fulfilment(po), invoice_allocations, gr_quantities)
+        po_fulfilment.append(fulfilment)
+
+        if this_invoice_alloc is not None:
+            other_allocs = [a for a in invoice_allocations if a['document_id'] != invoice_document_id]
+            ordered = po.get('quantity')
+            po_amount = po.get('total_amount')
+            remaining_before_qty = None
+            remaining_before_amt = None
+            if ordered is not None:
+                other_qty = sum((Decimal(str(a['matched_quantity'])) for a in other_allocs if a['matched_quantity'] is not None), Decimal('0'))
+                remaining_before_qty = Decimal(str(ordered)) - other_qty
+            if po_amount is not None:
+                other_amt = sum((Decimal(str(a['matched_amount'])) for a in other_allocs if a['matched_amount'] is not None), Decimal('0'))
+                remaining_before_amt = Decimal(str(po_amount)) - other_amt
+
+            vendor_check = is_same_company(invoice['vendor_name'], po.get('vendor_name'))
+            po_allocations_for_this_invoice.append({
+                'po_id': po_id, 'po_number': po.get('po_number'),
+                'matched_quantity': this_invoice_alloc['matched_quantity'],
+                'matched_amount': this_invoice_alloc['matched_amount'],
+                'remaining_before_this_invoice_quantity': remaining_before_qty,
+                'remaining_before_this_invoice_amount': remaining_before_amt,
+                'vendor_match': vendor_check['match'] if invoice['vendor_name'] and po.get('vendor_name') else None,
+            })
+
+    # gr_count for the invoice-level PASS/REVIEW_REQUIRED verdict:
+    # prefer a DIRECT invoice_gr link count when one exists; when it's
+    # zero (which happens whenever a PO has multiple invoices AND
+    # multiple GRs — goods_receipts has no invoice-specific field, so
+    # the builder deliberately never guesses which receipt belongs to
+    # which sibling invoice, see helpers/relationship_builder.py), fall
+    # back to "is the PO(s) behind this invoice receiving evidence at
+    # all" (po_fulfilment's own received_quantity_cumulative), which is
+    # the best available signal without a per-invoice receipt record.
+    gr_count = len(related_grs)
+    if gr_count == 0:
+        gr_count = sum(1 for pf in po_fulfilment if (pf['received_quantity_cumulative'] or 0) > 0)
+
+    invoice_result = compute_invoice_result(invoice_raw, po_allocations_for_this_invoice, gr_count)
+
+    # ── Legacy-shaped keys (invoice/po/gr/match_result/line_items):
+    # computed against the PRIMARY (first related, or legacy-fallback)
+    # po/gr, using the SAME comparison helpers as _build_comparison(),
+    # so every existing consumer of these keys keeps working unchanged. ──
+    primary_po_row = related_pos[0] if related_pos else None
+    primary_gr_row = related_grs[0] if related_grs else None
+
+    po = None
+    if primary_po_row:
+        po = {
+            'po_id':            primary_po_row['po_id'],
+            'filename':         primary_po_row.get('file_name'),
+            'po_no':            primary_po_row.get('po_number'),
+            'vendor_name':      primary_po_row.get('vendor_name'),
+            'po_date':          primary_po_row['po_date'].isoformat() if primary_po_row.get('po_date') else None,
+            'total_amount':     float(primary_po_row['total_amount']) if primary_po_row.get('total_amount') is not None else None,
+            'currency':         _normalize_currency(primary_po_row.get('currency')),
+            'item_description': primary_po_row.get('item_description'),
+            'quantity':         float(primary_po_row['quantity']) if primary_po_row.get('quantity') is not None else None,
+        }
+
+    gr = None
+    if primary_gr_row:
+        gr = {
+            'gr_id':            primary_gr_row['gr_id'],
+            'filename':         primary_gr_row.get('file_name'),
+            'gr_no':            primary_gr_row.get('gr_number'),
+            'vendor_name':      primary_gr_row.get('vendor_name'),
+            'receipt_date':     primary_gr_row['receipt_date'].isoformat() if primary_gr_row.get('receipt_date') else None,
+            'po_reference':     primary_gr_row.get('po_reference'),
+            'item_description': primary_gr_row.get('item_description'),
+            'quantity':         float(primary_gr_row['quantity']) if primary_gr_row.get('quantity') is not None else None,
+        }
+
+    line_items = []
+    line_items_match = None
+    line_items_price_match = None
+    po_co_located = po is not None and primary_po_row.get('document_id') == invoice_document_id
+    gr_co_located = gr is not None and primary_gr_row.get('document_id') == invoice_document_id
+    if po_co_located or gr_co_located or (po is None and gr is None):
+        cursor.execute(
+            '''SELECT document_type, item_code, description, quantity, unit_price, amount
+               FROM document_line_items WHERE document_id = %s ORDER BY document_type, line_no''',
+            (invoice_document_id,)
+        )
+        line_item_rows_by_type = {'invoice': [], 'po': [], 'gr': []}
+        for row in cursor.fetchall():
+            doc_type = row['document_type']
+            if doc_type in line_item_rows_by_type:
+                line_item_rows_by_type[doc_type].append({
+                    'item_code':   row['item_code'],
+                    'description': row['description'],
+                    'quantity':    float(row['quantity']) if row['quantity'] is not None else None,
+                    'unit_price':  float(row['unit_price']) if row['unit_price'] is not None else None,
+                    'amount':      float(row['amount']) if row['amount'] is not None else None,
+                })
+        line_items, hard_mm, soft_mm = _match_line_items(
+            line_item_rows_by_type['invoice'],
+            line_item_rows_by_type['po'] if po_co_located else None,
+            line_item_rows_by_type['gr'] if gr_co_located else None,
+        )
+        line_items_match = (not hard_mm) if line_items else None
+        line_items_price_match = (not soft_mm) if line_items else None
+
+    named_vendors = [('Invoice vendor', invoice['vendor_name'])]
+    if po:
+        named_vendors.append(('PO vendor', po['vendor_name']))
+    if gr:
+        named_vendors.append(('GR vendor', gr['vendor_name']))
+    vendor_match = _vendor_match_all(named_vendors)
+
+    if po and invoice['currency'] and po['currency'] and invoice['currency'] != po['currency']:
+        amount_match = None
+    else:
+        amount_match = _amounts_equal(invoice['total_amount'], po['total_amount']) if po else None
+
+    po_refs = [_normalize_ref(invoice['po_reference'])]
+    if po:
+        po_refs.append(_normalize_ref(po['po_no']))
+    if gr:
+        po_refs.append(_normalize_ref(gr['po_reference']))
+    po_reference_match = _three_way_match(po_refs)
+
+    items = [_normalize_text(invoice['item_description'])]
+    if po:
+        items.append(_normalize_text(po['item_description']))
+    if gr:
+        items.append(_normalize_text(gr['item_description']))
+    item_match = _three_way_match(items)
+
+    quantities = [invoice['quantity']]
+    if po:
+        quantities.append(po['quantity'])
+    if gr:
+        quantities.append(gr['quantity'])
+    quantity_match = _quantities_match(quantities)
+
+    date_order_valid = None
+    if po and gr and po['po_date'] and gr['receipt_date'] and invoice['invoice_date']:
+        date_order_valid = po['po_date'] <= gr['receipt_date'] <= invoice['invoice_date']
+    elif po and invoice['invoice_date'] and po['po_date'] and not gr:
+        date_order_valid = po['po_date'] <= invoice['invoice_date']
+    elif gr and invoice['invoice_date'] and gr['receipt_date'] and not po:
+        date_order_valid = gr['receipt_date'] <= invoice['invoice_date']
+
+    hard_checks = [vendor_match, amount_match, line_items_match]
+    soft_checks = [po_reference_match, line_items_price_match]
+    applicable_checks = [c for c in hard_checks + soft_checks if c is not None]
+    if any(c is False for c in hard_checks):
+        overall_status = 'FAIL'
+    elif any(c is False for c in soft_checks):
+        overall_status = 'REVIEW'
+    elif not po or not gr:
+        overall_status = 'PARTIAL'
+    elif applicable_checks:
+        overall_status = 'PASS'
+    else:
+        overall_status = 'PARTIAL'
+
+    evidence = [{
+        'relationship_type':  r['relationship_type'],
+        'other_type':         r['other_type'],
+        'other_id':           r['other_id'],
+        'confidence_score':   float(r['confidence_score']) if r['confidence_score'] is not None else None,
+    } for r in get_related_documents('invoice', invoice_document_id)]
+
+    return {
+        'invoice': invoice,
+        'po': po,
+        'gr': gr,
+        'line_items': line_items,
+        'match_result': {
+            'vendor_match':           vendor_match,
+            'amount_match':           amount_match,
+            'po_reference_match':     po_reference_match,
+            'line_items_match':       line_items_match,
+            'line_items_price_match': line_items_price_match,
+            'item_match':             item_match,
+            'quantity_match':         quantity_match,
+            'date_order_valid':       date_order_valid,
+            'overall_status':         overall_status,
+        },
+        'engine_version':      'v2',
+        'relationship_mode':   True,
+        'invoice_result':      invoice_result,
+        'po_fulfilment':       po_fulfilment,
+        'related_invoices':    sibling_invoices,
+        'related_purchase_orders': related_pos,
+        'related_goods_receipts':  related_grs,
+        'issues':   invoice_result['issues'],
+        'warnings': invoice_result['warnings'],
+        'evidence': evidence,
+    }
+
+
+def build_comparison(cursor, invoice_document_id):
+    """Single shared entry point every matching-result consumer in this
+    app should call instead of _build_comparison() directly — this IS
+    the "smallest safe change" that lets Enterprise V3 Phase 2 reach
+    every existing surface (Exception page, Report, Record Detail, AI
+    Assistant, Workflow Timeline) without duplicating any of their own
+    logic. _build_comparison() itself is never modified and remains the
+    permanent fallback:
+      - both flags off (the default): legacy only, zero V2 code runs.
+      - ENTERPRISE_MATCHING_V2_SHADOW_MODE on: legacy result is what's
+        returned (user-facing behavior never changes); V2 is ALSO
+        computed (only when this invoice has explicit document_
+        relationships rows) purely to log a concise diff for
+        comparison — no AI calls, no duplicate exceptions, no logging
+        of full document content.
+      - ENTERPRISE_MATCHING_V2_ENABLED on: V2 is used when this invoice
+        has explicit relationships; any exception during V2 computation
+        is caught and logged, falling back to legacy rather than ever
+        5xx-ing a page.
+    """
+    v2_on = Config.ENTERPRISE_MATCHING_V2_ENABLED
+    shadow_on = Config.ENTERPRISE_MATCHING_V2_SHADOW_MODE
+
+    if not v2_on and not shadow_on:
+        return _build_comparison(cursor, invoice_document_id)
+
+    has_relationships = bool(get_related_documents('invoice', invoice_document_id))
+    if not has_relationships:
+        return _build_comparison(cursor, invoice_document_id)
+
+    legacy_result = _build_comparison(cursor, invoice_document_id) if shadow_on else None
+
+    v2_result = None
+    try:
+        v2_result = _build_comparison_v2(cursor, invoice_document_id)
+    except Exception as e:
+        print(f"WARNING V2 matching failed for doc={invoice_document_id}, falling back to legacy: {type(e).__name__}: {e}")
+
+    if shadow_on and legacy_result and v2_result:
+        print(f"DEBUG shadow-mode diff doc={invoice_document_id}: "
+              f"legacy_overall={legacy_result['match_result']['overall_status']} "
+              f"v2_overall={v2_result['match_result']['overall_status']} "
+              f"v2_invoice_status={v2_result['invoice_result']['status']} "
+              f"v2_po_count={len(v2_result['related_purchase_orders'])} "
+              f"v2_gr_count={len(v2_result['related_goods_receipts'])}")
+
+    if v2_on and v2_result is not None:
+        return v2_result
+
+    return legacy_result if legacy_result is not None else _build_comparison(cursor, invoice_document_id)
+
+
+# ------------------------------------------------------------
 # GET FULL 3-WAY COMPARISON FOR AN INVOICE RECORD
 # GET /auditor/record/<invoice_document_id>/comparison
 # Auditor only
@@ -605,7 +969,7 @@ def get_record_comparison(invoice_document_id):
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        result = _build_comparison(cursor, invoice_document_id)
+        result = build_comparison(cursor, invoice_document_id)
         conn.close()
 
         if result is None:
@@ -760,7 +1124,7 @@ def get_exceptions():
 
         exceptions = []
         for doc_row in doc_rows:
-            comparison = _build_comparison(cursor, doc_row['document_id'])
+            comparison = build_comparison(cursor, doc_row['document_id'])
             if not comparison:
                 continue
             classified = _classify_exception(cursor, doc_row, comparison)
@@ -873,7 +1237,7 @@ def get_report_summary():
         match_pass_count = 0
         match_review_count = 0
         for doc_row in doc_rows:
-            comparison = _build_comparison(cursor, doc_row['document_id'])
+            comparison = build_comparison(cursor, doc_row['document_id'])
             if not comparison:
                 continue
             overall_status = comparison['match_result']['overall_status']

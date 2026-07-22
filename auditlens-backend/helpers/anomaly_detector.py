@@ -6,6 +6,7 @@ import psycopg2.extras
 from db import get_db_connection
 from config import Config
 from helpers.gemini_extractor import call_gemini_sdk
+from helpers.document_relationships import get_related_purchase_orders
 
 AMOUNT_HISTORY_SAMPLE_LIMIT = 50
 DUPLICATE_DATE_WINDOW_DAYS = 7
@@ -154,7 +155,21 @@ def detect_weekend_transaction(invoice_date):
     }
 
 
-def detect_duplicate_suspicion(invoice_document_id, vendor_name, amount, invoice_date):
+def _shares_linked_purchase_order(document_id_a, document_id_b):
+    """True if both invoices are linked (via Phase 1's document_
+    relationships, directly or through the legacy one-to-one fallback)
+    to at least one common purchase order — evidence of legitimate split
+    invoicing. Used ONLY to suppress a same-vendor/same-amount/close-
+    date duplicate false positive (Enterprise V3 Phase 2, STEP 10). No
+    AI call, no schema change."""
+    po_ids_a = {po['po_id'] for po in get_related_purchase_orders('invoice', document_id_a)}
+    if not po_ids_a:
+        return False
+    po_ids_b = {po['po_id'] for po in get_related_purchase_orders('invoice', document_id_b)}
+    return bool(po_ids_a & po_ids_b)
+
+
+def detect_duplicate_suspicion(invoice_document_id, vendor_name, amount, invoice_date, invoice_number=None):
     normalized = _normalize_vendor(vendor_name)
     d = _as_date(invoice_date)
     if not normalized or amount is None or not d:
@@ -164,7 +179,7 @@ def detect_duplicate_suspicion(invoice_document_id, vendor_name, amount, invoice
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cursor.execute(
-        '''SELECT ef.invoice_number, ef.vendor_name, ef.invoice_date, ef.total_amount
+        '''SELECT ef.document_id, ef.invoice_number, ef.vendor_name, ef.invoice_date, ef.total_amount
            FROM extracted_fields ef
            WHERE ef.document_id != %s AND ef.vendor_name IS NOT NULL
              AND ef.invoice_date IS NOT NULL AND ef.total_amount IS NOT NULL
@@ -193,6 +208,17 @@ def detect_duplicate_suspicion(invoice_document_id, vendor_name, amount, invoice
 
     candidates.sort(key=lambda c: c[0])
     days_apart, match, diff_pct = candidates[0]
+
+    # Enterprise V3 Phase 2 compatibility (STEP 10): two DIFFERENTLY-
+    # NUMBERED invoices that are both linked to the SAME purchase order
+    # are legitimate split invoices, not a duplicate — same vendor and
+    # equal/close amount is exactly the pattern many-to-many matching
+    # introduces (e.g. a PO split into two equal-value invoices).
+    # Invoice number remains the critical signal: a duplicate still
+    # fires when the numbers match (or either is unknown).
+    if invoice_number and match['invoice_number'] and invoice_number != match['invoice_number']:
+        if _shares_linked_purchase_order(invoice_document_id, match['document_id']):
+            return None
 
     return {
         'type': 'duplicate',
@@ -311,7 +337,7 @@ def run_anomaly_detection(invoice_document_id):
         detect_amount_anomaly(invoice_document_id, vendor_name, amount),
         detect_round_amount(amount),
         detect_weekend_transaction(invoice_date),
-        detect_duplicate_suspicion(invoice_document_id, vendor_name, amount, invoice_date),
+        detect_duplicate_suspicion(invoice_document_id, vendor_name, amount, invoice_date, invoice_number),
     ]
     found = [a for a in candidates if a]
     if not found:

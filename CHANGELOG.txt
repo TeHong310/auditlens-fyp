@@ -8219,3 +8219,325 @@ Setup/config needed:
      variables.
   2. No Render FRONTEND redeploy needed — zero frontend files changed.
   3. No config changes needed.
+
+====================================================================
+
+Date: 2026-07-22 (later same day)
+
+What was changed:
+  Backend (auditlens-backend/) — Enterprise V3 Phase 2: Add Enterprise
+  Many-to-Many Matching Engine. 2 new columns, 3 new files, additive-
+  only changes to 8 existing files. The legacy matching engine
+  (_build_comparison) is completely unmodified and remains the default
+  and permanent fallback.
+    - document_relationships gained 2 additive columns:
+      relationship_source ('manual'|'auto', default 'manual' so every
+      Phase 1 row keeps its correct meaning) and matching_reason (text,
+      nullable) — app.py::_ensure_document_relationships_v2_columns(),
+      same auto-create-on-startup pattern as every other table/column
+      in this app; matching migrations/2026-07-22_add_document_
+      relationships_source_and_reason.sql for documentation parity.
+    - helpers/document_relationships.py: new upsert_relationship() —
+      insert-or-update for the builder only, always writes source=
+      'auto'; if a relationship already exists with source='manual' it
+      is left completely untouched (returned as-is, skipped=True).
+      create_relationship() gained 2 optional params (relationship_
+      source='manual', matching_reason=None) — every existing caller
+      (Phase 1's POST /documents/relationships) is unaffected since
+      the defaults reproduce its exact prior behavior.
+    - helpers/enterprise_matching.py (new): pure, dependency-free
+      cumulative calculators — compute_po_fulfilment() (ordered/
+      invoiced/received quantities and amounts, remaining balances, a
+      PO-level fulfilment status: OPEN_NOT_INVOICED/OPEN_PARTIALLY_
+      INVOICED/FULLY_INVOICED/OVER_INVOICED plus an independent
+      received_status axis with the same 4 tiers, and FULLY_FULFILLED
+      when both axes are complete) and compute_invoice_result() (an
+      invoice-level PASS/REVIEW_REQUIRED verdict: unsupported quantity/
+      amount, vendor mismatch, over-invoicing, or no reliable PO force
+      REVIEW_REQUIRED; missing GR support is a warning only, mirroring
+      the legacy engine's existing PARTIAL-not-FAIL treatment of a
+      missing GR). Decimal arithmetic throughout, never float.
+    - helpers/relationship_builder.py (new): the deterministic (no
+      LLM) relationship builder — find_candidate_purchase_orders()/
+      find_candidate_goods_receipts() (system-wide search by exact
+      normalized PO-reference match OR the legacy document_id
+      attachment — never vendor/amount alone), score_po_invoice_
+      candidate()/score_invoice_gr_candidate()/score_po_gr_candidate()
+      (fixed numeric scoring: reference/attachment evidence gates
+      whether a candidate is considered at all; vendor match, item
+      description match, quantity/amount plausibility, and date
+      sequence add or subtract from there), build_relationships_for_
+      invoice()/rebuild_relationships_for_invoice()/build_
+      relationships_for_all_documents() (orchestration + idempotent
+      persistence via upsert_relationship, MIN_AUTO_CONFIDENCE=0.50).
+      Allocation rule: exactly one qualifying PO candidate allocates
+      the invoice's full quantity/amount to it; multiple qualifying PO
+      candidates link every PO (discoverable) but leave matched_
+      quantity/matched_amount as None rather than guess a split.
+      invoice_gr attribution rule (found via manual testing against
+      the real PO3006231 scenario, not assumed): goods_receipts has no
+      invoice-specific field, only a shared po_reference, so when
+      ANOTHER invoice also claims the same PO, multiple GR candidates
+      are genuinely ambiguous between invoices and are skipped
+      entirely for direct linking (PO-level receipt totals are
+      unaffected — they come from po_gr relationships, which
+      legitimately link a PO to every one of its GRs regardless); a
+      single GR candidate, or multiple GR candidates when no other
+      invoice claims the same PO (a real 1-invoice-2-GRs case), are
+      linked normally.
+    - routes/auditor.py: _build_comparison() is byte-for-byte
+      unchanged. Added _build_comparison_v2() (loads the invoice, every
+      related PO/GR/sibling-invoice via Phase 1's document_
+      relationships helpers, computes per-PO cumulative fulfilment and
+      the invoice-level verdict, and ALSO computes the exact legacy-
+      shaped invoice/po/gr/match_result/line_items keys against the
+      relationship-selected primary PO/GR — using the same _vendor_
+      match_all/_amounts_equal/_match_line_items/etc. helpers as legacy
+      — so every existing consumer of those keys, e.g. _classify_
+      exception, keeps working unchanged even when V2 is active) and
+      build_comparison() (the single shared dispatcher: both feature
+      flags off -> legacy only, zero V2 code runs; shadow mode ->
+      legacy stays user-facing, V2 is also computed only when this
+      invoice has explicit relationships, logging a concise status-only
+      diff, never full document content, never an extra AI call; V2
+      enabled -> V2 is used when relationships exist, any exception
+      during V2 computation is caught, logged, and falls back to
+      legacy rather than ever 5xx-ing a page). This file's own 4
+      internal call sites (get_record_comparison, get_exceptions,
+      get_report_summary x2) were switched from _build_comparison() to
+      build_comparison() — the only way V2 can reach the Exception
+      page, Report, and Record Detail without duplicating any of their
+      logic.
+    - routes/ai_assistant.py: 1-line change — _build_case_context()
+      now calls build_comparison() instead of _build_comparison()
+      directly, which is what lets V2 reach the AI Assistant and the
+      Workflow Timeline (both built on _build_case_context) through
+      the same single dispatcher, with no changes to either feature's
+      own logic.
+    - helpers/anomaly_detector.py: detect_duplicate_suspicion() gained
+      an optional invoice_number param and a new _shares_linked_
+      purchase_order() check — two invoices with the SAME vendor/
+      amount/close-date but DIFFERENT invoice numbers that are both
+      linked (via document_relationships) to a common PO are legitimate
+      split invoices, not a duplicate, and the flag is now suppressed
+      for exactly that case. A duplicate still fires whenever the
+      invoice numbers match (or either is unknown), or when there's no
+      shared-PO evidence — invoice number remains the deciding signal.
+      No other anomaly-detection logic changed.
+    - routes/document_relationships.py: added GET /documents/<id>/
+      enterprise-matching (STEP 12) — exposes build_comparison()'s full
+      result (legacy shape, or the additive V2 shape when applicable)
+      directly, since Phase 1's GET /<id>/relationships only returns
+      raw links, not a cumulative matching result. Same _require_node_
+      access() control as every other route in this file.
+    - config.py: 2 new env-driven flags, both default false —
+      ENTERPRISE_MATCHING_V2_ENABLED, ENTERPRISE_MATCHING_V2_SHADOW_MODE.
+    - scripts/backfill_document_relationships.py (new): manual CLI for
+      the builder — always dry-run unless --apply is passed, supports
+      --document-id (single invoice) or batch with --limit, never runs
+      automatically (no caller anywhere in app.py), never overwrites a
+      manual relationship (inherited from upsert_relationship).
+    - tests/extraction/test_enterprise_matching.py (new, 30+ checks,
+      fully offline/pure): locks in the exact PO3006231 acceptance-
+      scenario numbers (both the full state — 30,000/30,000 invoiced
+      and received, RM 7,710.00 cumulative, FULLY_FULFILLED, both
+      invoices individually PASS, no false duplicate/partial/amount
+      mismatch — and the intermediate state — 15,000 remaining,
+      RM 3,855.00 remaining, OPEN_PARTIALLY_INVOICED/OPEN_PARTIALLY_
+      RECEIVED, invoice A still PASSes) directly against the pure
+      calculator, independent of any database. Plus partial invoice/
+      partial GR/fully-fulfilled/over-invoicing/over-receipt/quantity-
+      or-amount-exceeds-remaining/vendor-mismatch/no-reliable-PO/
+      multi-PO-no-double-counting/ambiguous-split-not-guessed/missing-
+      GR-is-a-warning-not-blocking scenarios.
+    - tests/extraction/test_relationship_builder.py (new, 33 checks):
+      pure scorer tests (reference-match gating, vendor/quantity/date
+      penalties, legacy-attachment scoring) plus integration tests
+      against the real local Postgres dev DB (this phase's own Safety
+      Requirement 12 explicitly permits "database test data" — only
+      live Claude/Gemini calls are prohibited; two real design bugs,
+      both around invoice-to-GR attribution ambiguity, were caught by
+      running against the real DB during development, which a hand-
+      rolled fake cursor would likely not have caught) — covering 1
+      PO/1 invoice/1 GR, 1 PO/2 invoices/2 GRs (the PO7710-style
+      example, including via the real V2 engine end-to-end), 2 POs/1
+      invoice, 1 invoice/2 GRs, multiple invoices sharing a GR reached
+      via the PO level, re-running the builder creates no duplicates,
+      an existing invoice with zero relationship rows still works via
+      the legacy fallback, a manual relationship is never overwritten
+      by the builder, dry-run never writes, and 3 anomaly-compatibility
+      cases (split invoices sharing a PO are NOT flagged as duplicate;
+      a genuinely repeated invoice number IS still flagged even with a
+      shared PO; different invoice numbers with NO shared PO are still
+      flagged).
+    - tests/extraction/run_all.py: registered both new suites.
+    - tests/extraction/test_ai_assistant.py / test_document_
+      relationships.py: updated to match the (purely additive) new
+      shape of routes.ai_assistant's import (_build_comparison ->
+      build_comparison) and create_relationship()'s extended INSERT
+      params — no behavioral change to either test file's own logic.
+
+  Untouched, verified via `git diff --stat`: routes/matching.py (the
+  legacy/dead engine), routes/documents.py (upload/OCR pipeline),
+  extraction/OCR, the Claude/Gemini extraction prompts, the
+  authenticity engine, three_way_matches/record_matches/exceptions/
+  ledger_records (legacy tables, untouched and undeleted) — zero lines
+  changed in any of them. _build_comparison() itself is untouched byte-
+  for-byte (confirmed via diff: every change to routes/auditor.py is
+  either a new import, a new function appended after it, or a 1-line
+  name swap at 4 call sites).
+
+Why it was changed:
+  Phase 2 of the Enterprise V3 upgrade (Phase 1 built the underlying
+  document_relationships table and service layer) — teaches AuditLens
+  to understand and calculate multi-PO/multi-invoice/multi-GR
+  relationships: partial invoicing, partial receipt, cumulative
+  invoicing/receipt, remaining PO quantity/amount, over-invoicing,
+  over-receipt, and duplicate-allocation prevention — while the
+  existing one-to-one production workflow (Exception page, Report,
+  Record Detail, AI Assistant, Workflow Timeline) keeps working exactly
+  as before, completely unaware anything changed, until the new engine
+  is explicitly turned on.
+
+Relationship scoring rules:
+  Every scorer gates on either an exact normalized PO-reference/PO-
+  number match OR the legacy one-to-one document_id attachment first —
+  a candidate with neither scores exactly 0 and is never created ("do
+  not create a high-confidence relationship using vendor and amount
+  alone"). From that gate, vendor match (+), vendor mismatch (-), item
+  description match (+), quantity/amount plausibility against the
+  counterpart (+/-), and date sequence validity (+/-) adjust the score,
+  clamped to [0, 1]. MIN_AUTO_CONFIDENCE = 0.50 — below that, a
+  candidate is never auto-created.
+
+Allocation rules:
+  matched_quantity/matched_amount on document_relationships are the
+  allocation. A single qualifying PO candidate for an invoice gets the
+  invoice's full quantity/amount; multiple qualifying PO candidates
+  leave the allocation as None (ambiguous, never guessed) but still
+  link every PO so it's discoverable. Cumulative PO totals sum every
+  linked invoice's matched_quantity/matched_amount exactly once (a
+  UNIQUE DB constraint already prevents a duplicate relationship row
+  from existing at all). All arithmetic uses Decimal, never float.
+
+Legacy fallback behavior:
+  An invoice with zero explicit document_relationships rows is served
+  entirely by the untouched _build_comparison() (build_comparison()
+  short-circuits to it before even checking the feature flags' cost).
+  Phase 1's get_related_purchase_orders/get_related_goods_receipts/
+  get_related_invoices already fall back to the legacy one-to-one
+  attachment when no explicit relationship exists, so even a request
+  that does reach the V2 engine for a still-legacy invoice degrades
+  gracefully to the same PO/GR legacy would have picked.
+
+Feature-flag behavior:
+  ENTERPRISE_MATCHING_V2_ENABLED=false, ENTERPRISE_MATCHING_V2_SHADOW_
+  MODE=false by default (both). With both off, build_comparison() is a
+  direct passthrough to _build_comparison() — no relationship lookup,
+  no V2 code path, identical behavior and cost to before this phase
+  existed. Shadow mode computes V2 alongside legacy purely for a
+  concise DEBUG-level log line (never changes what's returned, never
+  calls AI, never creates a duplicate exception). V2 enabled uses V2
+  only for an invoice with explicit relationships, always with an
+  exception-safe fallback to legacy.
+
+API usage confirmation:
+  Number of Claude calls added: 0. Number of Gemini calls added: 0. The
+  entire matching engine (scoring, allocation, cumulative fulfilment)
+  is deterministic field comparison and arithmetic — no LLM is called
+  anywhere in helpers/relationship_builder.py or helpers/enterprise_
+  matching.py, and none was added to anomaly detection's compatibility
+  fix either.
+
+Test results:
+  - `python tests/extraction/run_all.py` — all 21 suites pass (2 new:
+    test_enterprise_matching.py 30+/30+, test_relationship_builder.py
+    33/33; every pre-existing suite still green after fixing the 2
+    fixture/import updates test_ai_assistant.py and test_document_
+    relationships.py needed for the additive signature changes).
+  - Live verification against the real local Postgres dev DB
+    (temporary rows created and cleaned up, DB left exactly as found):
+    the full PO3006231 acceptance scenario end-to-end through the real
+    V2 engine, both the full state and the literal intermediate state
+    (only invoice A + GR A uploaded) — every number matches the task's
+    expected values exactly. Two real bugs (ambiguous invoice-to-GR
+    cross-linking when multiple invoices share a PO; the same fix
+    initially over-corrected and broke the legitimate 1-invoice-2-GR
+    case) were found and fixed via this live testing before being
+    locked into the automated suite.
+  - `python -c "import app"` — clean import; "document_relationships
+    v2 columns ready" printed, confirming the additive ALTER TABLE is
+    idempotent.
+  - `npx ng build --configuration production` — succeeded (exit 0,
+    same pre-existing bundle-size budget warnings, zero frontend files
+    changed).
+  - `git diff --stat` confirms the change is additive-only: 3 wholly
+    new files, 2 new columns, purely-additive edits to 8 existing
+    files (new imports/functions/params/call-site swaps only), zero
+    changes to routes/matching.py, routes/documents.py, extraction/
+    OCR, the Claude/Gemini prompts, the authenticity engine, or any
+    legacy table.
+
+Known limitations:
+  - document_line_items has no po_id/gr_id column (only invoice
+    document_id + a type tag), so line-item-level detail in V2's
+    legacy-shaped keys is only available when the primary PO/GR is
+    co-located under the invoice's own document_id — a genuinely
+    cross-invoice-shared PO/GR gets line_items=[] (not computed) rather
+    than a guessed/potentially-wrong comparison.
+  - invoice_gr direct links are intentionally NOT created whenever
+    another invoice also claims the same PO and there's more than one
+    GR candidate (see the allocation rule above) — PO-level received
+    totals are unaffected (they come from po_gr instead), but a
+    per-invoice "matched_gr_count" in that specific situation falls
+    back to "does the PO have any receipt evidence at all" rather than
+    a direct per-invoice receipt record, since the schema has no way to
+    express that distinction more precisely.
+  - The relationship builder is not wired into the upload pipeline in
+    this phase (routes/documents.py is completely untouched, by
+    design, to keep the highest-risk file at zero risk) — relationships
+    are built via the new backfill script or the existing Phase 1 API
+    only. A future phase can add an opt-in, failure-isolated hook after
+    extraction if desired.
+  - Real Claude/Gemini interaction with this feature (e.g. whether the
+    AI Assistant's prompts read naturally once V2 fields are exposed to
+    it) has not been exercised with a live API key in this sandbox —
+    no AI Assistant prompt/context changes were made in this phase at
+    all, so no new interaction exists to verify.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND — the 2 new columns auto-add on
+     startup via the existing _ensure_* pattern, no manual migration
+     step, no required new environment variables (both new flags
+     default to their off/false state if unset).
+  2. Confirm startup logs show "document_relationships v2 columns
+     ready" and that existing invoices still display normally (V2
+     stays disabled by default).
+  3. Optional, once ready to validate further: set
+     ENTERPRISE_MATCHING_V2_SHADOW_MODE=true and watch the Render logs
+     for the "DEBUG shadow-mode diff" lines on invoices that have
+     document_relationships rows (created via the backfill script or
+     the Phase 1 API) — legacy stays user-facing throughout.
+  4. Only after shadow-mode comparison looks correct: set
+     ENTERPRISE_MATCHING_V2_ENABLED=true.
+  5. No Render FRONTEND redeploy needed — zero frontend files changed.
+
+Rollback instructions:
+  Set ENTERPRISE_MATCHING_V2_ENABLED=false (and ENTERPRISE_MATCHING_V2_
+  SHADOW_MODE=false) and redeploy — build_comparison() immediately
+  reverts to being a direct passthrough to the untouched _build_
+  comparison(), with no code changes required. The 2 new columns and
+  the document_relationships rows a builder run may have created can
+  be left in place indefinitely (inert, read by nothing when V2 is
+  off) or removed with a manual DELETE if ever desired — nothing else
+  in the app depends on their existence.
+
+Confirmation that Finance Upload UI was not redesigned: correct — zero
+frontend files were changed in this phase; routes/documents.py (the
+upload pipeline) is completely untouched.
+
+Confirmation that _build_comparison() legacy behavior remains
+available: correct — its function body is byte-for-byte unchanged, it
+is still directly callable, and it is the unconditional fallback
+whenever V2 is disabled, an invoice has no explicit relationships, or
+V2 raises any exception.

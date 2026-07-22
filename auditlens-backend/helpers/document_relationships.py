@@ -43,9 +43,14 @@ def _entity_exists(cursor, doc_type, doc_id):
 
 
 def create_relationship(parent_type, parent_id, child_type, child_id, relationship_type,
-                         matched_quantity=None, matched_amount=None, confidence_score=None):
+                         matched_quantity=None, matched_amount=None, confidence_score=None,
+                         relationship_source='manual', matching_reason=None):
     """Creates a new document_relationships row. Returns (relationship: dict|
-    None, error: str|None) — relationship is None whenever error is set."""
+    None, error: str|None) — relationship is None whenever error is set.
+    relationship_source defaults to 'manual' (Phase 1's POST /documents/
+    relationships never passes it, so every existing call site keeps
+    creating 'manual' rows unchanged) — helpers/relationship_builder.py
+    (Phase 2) is the only caller that passes 'auto'."""
     if relationship_type not in RELATIONSHIP_TYPE_PAIRS:
         return None, f'relationship_type must be one of {tuple(RELATIONSHIP_TYPE_PAIRS)}'
     expected_parent_type, expected_child_type = RELATIONSHIP_TYPE_PAIRS[relationship_type]
@@ -75,18 +80,77 @@ def create_relationship(parent_type, parent_id, child_type, child_id, relationsh
         cursor.execute(
             '''INSERT INTO document_relationships
                (parent_type, parent_id, child_type, child_id, relationship_type,
-                matched_quantity, matched_amount, confidence_score)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                matched_quantity, matched_amount, confidence_score,
+                relationship_source, matching_reason)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING id, parent_type, parent_id, child_type, child_id, relationship_type,
-                         matched_quantity, matched_amount, confidence_score, created_at, updated_at''',
+                         matched_quantity, matched_amount, confidence_score,
+                         relationship_source, matching_reason, created_at, updated_at''',
             (parent_type, parent_id, child_type, child_id, relationship_type,
-             matched_quantity, matched_amount, confidence_score)
+             matched_quantity, matched_amount, confidence_score,
+             relationship_source, matching_reason)
         )
         row = dict(cursor.fetchone())
         conn.commit()
         return row, None
     finally:
         conn.close()
+
+
+def upsert_relationship(parent_type, parent_id, child_type, child_id, relationship_type,
+                         matched_quantity=None, matched_amount=None, confidence_score=None,
+                         matching_reason=None):
+    """Idempotent insert-or-update for the deterministic relationship
+    builder (helpers/relationship_builder.py) ONLY — always writes
+    relationship_source='auto'. If a relationship already exists for this
+    exact (parent, child, relationship_type):
+      - relationship_source='manual' (Phase 1 API / a human) -> left
+        untouched, returned as-is with skipped=True. Auto-generated
+        relationships must NEVER overwrite a manually confirmed one.
+      - relationship_source='auto' (a previous builder run) -> its
+        matched_quantity/matched_amount/confidence_score/matching_reason/
+        updated_at are refreshed, so re-running the builder after new
+        documents arrive keeps allocations current without ever
+        duplicating the row (the same idempotency guarantee create_
+        relationship's UNIQUE-constraint check already gives Phase 1).
+    Returns (relationship: dict, skipped: bool, error: str|None)."""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute(
+            '''SELECT * FROM document_relationships
+               WHERE parent_type = %s AND parent_id = %s AND child_type = %s AND child_id = %s
+                 AND relationship_type = %s''',
+            (parent_type, parent_id, child_type, child_id, relationship_type)
+        )
+        existing = cursor.fetchone()
+
+        if existing and existing['relationship_source'] == 'manual':
+            return dict(existing), True, None
+
+        if existing:
+            cursor.execute(
+                '''UPDATE document_relationships
+                   SET matched_quantity = %s, matched_amount = %s, confidence_score = %s,
+                       matching_reason = %s, updated_at = NOW()
+                   WHERE id = %s
+                   RETURNING id, parent_type, parent_id, child_type, child_id, relationship_type,
+                             matched_quantity, matched_amount, confidence_score,
+                             relationship_source, matching_reason, created_at, updated_at''',
+                (matched_quantity, matched_amount, confidence_score, matching_reason, existing['id'])
+            )
+            row = dict(cursor.fetchone())
+            conn.commit()
+            return row, False, None
+    finally:
+        conn.close()
+
+    relationship, error = create_relationship(
+        parent_type, parent_id, child_type, child_id, relationship_type,
+        matched_quantity=matched_quantity, matched_amount=matched_amount,
+        confidence_score=confidence_score, relationship_source='auto', matching_reason=matching_reason,
+    )
+    return relationship, False, error
 
 
 def delete_relationship(relationship_id):

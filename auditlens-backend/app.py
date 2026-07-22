@@ -541,6 +541,39 @@ def _ensure_document_relationships_table():
         print(f'WARNING: could not create document_relationships table: {type(e).__name__}: {e}')
 
 
+def _ensure_document_relationships_v2_columns():
+    """Enterprise V3 Phase 2: additive columns so the deterministic
+    relationship builder (helpers/relationship_builder.py) can coexist
+    with Phase 1's manual API without ever overwriting a human-confirmed
+    link — see the matching migrations/*.sql file for the full
+    rationale. relationship_source ('manual'|'auto') defaults to
+    'manual', so every existing Phase 1 row (created via the POST API)
+    keeps its correct meaning unchanged. Safe to run on every boot:
+    every step is idempotent (IF NOT EXISTS / guarded by a pg_constraint
+    lookup)."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            ALTER TABLE document_relationships
+              ADD COLUMN IF NOT EXISTS relationship_source VARCHAR(10) NOT NULL DEFAULT 'manual',
+              ADD COLUMN IF NOT EXISTS matching_reason TEXT
+        ''')
+        cursor.execute('''
+            SELECT 1 FROM pg_constraint WHERE conname = 'chk_document_relationships_source'
+        ''')
+        if not cursor.fetchone():
+            cursor.execute('''
+                ALTER TABLE document_relationships
+                ADD CONSTRAINT chk_document_relationships_source CHECK (relationship_source IN ('manual', 'auto'))
+            ''')
+        conn.commit()
+        conn.close()
+        print('document_relationships v2 columns ready')
+    except Exception as e:
+        print(f'WARNING: could not add document_relationships v2 columns: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -577,6 +610,7 @@ _ensure_send_back_cycles_table()
 _ensure_calendar_tasks_table()
 _ensure_ai_assistant_cache_table()
 _ensure_document_relationships_table()
+_ensure_document_relationships_v2_columns()
 
 @app.route('/')
 def hello_world():
