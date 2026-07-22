@@ -155,3 +155,124 @@ describe('FinanceCorrectionDetailComponent', () => {
     expect(navigateCalls[0][0]).toEqual(['/finance/corrections']);
   });
 });
+
+// AI Correction Assistant tests — every action is triggered ONLY by an
+// explicit method call (mirroring a button click), never by ngOnInit.
+// All HTTP calls are mocked via HttpTestingController — no real
+// backend, no real Claude/Gemini calls.
+describe('FinanceCorrectionDetailComponent — AI Correction Assistant', () => {
+  let component: FinanceCorrectionDetailComponent;
+  let httpMock: HttpTestingController;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [FinanceCorrectionDetailComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+      ],
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(FinanceCorrectionDetailComponent);
+    component = fixture.componentInstance;
+    httpMock = TestBed.inject(HttpTestingController);
+    component.documentId = 42;
+  });
+
+  afterEach(() => {
+    httpMock.verify();
+  });
+
+  it('never calls the AI Assistant automatically — no request fires without an explicit action', () => {
+    httpMock.expectNone(r => r.url.includes('/ai-assistant/'));
+  });
+
+  it('explainIssue POSTs to /ai-assistant/<id>/finance/explain-issue and stores the structured audit-status summary', () => {
+    component.explainIssue();
+    expect(component.aiActionLoading['explain_issue']).toBe(true);
+
+    const req = httpMock.expectOne(`${environment.apiUrl}/ai-assistant/42/finance/explain-issue`);
+    expect(req.request.method).toBe('POST');
+    req.flush({
+      audit_status: 'REVIEW REQUIRED',
+      reason: 'This invoice cannot complete validation because the Purchase Order and Goods Receipt documents are missing.',
+      recommended_action: 'Upload the missing supporting documents and resubmit for auditor review.',
+      provider: 'claude', cached: false,
+    });
+
+    expect(component.aiActionLoading['explain_issue']).toBe(false);
+    expect(component.aiCaseSummary).toEqual({
+      audit_status: 'REVIEW REQUIRED',
+      reason: 'This invoice cannot complete validation because the Purchase Order and Goods Receipt documents are missing.',
+      recommended_action: 'Upload the missing supporting documents and resubmit for auditor review.',
+    });
+    expect(component.auditStatusClass('REVIEW REQUIRED')).toBe('badge-returned');
+    expect(component.auditStatusClass('PASS')).toBe('badge-ready');
+  });
+
+  it('generateResponse POSTs to /ai-assistant/<id>/finance/generate-response and fills the EXISTING Finance Response field, without resubmitting', () => {
+    component.financeResponse = '';
+    component.generateResponse();
+
+    const req = httpMock.expectOne(`${environment.apiUrl}/ai-assistant/42/finance/generate-response`);
+    expect(req.request.method).toBe('POST');
+    req.flush({
+      response: 'Purchase Order and Goods Receipt documents have been obtained and uploaded. The invoice has been reviewed and is ready for auditor revalidation.',
+      provider: 'claude', cached: false,
+    });
+
+    expect(component.financeResponse).toBe(
+      'Purchase Order and Goods Receipt documents have been obtained and uploaded. The invoice has been reviewed and is ready for auditor revalidation.'
+    );
+    // Never auto-submitted — resubmission only happens via the
+    // existing resubmit() flow when Finance clicks the button.
+    httpMock.expectNone(`${environment.apiUrl}/reviews/resubmit/42`);
+  });
+
+  it('recommendedSteps POSTs to /ai-assistant/<id>/finance/recommended-steps and stores the step list', () => {
+    component.recommendedSteps();
+
+    const req = httpMock.expectOne(`${environment.apiUrl}/ai-assistant/42/finance/recommended-steps`);
+    expect(req.request.method).toBe('POST');
+    req.flush({
+      steps: ['Upload missing documents', 'Verify invoice information', 'Add explanation', 'Resubmit to auditor'],
+      provider: 'claude', cached: false,
+    });
+
+    expect(component.aiSteps).toEqual([
+      'Upload missing documents', 'Verify invoice information', 'Add explanation', 'Resubmit to auditor'
+    ]);
+  });
+
+  it('askAiQuestion POSTs the question to /ai-assistant/<id>/finance/ask and appends the Q&A to the conversation log', () => {
+    component.aiQuestion = 'What documents are missing?';
+    component.askAiQuestion();
+
+    const req = httpMock.expectOne(`${environment.apiUrl}/ai-assistant/42/finance/ask`);
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({ question: 'What documents are missing?' });
+    req.flush({ answer: 'The Purchase Order and Goods Receipt are missing.', provider: 'claude', cached: false });
+
+    expect(component.aiConversation).toEqual([
+      { question: 'What documents are missing?', answer: 'The Purchase Order and Goods Receipt are missing.' }
+    ]);
+    expect(component.aiQuestion).toBe('');
+  });
+
+  it('askAiQuestion does nothing for a blank question', () => {
+    component.aiQuestion = '   ';
+    component.askAiQuestion();
+    httpMock.expectNone(r => r.url.includes('/ai-assistant/'));
+  });
+
+  it('surfaces a 502 AI-unavailable error without crashing, and clears the loading state', () => {
+    component.explainIssue();
+    const req = httpMock.expectOne(`${environment.apiUrl}/ai-assistant/42/finance/explain-issue`);
+    req.flush({ error: 'AI Assistant is unavailable right now — see server logs' }, { status: 502, statusText: 'Bad Gateway' });
+
+    expect(component.aiActionLoading['explain_issue']).toBe(false);
+    expect(component.aiError).toBe('AI Assistant is unavailable right now — see server logs');
+  });
+});

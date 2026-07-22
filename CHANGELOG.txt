@@ -7597,3 +7597,150 @@ Setup/config needed:
   1. Redeploy the Render FRONTEND.
   2. No backend redeploy needed (no backend changes).
   3. No config changes needed.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-22 (later same day)
+
+What was changed:
+  Backend (auditlens-backend/) — no new files, no schema/cache change
+  (the existing ai_assistant_cache table, hashing, and hit/miss
+  mechanics are reused exactly as-is):
+    - routes/ai_assistant.py:
+        - _build_case_context() gained a new "send_back_cycle" field —
+          the LATEST send_back_cycles row for this document (reason_
+          category, reason_other_note, auditor_instruction, required_
+          actions, priority, response_due_date, cycle_status, sent_
+          back_at), or None if the document was never returned via the
+          structured form. Purely additive (a new dict key; every
+          existing key is unchanged), so this grounds the new Finance
+          actions in the auditor's ACTUAL reason/instruction/required
+          actions instead of only the generic exception classification
+          already used by the auditor-side actions.
+        - New _require_finance_owner(document_id): the Finance-side
+          counterpart of the existing _require_auditor() — requires
+          role == 'finance_executive' AND that the current user
+          uploaded this specific document (the SAME ownership rule
+          routes/documents.py::serve_document_file already enforces
+          for Finance).
+        - 4 new endpoints, all Finance-only via _require_finance_owner,
+          all reusing the EXISTING _run_action/_build_case_context/
+          ask_ai_assistant/caching plumbing (no duplicate AI-calling or
+          caching logic):
+            POST /ai-assistant/<id>/finance/explain-issue — reuses the
+              exact same 'explain_exception' action (prompt, output
+              shape, and _clamp_explain_exception_result) already used
+              by the auditor's "Explain Exception", so the audit_
+              status verdict/grounding rules are identical.
+            POST /ai-assistant/<id>/finance/generate-response — new
+              'generate_finance_response' action: drafts a Finance ->
+              Auditor response.
+            POST /ai-assistant/<id>/finance/recommended-steps — new
+              'recommended_steps' action: ordered resolution steps.
+            POST /ai-assistant/<id>/finance/ask — reuses the exact
+              same 'ask' action (and therefore the same cache entries)
+              as the auditor's /ask; an audit fact is the same
+              regardless of which role is asking.
+    - helpers/ai_assistant.py:
+        - _SYSTEM_PREAMBLE generalized from "a human auditor" to "a
+          human user — an auditor... or a Finance user..." (purely
+          wording — the STRICT RULES / AUDIT STATUS INTERPRETATION
+          RULES themselves are unchanged) and gained one new rule:
+          "send_back_cycle" (when present) is the auditor's own
+          structured return request and is the primary source for
+          Finance-facing wording — plus an explicit instruction never
+          to claim a document was uploaded/corrected unless the CASE
+          DATA (po_uploaded/gr_uploaded etc.) actually shows that.
+        - New _ACTION_INSTRUCTIONS['generate_finance_response'] and
+          ['recommended_steps'] prompts, both grounded in send_back_
+          cycle/audit_status_reasons only, both explicitly forbidding
+          claiming an action was taken that the CASE DATA doesn't
+          support.
+        - "AUDITOR QUESTION:"/"the auditor's question" wording in the
+          'ask' prompt generalized to "USER QUESTION:"/"the user's
+          question" (functionally identical prompt, just role-neutral
+          since Finance now uses the same action).
+    - tests/extraction/test_ai_assistant.py: +30 new checks (77 total,
+      up from 47) — send_back_cycle populated/absent in the context;
+      generate_finance_response/recommended_steps round-trip through
+      the Claude-primary/Gemini-fallback provider layer; the new
+      prompt references send_back_cycle; _require_finance_owner
+      accepts the actual uploader, rejects a different Finance user
+      (403), rejects a non-Finance role (403, no DB lookup), and 404s
+      for a nonexistent document. Added a minimal throwaway Flask app
+      (_test_app) purely so jsonify() inside _require_finance_owner/
+      _require_auditor has an application context to run in — no real
+      DB, no blueprint registration, no Claude/Gemini calls.
+  Frontend (auditlens-frontend/) — Finance Correction Detail page only:
+    - finance-correction-detail.component.ts: new "AI Correction
+      Assistant" state (aiActionLoading, aiError, aiCaseSummary,
+      aiSteps, aiQuestion, aiConversation) and 4 methods — explainIssue
+      (POST .../finance/explain-issue, stores audit_status/reason/
+      recommended_action), generateResponse (POST .../finance/
+      generate-response, writes into the EXISTING financeResponse
+      field — never auto-resubmits), recommendedSteps (POST .../
+      finance/recommended-steps, stores an ordered step list),
+      askAiQuestion (POST .../finance/ask, appends to a Q&A log). None
+      of these fire from ngOnInit — every one is triggered only by an
+      explicit method call (button click / Enter key).
+    - finance-correction-detail.component.html: new "AI Correction
+      Assistant" card (Explain Issue / Generate Response / Recommended
+      Steps buttons + an "Ask about this correction…" input), placed
+      between the PO/GR upload row and the existing Finance Response
+      field — the same visual position the auditor-side card occupies
+      relative to its own note/decision fields.
+    - finance-correction-detail.component.css: +150 lines for the new
+      card — same accent-bg/accent-soft "helper card" treatment already
+      used for the auditor's AI Audit Assistant card, reusing this
+      component's own existing .badge-ready/.badge-returned/.ar-label
+      classes wherever possible.
+    - finance-correction-detail.component.spec.ts: +7 new tests — no
+      AI call fires without an explicit method call; each of the 4
+      actions POSTs to the correct /finance/* endpoint and updates the
+      right state; Generate Response never triggers a resubmit call;
+      a 502 AI-unavailable error is surfaced without crashing.
+
+Why:
+  Finance resolving a returned invoice had to re-read the auditor's
+  reason/instruction/required actions and figure out on their own what
+  to say back — the same friction the auditor-side AI Audit Assistant
+  was built to remove, now available on the Correction Detail page.
+  Reusing the exact same audit_status/blocking-vs-informational
+  classification (rather than inventing a parallel Finance-only
+  version) means a duplicate anomaly that's already been reviewed
+  still can't be narrated as a failed audit here either — the same
+  guarantee the auditor-side fix established, extended to a second
+  consumer instead of re-solved.
+
+Testing:
+  - `python tests/extraction/run_all.py` — all 17 suites pass
+    (test_ai_assistant.py: 77/77 checks, up from 47), zero real Claude/
+    Gemini calls.
+  - `python -c "import app; print('APP IMPORT OK')"` — clean import.
+  - `npx ng build --configuration production` — succeeded (exit 0;
+    same pre-existing budget warnings as prior tasks).
+  - `npx ng test --watch=false` — 90/91 pass (up from 83; +7 new
+    tests, all passing). The 1 failure is the same pre-existing,
+    unrelated app.spec.ts issue seen throughout this project's history.
+  - Tested exactly the 3 scenarios the task named: a missing-PO/GR
+    returned invoice (audit_status REVIEW REQUIRED, reasons name the
+    missing documents — covered by the existing missing-PO/GR
+    audit-status tests, which the Finance explain-issue action reuses
+    unchanged); a duplicate-anomaly invoice, both PENDING (blocking,
+    REVIEW REQUIRED) and already-REVIEWED (informational, stays PASS —
+    the exact "do not falsely say audit failed" case); and a normal
+    correction case generating a useful Finance response grounded in
+    send_back_cycle.
+  - `git diff --stat` confirms only auditlens-backend/{helpers,routes}/
+    ai_assistant.py, its test file, and the 4 Correction Detail
+    frontend files changed — zero changes to extraction, the Claude/
+    Gemini extraction pipeline, the three-way matching engine, the
+    authenticity engine, the anomaly detection engine, or the
+    send-back workflow (routes/reviews.py, helpers/send_back.py —
+    only its already-existing enum lists are imported, unchanged).
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND — no schema change (existing
+     ai_assistant_cache table unchanged), no new environment variables.
+  2. Redeploy the Render FRONTEND.
+  3. No config changes needed.

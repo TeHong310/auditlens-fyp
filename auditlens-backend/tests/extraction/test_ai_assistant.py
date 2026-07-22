@@ -18,10 +18,17 @@ import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from flask import Flask
+
 import helpers.ai_assistant as haa
 import routes.ai_assistant as ra
 
 FAILURES = []
+
+# _require_finance_owner()/_require_auditor() call jsonify() on the
+# rejection path, which needs a Flask application context — a minimal
+# throwaway app is enough (no blueprint registration, no real DB).
+_test_app = Flask(__name__)
 
 
 def check(label, condition, detail=''):
@@ -236,11 +243,12 @@ class _FakeCursor:
     """Returns canned rows in the FIXED order _build_case_context()
     issues its queries after _build_comparison (mocked below, so it
     never touches the cursor itself): documents row, authenticity_checks
-    rows, anomalies rows, review_records rows."""
+    rows, anomalies rows, review_records rows, latest send_back_cycles
+    row (cycle_row=None by default — no structured return on record)."""
 
-    def __init__(self, doc_row, authenticity_rows, anomaly_rows, history_rows):
+    def __init__(self, doc_row, authenticity_rows, anomaly_rows, history_rows, cycle_row=None):
         self._queue = [('one', doc_row), ('many', authenticity_rows),
-                        ('many', anomaly_rows), ('many', history_rows)]
+                        ('many', anomaly_rows), ('many', history_rows), ('one', cycle_row)]
         self._current = None
 
     def execute(self, sql, params=None):
@@ -304,6 +312,158 @@ def run_case_build_case_context_clean_pass_has_no_exception():
         context = ra._build_case_context(cursor, 2)
     check('no missing documents', context['missing_documents'] == [], context)
     check('no exception', context['exception'] is None, context)
+
+
+def run_case_build_case_context_includes_send_back_cycle_when_present():
+    print('Case: _build_case_context includes the auditor\'s structured send-back request when one exists')
+    fake_comparison = {
+        'invoice': {'invoice_no': 'INV-3', 'vendor_name': 'Vendor C', 'total_amount': 200.0,
+                    'currency': 'RM', 'invoice_date': '2026-07-01'},
+        'po': None, 'gr': None,
+        'match_result': {'overall_status': 'PARTIAL', 'vendor_match': None, 'amount_match': None,
+                          'po_reference_match': None, 'line_items_match': None, 'line_items_price_match': None},
+    }
+    doc_row = {'document_id': 3, 'uploaded_at': None, 'status': 'returned'}
+    cycle_row = {
+        'cycle_number': 2, 'return_reason_category': 'missing_document', 'reason_other_note': None,
+        'auditor_instruction': 'Please upload the Purchase Order and Goods Receipt.',
+        'required_actions': ['upload_missing_document'], 'priority': 'medium',
+        'response_due_date': None, 'cycle_status': 'action_required', 'sent_back_at': None,
+    }
+    classified = (3, 'missing_document', 'Missing PO and GR', 'x', 'medium')
+    cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[], anomaly_rows=[], history_rows=[], cycle_row=cycle_row)
+    with _Patched(ra, _build_comparison=lambda c, d: fake_comparison, _classify_exception=lambda c, d, cmp: classified):
+        context = ra._build_case_context(cursor, 3)
+
+    check('send_back_cycle populated', context['send_back_cycle'] is not None, context)
+    check('auditor_instruction passed through',
+          context['send_back_cycle']['auditor_instruction'] == 'Please upload the Purchase Order and Goods Receipt.', context)
+    check('required_actions passed through',
+          context['send_back_cycle']['required_actions'] == ['upload_missing_document'], context)
+    check('priority passed through', context['send_back_cycle']['priority'] == 'medium', context)
+
+
+def run_case_build_case_context_send_back_cycle_none_when_never_returned():
+    print('Case: send_back_cycle is None for a document that was never sent back via the structured form')
+    fake_comparison = {
+        'invoice': {'invoice_no': 'INV-4', 'vendor_name': 'Vendor D', 'total_amount': 300.0,
+                    'currency': 'RM', 'invoice_date': '2026-07-01'},
+        'po': {'po_no': 'PO-1'}, 'gr': {'gr_no': 'GR-1'},
+        'match_result': {'overall_status': 'PASS', 'vendor_match': True, 'amount_match': True,
+                          'po_reference_match': True, 'line_items_match': True, 'line_items_price_match': True},
+    }
+    doc_row = {'document_id': 4, 'uploaded_at': None, 'status': 'under_review'}
+    cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[], anomaly_rows=[], history_rows=[])  # cycle_row defaults to None
+    with _Patched(ra, _build_comparison=lambda c, d: fake_comparison, _classify_exception=lambda c, d, cmp: None):
+        context = ra._build_case_context(cursor, 4)
+    check('send_back_cycle is None', context['send_back_cycle'] is None, context)
+
+
+# ============================================================
+# helpers/ai_assistant.py — Finance-facing actions (generate_finance_
+# response, recommended_steps) round-trip through ask_ai_assistant
+# ============================================================
+
+def run_case_generate_finance_response_action_round_trips():
+    print("Case: 'generate_finance_response' action round-trips through Claude")
+    with _Patched(haa,
+                  ask_claude_text=lambda sp, up, **k: '{"response": "Purchase Order and Goods Receipt have been uploaded."}',
+                  call_gemini_sdk=lambda *a, **k: None):
+        result, provider = haa.ask_ai_assistant('generate_finance_response', {'invoice_number': 'INV-1'})
+    check('response returned', result == {'response': 'Purchase Order and Goods Receipt have been uploaded.'}, result)
+    check('provider is claude', provider == 'claude', provider)
+
+
+def run_case_recommended_steps_action_round_trips():
+    print("Case: 'recommended_steps' action round-trips through Claude")
+    with _Patched(haa,
+                  ask_claude_text=lambda sp, up, **k: '{"steps": ["Upload the missing PO", "Upload the missing GR", "Resubmit to auditor"]}',
+                  call_gemini_sdk=lambda *a, **k: None):
+        result, provider = haa.ask_ai_assistant('recommended_steps', {'invoice_number': 'INV-1'})
+    check('steps returned', result == {'steps': ['Upload the missing PO', 'Upload the missing GR', 'Resubmit to auditor']}, result)
+
+
+def run_case_generate_finance_response_prompt_references_send_back_cycle():
+    print("Case: 'generate_finance_response' prompt tells the AI to ground itself in send_back_cycle")
+    captured = {}
+
+    def fake_ask_claude_text(system_prompt, user_prompt, **k):
+        captured['user_prompt'] = user_prompt
+        return '{"response": "ok"}'
+    with _Patched(haa, ask_claude_text=fake_ask_claude_text, call_gemini_sdk=lambda *a, **k: None):
+        haa.ask_ai_assistant('generate_finance_response', {'invoice_number': 'INV-1'})
+    check('prompt references send_back_cycle', 'send_back_cycle' in captured.get('user_prompt', ''), captured)
+
+
+# ============================================================
+# routes/ai_assistant.py — _require_finance_owner()
+# ============================================================
+
+class _OwnerCursor:
+    def __init__(self, uploaded_by, doc_exists=True):
+        self.uploaded_by = uploaded_by
+        self.doc_exists = doc_exists
+
+    def execute(self, sql, params=None):
+        pass
+
+    def fetchone(self):
+        return (self.uploaded_by,) if self.doc_exists else None
+
+
+class _OwnerConn:
+    def __init__(self, uploaded_by, doc_exists=True):
+        self._cursor = _OwnerCursor(uploaded_by, doc_exists)
+
+    def cursor(self, **kwargs):
+        return self._cursor
+
+    def close(self):
+        pass
+
+
+def run_case_require_finance_owner_accepts_the_actual_uploader():
+    print('Case: a finance_executive who uploaded this document is accepted')
+    with _test_app.app_context(), _Patched(
+                  ra,
+                  get_jwt_identity=lambda: 5,
+                  get_user_by_id=lambda uid: {'user_id': 5, 'role': 'finance_executive'},
+                  get_db_connection=lambda: _OwnerConn(uploaded_by=5)):
+        user, err = ra._require_finance_owner(1)
+    check('accepted (no error)', err is None, err)
+    check('user returned', user is not None, user)
+
+
+def run_case_require_finance_owner_rejects_a_different_finance_user():
+    print("Case: a finance_executive who did NOT upload this document is rejected (403)")
+    with _test_app.app_context(), _Patched(
+                  ra,
+                  get_jwt_identity=lambda: 5,
+                  get_user_by_id=lambda uid: {'user_id': 5, 'role': 'finance_executive'},
+                  get_db_connection=lambda: _OwnerConn(uploaded_by=99)):
+        user, err = ra._require_finance_owner(1)
+    check('rejected with 403', err is not None and err[1] == 403, err)
+
+
+def run_case_require_finance_owner_rejects_non_finance_role():
+    print("Case: a non-finance role (e.g. auditor) is rejected (403), no DB lookup needed")
+    with _test_app.app_context(), _Patched(
+                  ra,
+                  get_jwt_identity=lambda: 5,
+                  get_user_by_id=lambda uid: {'user_id': 5, 'role': 'auditor'}):
+        user, err = ra._require_finance_owner(1)
+    check('rejected with 403', err is not None and err[1] == 403, err)
+
+
+def run_case_require_finance_owner_404_for_missing_document():
+    print('Case: a nonexistent document returns 404')
+    with _test_app.app_context(), _Patched(
+                  ra,
+                  get_jwt_identity=lambda: 5,
+                  get_user_by_id=lambda uid: {'user_id': 5, 'role': 'finance_executive'},
+                  get_db_connection=lambda: _OwnerConn(uploaded_by=None, doc_exists=False)):
+        user, err = ra._require_finance_owner(999)
+    check('rejected with 404', err is not None and err[1] == 404, err)
 
 
 # ============================================================
@@ -579,6 +739,17 @@ if __name__ == '__main__':
     run_case_build_case_context_missing_documents_and_exception()
     run_case_build_case_context_returns_none_when_no_comparison()
     run_case_build_case_context_clean_pass_has_no_exception()
+    run_case_build_case_context_includes_send_back_cycle_when_present()
+    run_case_build_case_context_send_back_cycle_none_when_never_returned()
+
+    run_case_generate_finance_response_action_round_trips()
+    run_case_recommended_steps_action_round_trips()
+    run_case_generate_finance_response_prompt_references_send_back_cycle()
+
+    run_case_require_finance_owner_accepts_the_actual_uploader()
+    run_case_require_finance_owner_rejects_a_different_finance_user()
+    run_case_require_finance_owner_rejects_non_finance_role()
+    run_case_require_finance_owner_404_for_missing_document()
 
     run_case_classify_anomaly_reviewed_is_always_informational()
     run_case_classify_anomaly_pending_high_severity_is_blocking()

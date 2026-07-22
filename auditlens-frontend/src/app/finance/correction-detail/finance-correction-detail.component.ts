@@ -58,6 +58,21 @@ export class FinanceCorrectionDetailComponent implements OnInit {
   };
   financeResponse: string = '';
 
+  // ── AI Correction Assistant — contextual help for THIS case only,
+  // called ONLY when Finance clicks a button below (never on page
+  // load). Backed by POST /ai-assistant/<id>/finance/*. Not a general
+  // chatbot: every action reads only data already computed for this
+  // one invoice (matching/authenticity/anomaly engines + the auditor's
+  // own send-back cycle) and never submits anything on Finance's
+  // behalf — Generate Response only fills the EXISTING Finance
+  // Response field above; nothing is auto-resubmitted. ──
+  aiActionLoading: { [key: string]: boolean } = {};
+  aiError: string = '';
+  aiCaseSummary: { audit_status: string; reason: string; recommended_action: string } | null = null;
+  aiSteps: string[] = [];
+  aiQuestion: string = '';
+  aiConversation: { question: string; answer: string }[] = [];
+
   private apiUrl = environment.apiUrl;
 
   constructor(
@@ -332,5 +347,107 @@ export class FinanceCorrectionDetailComponent implements OnInit {
 
   goBack() {
     this.router.navigate(['/finance/corrections']);
+  }
+
+  // ── AI Correction Assistant ───────────────────────────────
+  // Every method here is triggered ONLY by an explicit button click.
+  // Each POST call is scoped to this one document_id and returns a
+  // response derived only from data already computed by AuditLens'
+  // matching/authenticity/anomaly engines plus the auditor's own
+  // send-back cycle (backend: routes/ai_assistant.py's /finance/*
+  // endpoints — same Claude-primary/Gemini-fallback engine and
+  // ai_assistant_cache the auditor-side assistant already uses).
+
+  explainIssue() {
+    if (!this.documentId) return;
+    this.aiActionLoading['explain_issue'] = true;
+    this.aiError = '';
+    this.http.post<any>(`${this.apiUrl}/ai-assistant/${this.documentId}/finance/explain-issue`, {},
+      { headers: this.getHeaders() }
+    ).subscribe({
+      next: (res) => {
+        this.aiActionLoading['explain_issue'] = false;
+        this.aiCaseSummary = {
+          audit_status: res.audit_status || 'REVIEW REQUIRED',
+          reason: res.reason || '',
+          recommended_action: res.recommended_action || ''
+        };
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.aiActionLoading['explain_issue'] = false;
+        this.aiError = err.error?.error || 'AI Assistant is unavailable right now.';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  auditStatusClass(status: string): string {
+    return status === 'PASS' ? 'badge-ready' : 'badge-returned';
+  }
+
+  generateResponse() {
+    if (!this.documentId) return;
+    this.aiActionLoading['generate_response'] = true;
+    this.aiError = '';
+    this.http.post<any>(`${this.apiUrl}/ai-assistant/${this.documentId}/finance/generate-response`, {},
+      { headers: this.getHeaders() }
+    ).subscribe({
+      next: (res) => {
+        this.aiActionLoading['generate_response'] = false;
+        // Populates the EXISTING Finance Response textarea below —
+        // Finance can still edit or clear it before resubmitting;
+        // nothing here is auto-submitted.
+        this.financeResponse = res.response || '';
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.aiActionLoading['generate_response'] = false;
+        this.aiError = err.error?.error || 'AI Assistant is unavailable right now.';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  recommendedSteps() {
+    if (!this.documentId) return;
+    this.aiActionLoading['recommended_steps'] = true;
+    this.aiError = '';
+    this.http.post<any>(`${this.apiUrl}/ai-assistant/${this.documentId}/finance/recommended-steps`, {},
+      { headers: this.getHeaders() }
+    ).subscribe({
+      next: (res) => {
+        this.aiActionLoading['recommended_steps'] = false;
+        this.aiSteps = res.steps || [];
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.aiActionLoading['recommended_steps'] = false;
+        this.aiError = err.error?.error || 'AI Assistant is unavailable right now.';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  askAiQuestion() {
+    if (!this.documentId || !this.aiQuestion.trim() || this.aiActionLoading['ask']) return;
+    const question = this.aiQuestion.trim();
+    this.aiActionLoading['ask'] = true;
+    this.aiError = '';
+    this.http.post<any>(`${this.apiUrl}/ai-assistant/${this.documentId}/finance/ask`, { question },
+      { headers: this.getHeaders() }
+    ).subscribe({
+      next: (res) => {
+        this.aiActionLoading['ask'] = false;
+        this.aiConversation.push({ question, answer: res.answer || '' });
+        this.aiQuestion = '';
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.aiActionLoading['ask'] = false;
+        this.aiError = err.error?.error || 'AI Assistant is unavailable right now.';
+        this.cdr.detectChanges();
+      }
+    });
   }
 }

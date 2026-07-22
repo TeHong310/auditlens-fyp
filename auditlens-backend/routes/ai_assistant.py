@@ -143,6 +143,33 @@ def _build_case_context(cursor, document_id):
         'reviewer':    row['reviewer_name'],
     } for row in cursor.fetchall()]
 
+    # The auditor's own structured send-back request (Finance Correction
+    # Center's "Auditor Request" panel already shows this) — added so
+    # the Finance-facing AI actions (explain-issue/generate-response/
+    # recommended-steps, routes below) can ground their wording in the
+    # ACTUAL reason/instruction/required actions/priority an auditor
+    # gave, instead of only the generic exception classification above.
+    # None when the document was never returned via the structured form.
+    cursor.execute(
+        '''SELECT cycle_number, return_reason_category, reason_other_note, auditor_instruction,
+                  required_actions, priority, response_due_date, cycle_status, sent_back_at
+           FROM send_back_cycles WHERE document_id = %s ORDER BY cycle_number DESC LIMIT 1''',
+        (document_id,)
+    )
+    cycle_row = cursor.fetchone()
+    send_back_cycle = None
+    if cycle_row:
+        send_back_cycle = {
+            'reason_category':     cycle_row['return_reason_category'],
+            'reason_other_note':   cycle_row['reason_other_note'],
+            'auditor_instruction': cycle_row['auditor_instruction'],
+            'required_actions':    cycle_row['required_actions'],
+            'priority':            cycle_row['priority'],
+            'response_due_date':   cycle_row['response_due_date'].isoformat() if cycle_row['response_due_date'] else None,
+            'cycle_status':        cycle_row['cycle_status'],
+            'sent_back_at':        cycle_row['sent_back_at'].isoformat() if cycle_row['sent_back_at'] else None,
+        }
+
     return {
         'invoice_number':     comparison['invoice']['invoice_no'],
         'vendor':             comparison['invoice']['vendor_name'],
@@ -167,6 +194,7 @@ def _build_case_context(cursor, document_id):
         'document_status':    document_status,
         'audit_status':          audit_status,
         'audit_status_reasons':  audit_status_reasons,
+        'send_back_cycle':       send_back_cycle,
     }
 
 
@@ -309,6 +337,29 @@ def _require_auditor():
     return user, None
 
 
+def _require_finance_owner(document_id):
+    """Finance-side counterpart of _require_auditor() above — Finance
+    can only run the AI assistant against an invoice they uploaded
+    themselves, the SAME ownership rule already enforced by
+    routes/documents.py::serve_document_file for finance_executive."""
+    user_id = get_jwt_identity()
+    user = get_user_by_id(user_id)
+    if user['role'] != 'finance_executive':
+        return None, (jsonify({'error': 'Access denied. Finance Executive only.'}), 403)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT uploaded_by FROM documents WHERE document_id = %s', (document_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return None, (jsonify({'error': 'Invoice document not found'}), 404)
+    if row[0] != user['user_id']:
+        return None, (jsonify({'error': 'Access denied'}), 403)
+    return user, None
+
+
 # ------------------------------------------------------------
 # POST /ai-assistant/<document_id>/explain-exception
 # ------------------------------------------------------------
@@ -382,6 +433,97 @@ def prepare_send_back(document_id):
 @jwt_required()
 def ask(document_id):
     _, err = _require_auditor()
+    if err:
+        return err
+
+    data = request.get_json() or {}
+    question = (data.get('question') or '').strip()
+    if not question:
+        return jsonify({'error': 'question is required'}), 400
+
+    try:
+        response, status = _run_action(document_id, 'ask', question=question)
+        return jsonify(response), status
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# FINANCE AI CORRECTION ASSISTANT
+# Finance Correction Center's own AI card (Finance Correction Detail
+# page). Distinct routes/role-check from the auditor endpoints above,
+# but reuses the SAME _build_case_context/_run_action/caching plumbing
+# — nothing about how the AI is called or cached is duplicated.
+# ============================================================
+
+# ------------------------------------------------------------
+# POST /ai-assistant/<document_id>/finance/explain-issue
+# Reuses the exact SAME 'explain_exception' action (prompt, output
+# shape, and _clamp_explain_exception_result) already used by the
+# auditor's "Explain Exception" — the audit_status verdict + reasoning
+# rules are the same regardless of which side is asking.
+# ------------------------------------------------------------
+@ai_assistant_bp.route('/<int:document_id>/finance/explain-issue', methods=['POST'])
+@jwt_required()
+def finance_explain_issue(document_id):
+    _, err = _require_finance_owner(document_id)
+    if err:
+        return err
+    try:
+        response, status = _run_action(document_id, 'explain_exception')
+        return jsonify(response), status
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# POST /ai-assistant/<document_id>/finance/generate-response
+# Drafts a Finance -> Auditor response for the Finance Response field —
+# never auto-submitted, the auditor can edit before resubmitting
+# (same "draft only" contract as the auditor's generate-remark/
+# prepare-send-back actions).
+# ------------------------------------------------------------
+@ai_assistant_bp.route('/<int:document_id>/finance/generate-response', methods=['POST'])
+@jwt_required()
+def finance_generate_response(document_id):
+    _, err = _require_finance_owner(document_id)
+    if err:
+        return err
+    try:
+        response, status = _run_action(document_id, 'generate_finance_response')
+        return jsonify(response), status
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# POST /ai-assistant/<document_id>/finance/recommended-steps
+# ------------------------------------------------------------
+@ai_assistant_bp.route('/<int:document_id>/finance/recommended-steps', methods=['POST'])
+@jwt_required()
+def finance_recommended_steps(document_id):
+    _, err = _require_finance_owner(document_id)
+    if err:
+        return err
+    try:
+        response, status = _run_action(document_id, 'recommended_steps')
+        return jsonify(response), status
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# POST /ai-assistant/<document_id>/finance/ask
+# Body: {"question": "..."}
+# Reuses the exact SAME 'ask' action as the auditor's /ask — an audit
+# case fact is the same regardless of which role is asking, so the
+# question+context cache key (and any existing cached answer) is
+# shared rather than duplicated per role.
+# ------------------------------------------------------------
+@ai_assistant_bp.route('/<int:document_id>/finance/ask', methods=['POST'])
+@jwt_required()
+def finance_ask(document_id):
+    _, err = _require_finance_owner(document_id)
     if err:
         return err
 

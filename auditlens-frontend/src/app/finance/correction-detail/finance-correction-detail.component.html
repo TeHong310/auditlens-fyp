@@ -144,6 +144,68 @@
           <p class="submit-note" *ngIf="grMessage">{{ grMessage }}</p>
         </div>
 
+        <!-- AI Correction Assistant — contextual help for THIS case
+             only, called ONLY when Finance clicks a button below
+             (never on page load). Nothing here submits anything —
+             Generate Response only fills the EXISTING Finance
+             Response field below for Finance to review and edit. -->
+        <div class="ai-assistant-card">
+          <p class="ai-card-title"><i class="ph-duotone ph-robot"></i> AI Correction Assistant</p>
+          <p class="ai-card-subtitle">Need help understanding or resolving this correction?</p>
+
+          <div class="ai-assistant-actions">
+            <button type="button" class="btn-ai-action" (click)="explainIssue()" [disabled]="aiActionLoading['explain_issue']">
+              <ng-container *ngIf="!aiActionLoading['explain_issue']"><i class="ph-duotone ph-file-magnifying-glass"></i> Explain Issue</ng-container>
+              <ng-container *ngIf="aiActionLoading['explain_issue']">Thinking…</ng-container>
+            </button>
+            <button type="button" class="btn-ai-action" (click)="generateResponse()" [disabled]="aiActionLoading['generate_response']">
+              <ng-container *ngIf="!aiActionLoading['generate_response']"><i class="ph-duotone ph-pencil-simple-line"></i> Generate Response</ng-container>
+              <ng-container *ngIf="aiActionLoading['generate_response']">Thinking…</ng-container>
+            </button>
+            <button type="button" class="btn-ai-action" (click)="recommendedSteps()" [disabled]="aiActionLoading['recommended_steps']">
+              <ng-container *ngIf="!aiActionLoading['recommended_steps']"><i class="ph-duotone ph-list-checks"></i> Recommended Steps</ng-container>
+              <ng-container *ngIf="aiActionLoading['recommended_steps']">Thinking…</ng-container>
+            </button>
+          </div>
+
+          <div class="ai-error-box" *ngIf="aiError"><i class="ph-duotone ph-x-circle"></i> {{ aiError }}</div>
+
+          <div class="ai-answer-box" *ngIf="aiCaseSummary">
+            <p class="ai-answer-label"><i class="ph-duotone ph-file-magnifying-glass"></i> Issue Explanation</p>
+            <p class="ai-audit-status-row">
+              <span class="field-label">Audit Status</span>
+              <span class="badge" [ngClass]="auditStatusClass(aiCaseSummary.audit_status)">{{ aiCaseSummary.audit_status }}</span>
+            </p>
+            <p class="ar-label">Reason</p>
+            <p class="ai-answer-text">{{ aiCaseSummary.reason }}</p>
+            <p class="ar-label">Recommended Action</p>
+            <p class="ai-answer-text">{{ aiCaseSummary.recommended_action }}</p>
+          </div>
+
+          <div class="ai-answer-box" *ngIf="aiSteps.length">
+            <p class="ai-answer-label"><i class="ph-duotone ph-list-checks"></i> Recommended Steps</p>
+            <ol class="ai-steps-list">
+              <li *ngFor="let step of aiSteps">{{ step }}</li>
+            </ol>
+          </div>
+
+          <div class="ai-conversation" *ngIf="aiConversation.length">
+            <div class="ai-qa-pair" *ngFor="let qa of aiConversation">
+              <p class="ai-question"><i class="ph-duotone ph-chat-circle"></i> {{ qa.question }}</p>
+              <p class="ai-answer-text">{{ qa.answer }}</p>
+            </div>
+          </div>
+
+          <div class="ai-ask-row">
+            <input class="ai-ask-input" type="text" [(ngModel)]="aiQuestion" placeholder="Ask about this correction…"
+                   (keydown.enter)="askAiQuestion()" [disabled]="aiActionLoading['ask']" />
+            <button type="button" class="btn-ai-send" (click)="askAiQuestion()" [disabled]="aiActionLoading['ask'] || !aiQuestion.trim()">
+              <ng-container *ngIf="!aiActionLoading['ask']">Send</ng-container>
+              <ng-container *ngIf="aiActionLoading['ask']">…</ng-container>
+            </button>
+          </div>
+        </div>
+
         <div class="field-item finance-response-field">
           <label class="field-label">Finance Response <span class="field-required">*</span></label>
           <textarea class="field-textarea" rows="3" [(ngModel)]="financeResponse"

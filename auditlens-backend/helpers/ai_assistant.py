@@ -1,8 +1,10 @@
 """AI Audit Assistant — contextual, on-demand AI helper for auditors
-reviewing ONE invoice case (routes/ai_assistant.py builds the case
-context and calls into this module). This is explicitly NOT a general
-chatbot: every prompt is scoped to the CASE DATA the caller passes in
-(already computed by AuditLens' own three-way matching / authenticity /
+AND Finance users reviewing ONE invoice case (routes/ai_assistant.py
+builds the case context and calls into this module — auditor-facing
+actions on the Record Detail page, Finance-facing actions on the
+Correction Detail page). This is explicitly NOT a general chatbot:
+every prompt is scoped to the CASE DATA the caller passes in (already
+computed by AuditLens' own three-way matching / authenticity /
 anomaly-detection engines — see routes/ai_assistant.py::_build_case_
 context) and the model is instructed never to invent facts beyond it.
 
@@ -28,19 +30,23 @@ def _strip_markdown_fences(text):
 
 
 _SYSTEM_PREAMBLE = """You are the AI Audit Assistant embedded in AuditLens, an Accounts
-Payable audit system. You help a human auditor understand ONE specific
-invoice audit case that has ALREADY been processed by AuditLens' own
-matching, authenticity, and anomaly-detection engines.
+Payable audit system. You help a human user — an auditor reviewing a
+case, or a Finance user resolving one that was returned to them —
+understand ONE specific invoice audit case that has ALREADY been
+processed by AuditLens' own matching, authenticity, and anomaly-
+detection engines.
 
 STRICT RULES:
 - Use ONLY the CASE DATA given below. Never invent an invoice number,
   vendor name, amount, document, or finding that is not present in it.
 - If something is missing/null in the CASE DATA, say it is missing or
-  not available — never guess or assume a plausible value.
+  not available — never guess or assume a plausible value. In
+  particular, never claim a document was uploaded, a field was
+  corrected, or any other action was already taken unless the CASE
+  DATA itself shows that (e.g. po_uploaded/gr_uploaded are true).
 - You are an assistant, not a decision maker. Never declare that the
   document IS approved, rejected, fraudulent, or genuine — only explain
-  the evidence already computed by the system and let the human auditor
-  decide.
+  the evidence already computed by the system and let the human decide.
 - Be concise, factual, and professional — enterprise audit
   documentation tone, not a casual chatbot.
 - Return ONLY valid JSON, no markdown, no code fences, no explanation
@@ -56,14 +62,19 @@ AUDIT STATUS INTERPRETATION RULES:
 - When audit_status is "PASS", describe the document as "validated" or
   having "passed core checks" — never as a failed or incomplete audit.
 - Each entry in "anomalies" already has a "classification": "blocking"
-  (requires auditor action — an unresolved high-risk, duplicate, or
-  amount-inconsistency finding) or "informational" (a historical/low-
-  risk finding, or one already reviewed/dismissed). Mention
-  "informational" anomalies only briefly as background context — NEVER
-  as a reason the audit failed or needs action.
+  (requires action — an unresolved high-risk, duplicate, or amount-
+  inconsistency finding) or "informational" (a historical/low-risk
+  finding, or one already reviewed/dismissed). Mention "informational"
+  anomalies only briefly as background context — NEVER as a reason the
+  audit failed or needs action.
 - Only "blocking" anomalies and the items listed in
-  "audit_status_reasons" may be described as requiring auditor
-  attention. Do not invent or imply any other exception.
+  "audit_status_reasons" may be described as requiring attention. Do
+  not invent or imply any other exception.
+- "send_back_cycle" (when present) is the auditor's own structured
+  return request for this case — its reason_category/auditor_
+  instruction/required_actions/priority are the actual reason this
+  invoice needs Finance correction. Use it as the primary source for
+  Finance-facing actions instead of guessing what the auditor wanted.
 
 CASE DATA (JSON):
 {context_json}
@@ -106,10 +117,33 @@ _ACTION_INSTRUCTIONS = {
         'Return ONLY: {"remark": "string"}'
     ),
     'ask': (
-        "Answer the auditor's question below using only the CASE DATA. "
+        "Answer the user's question below using only the CASE DATA. "
         'If the CASE DATA does not contain enough information to answer, '
         'say so explicitly rather than guessing.\n'
         'Return ONLY: {"answer": "string"}'
+    ),
+    'generate_finance_response': (
+        'Write a short, professional DRAFT response (2-4 sentences) from '
+        'Finance to the auditor, suitable to paste into the Finance '
+        'Response field before resubmitting this case for auditor review '
+        '(you are drafting a suggestion — nothing is submitted '
+        'automatically).\n'
+        'Base it on "send_back_cycle" (the auditor\'s original reason/'
+        'instruction/required actions) if present, and on '
+        '"audit_status_reasons" otherwise. Describe what has been done to '
+        'address them ONLY to the extent the CASE DATA actually supports '
+        '(e.g. only say a document was uploaded if po_uploaded/'
+        'gr_uploaded show that) — never claim an action was taken that '
+        'is not reflected in the CASE DATA.\n'
+        'Return ONLY: {"response": "string"}'
+    ),
+    'recommended_steps': (
+        'List the concrete steps Finance should take to resolve this '
+        'case, in order, based only on "send_back_cycle" (its '
+        'required_actions/auditor_instruction, if present) and '
+        '"audit_status_reasons". If audit_status is "PASS", the only '
+        'step is that no further action is needed.\n'
+        'Return ONLY: {"steps": ["string", ...]}'
     ),
 }
 
@@ -157,7 +191,11 @@ def ask_ai_assistant(action, context, question=None):
     into a 502.
 
     action: one of 'explain_exception' | 'explain_risk' |
-      'generate_remark' | 'ask' | 'prepare_send_back'.
+      'generate_remark' | 'ask' | 'prepare_send_back' (auditor-facing,
+      routes/ai_assistant.py's /explain-exception etc.) or
+      'generate_finance_response' | 'recommended_steps' (Finance-
+      facing, routes/ai_assistant.py's /finance/* endpoints — 'ask'
+      and 'explain_exception' are reused as-is by both sides).
     question: required (and only used) when action == 'ask'.
     """
     context_json = json.dumps(context, indent=2, default=str)
@@ -166,7 +204,7 @@ def ask_ai_assistant(action, context, question=None):
     if action == 'prepare_send_back':
         user_prompt = _SEND_BACK_INSTRUCTION
     elif action == 'ask':
-        user_prompt = _ACTION_INSTRUCTIONS['ask'] + f'\n\nAUDITOR QUESTION: {question}'
+        user_prompt = _ACTION_INSTRUCTIONS['ask'] + f'\n\nUSER QUESTION: {question}'
     else:
         user_prompt = _ACTION_INSTRUCTIONS[action]
 
