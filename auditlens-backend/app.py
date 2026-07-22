@@ -14,6 +14,7 @@ from routes.anomalies import anomalies_bp
 from routes.authenticity import authenticity_bp
 from routes.calendar import calendar_bp
 from routes.ai_assistant import ai_assistant_bp
+from routes.document_relationships import document_relationships_bp
 
 
 def _ensure_anomalies_table():
@@ -486,6 +487,60 @@ def _ensure_ai_assistant_cache_table():
         print(f'WARNING: could not create ai_assistant_cache table: {type(e).__name__}: {e}')
 
 
+def _ensure_document_relationships_table():
+    """Enterprise V3 Phase 1: flexible many-to-many document relationships
+    (PO<->Invoice, PO<->GR, Invoice<->GR), additive to the existing
+    one-to-one attachment model (purchase_orders.document_id /
+    goods_receipts.document_id). Purely new and unread by any existing
+    page — _build_comparison() (routes/auditor.py) and every page built
+    on it are completely untouched by this table's existence.
+
+    Polymorphic association: purchase_orders/goods_receipts rows have no
+    independent row in `documents`, so parent_id/child_id mean different
+    things depending on parent_type/child_type ('invoice' -> documents.
+    document_id, 'po' -> purchase_orders.po_id, 'gr' -> goods_receipts.
+    gr_id). A single-column SQL FOREIGN KEY can't target three different
+    tables, so referential integrity for parent_id/child_id is enforced
+    in helpers/document_relationships.py::create_relationship() instead —
+    see the matching migrations/*.sql file for the full rationale."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS document_relationships (
+                id SERIAL PRIMARY KEY,
+                parent_type VARCHAR(10) NOT NULL,
+                parent_id INTEGER NOT NULL,
+                child_type VARCHAR(10) NOT NULL,
+                child_id INTEGER NOT NULL,
+                relationship_type VARCHAR(20) NOT NULL,
+                matched_quantity NUMERIC,
+                matched_amount NUMERIC,
+                confidence_score NUMERIC(5, 2),
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                CONSTRAINT chk_document_relationships_types
+                    CHECK (parent_type IN ('invoice', 'po', 'gr') AND child_type IN ('invoice', 'po', 'gr')),
+                CONSTRAINT chk_document_relationships_type_pair
+                    CHECK (
+                        (relationship_type = 'po_invoice' AND parent_type = 'po' AND child_type = 'invoice') OR
+                        (relationship_type = 'po_gr' AND parent_type = 'po' AND child_type = 'gr') OR
+                        (relationship_type = 'invoice_gr' AND parent_type = 'invoice' AND child_type = 'gr')
+                    ),
+                CONSTRAINT chk_document_relationships_no_self_link
+                    CHECK (NOT (parent_type = child_type AND parent_id = child_id)),
+                CONSTRAINT uq_document_relationships UNIQUE (parent_type, parent_id, child_type, child_id, relationship_type)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_document_relationships_parent ON document_relationships(parent_type, parent_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_document_relationships_child ON document_relationships(child_type, child_id)')
+        conn.commit()
+        conn.close()
+        print('document_relationships table ready')
+    except Exception as e:
+        print(f'WARNING: could not create document_relationships table: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -505,6 +560,7 @@ app.register_blueprint(anomalies_bp,  url_prefix='/anomalies')
 app.register_blueprint(authenticity_bp, url_prefix='/authenticity')
 app.register_blueprint(calendar_bp,   url_prefix='/calendar')
 app.register_blueprint(ai_assistant_bp, url_prefix='/ai-assistant')
+app.register_blueprint(document_relationships_bp, url_prefix='/documents')
 
 _ensure_anomalies_table()
 _ensure_authenticity_checks_table()
@@ -520,6 +576,7 @@ _ensure_authenticity_cache_table()
 _ensure_send_back_cycles_table()
 _ensure_calendar_tasks_table()
 _ensure_ai_assistant_cache_table()
+_ensure_document_relationships_table()
 
 @app.route('/')
 def hello_world():

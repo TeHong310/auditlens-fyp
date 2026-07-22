@@ -8079,3 +8079,143 @@ Setup/config needed:
      variables, just the new route becoming available.
   2. Redeploy the Render FRONTEND.
   3. No config changes needed.
+
+====================================================================
+
+Date: 2026-07-22 (later same day)
+
+What was changed:
+  Backend (auditlens-backend/) — Enterprise V3 Phase 1: Build
+  Relationship-Based Document Architecture. 1 new table, 2 new files,
+  additive-only changes to 2 existing files. Does NOT replace or touch
+  the existing one-to-one matching engine.
+    - New table document_relationships (app.py::
+      _ensure_document_relationships_table(), same auto-create-on-
+      startup pattern as every other table in this app; matching
+      migrations/2026-07-22_create_document_relationships_table.sql
+      for documentation parity). Polymorphic association design:
+      parent_type/child_type ('invoice'|'po'|'gr') + parent_id/child_id
+      (meaning documents.document_id / purchase_orders.po_id /
+      goods_receipts.gr_id depending on type) — chosen because
+      purchase_orders/goods_receipts rows have no independent row in
+      `documents`, so a literal single-table FOREIGN KEY to
+      `documents` can't express a PO or GR endpoint. CHECK constraints
+      enforce valid types, that relationship_type matches its
+      parent/child type pair, and no self-links; a UNIQUE constraint
+      prevents duplicate relationships. Referential integrity for the
+      polymorphic parent_id/child_id is enforced in the service layer
+      (below), not the database, since Postgres FKs can't target three
+      different tables from one column.
+    - helpers/document_relationships.py (new): create_relationship(),
+      delete_relationship(), get_relationship_by_id(),
+      get_related_documents(), get_related_invoices(),
+      get_related_purchase_orders(), get_related_goods_receipts().
+      Compatibility layer: the three typed getters check
+      document_relationships first, and fall back to the legacy
+      one-to-one attachment (purchase_orders.document_id /
+      goods_receipts.document_id, mirroring routes/auditor.py::
+      _build_comparison()'s own PO/GR selection) whenever a document
+      has zero explicit relationship rows — so pre-existing data keeps
+      working through the new getters with no backfill migration
+      required.
+    - routes/document_relationships.py (new blueprint, registered
+      under the same '/documents' url_prefix as routes/documents.py):
+      GET /documents/<id>/relationships, POST /documents/relationships,
+      DELETE /documents/relationships/<relationship_id>.
+      _require_node_access(doc_type, doc_id) follows the same
+      role-check pattern as routes/documents.py's
+      _require_timeline_access() — auditor: any node; finance_
+      executive: only an invoice/PO/GR they uploaded themselves
+      (purchase_orders and goods_receipts both already carry their own
+      uploaded_by column).
+    - app.py: 2 new import/registration lines + 1 new _ensure_* call —
+      no existing line changed.
+    - tests/extraction/test_document_relationships.py (new): 18
+      checks, fully offline (in-memory fake DB, no real Postgres
+      connection) — the exact 4 scenarios the task named (one PO/one
+      invoice/one GR; one PO/two invoices/two GR, i.e. the task's
+      PO7710 example; two PO/one invoice/one GR; existing documents
+      still working via the legacy fallback), plus create_relationship()
+      validation branches (unknown type, mismatched type pair,
+      nonexistent entity, duplicate) and _require_node_access() access
+      control (auditor unrestricted, finance owner accepted, finance
+      non-owner rejected, missing node 404, unknown role rejected).
+      Registered in tests/extraction/run_all.py's SUITES list.
+
+  Untouched, verified via `git diff --stat`: routes/auditor.py
+  (_build_comparison and every other matching function), routes/
+  matching.py (the legacy engine), routes/ai_assistant.py, routes/
+  documents.py, extraction/OCR, the authenticity engine, the anomaly
+  engine — zero lines changed in any of them. Zero new Claude/Gemini
+  API calls anywhere in this feature (pure DB CRUD).
+
+Why it was changed:
+  Phase 1 of upgrading AuditLens from "one invoice -> one PO -> one GR"
+  to "multiple PO -> multiple invoice -> multiple GR" support, per an
+  architecture review done earlier the same day that found purchase_
+  orders/goods_receipts rows have no independent identity in
+  `documents` today — only a document_id FK to whichever invoice they
+  were uploaded under — which is why a flexible, polymorphic
+  many-to-many relationship table was needed rather than a literal
+  parent_document_id/child_document_id FK pair. This phase is
+  deliberately backward-compatible and additive only: the existing
+  matching engine, AI assistants, authenticity/anomaly engines, and
+  every existing frontend page keep working exactly as before, unaware
+  this table exists.
+
+Testing:
+  - `python -c "import app; print('APP IMPORT OK')"` — clean import;
+    "document_relationships table ready" printed alongside every other
+    existing _ensure_* table, confirming the CREATE TABLE/CHECK/UNIQUE/
+    index statements are valid and idempotent.
+  - Live smoke test against the real local Postgres dev DB (temporary
+    rows created and cleaned up): legacy fallback before any
+    relationship rows exist, relationship creation, duplicate
+    rejection, type-pair mismatch rejection, nonexistent-entity
+    rejection, and deletion — all confirmed working against real
+    Postgres constraint/ANY()/RETURNING/JOIN semantics, DB left exactly
+    as found afterward.
+  - `python tests/extraction/run_all.py` — all 19 suites pass
+    (test_document_relationships.py: 18/18 checks, new; every other
+    suite unaffected).
+  - `npx ng build --configuration production` — succeeded (exit 0;
+    same pre-existing bundle-size budget warnings as prior tasks, zero
+    frontend files changed by this backend-only feature).
+  - `git diff --stat` confirms the change is additive-only: 1 new
+    table, 2 wholly new files (service layer + route blueprint), and
+    purely-additive edits to app.py (+57 lines: 1 new _ensure_*
+    function, 1 import, 1 blueprint registration, 1 function call) and
+    run_all.py (+1 line registering the new test suite) — zero changes
+    to any existing route, function, or table.
+
+Risk assessment:
+  - LOW risk to existing functionality: every change is additive (new
+    table, new files, appended lines only); the matching engine, AI
+    assistants, authenticity/anomaly engines, and every existing page
+    are proven untouched via git diff and the full regression suite.
+  - MEDIUM, documented trade-off: parent_id/child_id are polymorphic,
+    so they cannot carry a real SQL FOREIGN KEY (Postgres FKs target
+    exactly one table). Entity-existence validation happens in
+    helpers/document_relationships.py::create_relationship() instead
+    of the database — a direct INSERT bypassing this service layer
+    (e.g. a future script, an admin tool) could create a dangling
+    reference. Mitigated by: CHECK constraints on type validity/type-
+    pair consistency, a UNIQUE constraint against duplicates, and the
+    fact that this table currently has exactly one write path (the new
+    API/service layer) with no other code touching it yet.
+  - LOW risk from the legacy-fallback design: get_related_purchase_
+    orders/goods_receipts/invoices() silently fall back to the old
+    one-to-one attachment when no explicit relationship exists. This
+    is intentional (STEP 4 compatibility requirement) but means a
+    caller can't currently distinguish "no relationship data at all"
+    from "using the legacy single attachment" except by checking
+    whether relationship=None on the returned row.
+  - No risk to AI cost/behavior: zero new Claude/Gemini calls.
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND — new table auto-creates on startup
+     via the existing _ensure_* pattern, no manual migration needed
+     (same as every other table in this app), no new environment
+     variables.
+  2. No Render FRONTEND redeploy needed — zero frontend files changed.
+  3. No config changes needed.

@@ -15,7 +15,7 @@ CALENDAR_DIR = os.path.join(os.path.dirname(THIS_DIR), 'calendar')
 SUITES = ['test_invoice.py', 'test_po.py', 'test_gr.py', 'test_currency.py', 'test_ap_upgrade.py',
           'test_entity_and_line_items.py', 'test_ai_router.py', 'test_authenticity_ai.py',
           'test_authenticity_siblings.py', 'test_authenticity_scoring.py', 'test_authenticity_auto_trigger.py',
-          'test_ai_assistant.py', 'test_document_timeline.py']
+          'test_ai_assistant.py', 'test_document_timeline.py', 'test_document_relationships.py']
 REVIEWS_SUITES = ['test_send_back_validation.py', 'test_send_back_routes.py']
 CALENDAR_SUITES = ['test_calendar_events_validation.py', 'test_malaysia_calendar.py', 'test_calendar_routes.py']
 
