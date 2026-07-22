@@ -176,6 +176,8 @@ def _build_case_context(cursor, document_id):
         'amount':             comparison['invoice']['total_amount'],
         'currency':           comparison['invoice']['currency'],
         'invoice_date':       comparison['invoice']['invoice_date'],
+        'uploaded_at':        comparison['invoice']['uploaded_at'],
+        'ocr_confidence':     comparison['invoice']['ocr_confidence'],
         'po_uploaded':        comparison['po'] is not None,
         'gr_uploaded':        comparison['gr'] is not None,
         'missing_documents':  missing_documents,

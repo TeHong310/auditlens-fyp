@@ -224,6 +224,11 @@
 
     </div>
 
+    <!-- Document Workflow Timeline — reusable component, also shown on
+         Auditor Record Detail. Pure visualization: reads already-
+         computed data only, no new AI calls, no workflow changes. -->
+    <app-workflow-timeline [documentId]="documentId"></app-workflow-timeline>
+
   </ng-container>
 
 </div>

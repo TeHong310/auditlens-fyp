@@ -5,6 +5,7 @@ import { Router, ActivatedRoute } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { environment } from '../../../environments/environment';
+import { WorkflowTimelineComponent } from '../../workflow-timeline/workflow-timeline.component';
 
 type DocType = 'invoice' | 'po' | 'gr';
 
@@ -91,7 +92,7 @@ export function validateSendBackForm(form: SendBackFormState, todayIso: string):
 @Component({
   selector: 'app-auditor-record-detail',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, WorkflowTimelineComponent],
   templateUrl: './auditor-record-detail.component.html',
   styleUrls: ['./auditor-record-detail.component.css']
 })

@@ -7939,3 +7939,143 @@ Setup/config needed:
   1. Redeploy the Render FRONTEND.
   2. No backend redeploy needed (no backend changes).
   3. No config changes needed.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-22 (later same day)
+
+What was changed:
+  Backend (auditlens-backend/) — 1 new endpoint, 1 new file, purely
+  additive changes to 2 existing files, ZERO schema/table changes:
+    - routes/ai_assistant.py: _build_case_context() gained two new
+      dict keys, uploaded_at and ocr_confidence (both already returned
+      by routes.auditor._build_comparison() — just not previously
+      copied into this context dict). Purely additive: every existing
+      key is unchanged, so nothing about the AI Audit Assistant or AI
+      Correction Assistant changed.
+    - routes/documents.py: new GET /documents/<id>/timeline endpoint +
+      two new pure functions:
+        - _require_timeline_access(document_id): auditor role -> any
+          document; finance_executive -> only documents they uploaded
+          themselves (same ownership rule as serve_document_file,
+          already in this file).
+        - _build_timeline_events(context): a pure function (no DB
+          access, no AI call) that reshapes the SAME case-context dict
+          routes/ai_assistant.py::_build_case_context() already builds
+          for the AI Audit Assistant (three-way matching via routes.
+          auditor._build_comparison, authenticity_checks, anomalies
+          with their existing blocking/informational classification,
+          review_records, send_back_cycles) into an ordered list of
+          Document Workflow Timeline events: Document Uploaded, OCR
+          Extraction, Three-way Matching, Authenticity Verification,
+          Anomaly Evaluation, Auditor Review, Finance Correction
+          (omitted entirely for a document that was never returned),
+          Final Approval. Each event carries status "completed" |
+          "action_required" | "pending" per the feature's own rules
+          (missing documents / a pending send-back / a blocking
+          anomaly => action_required; a finished check => completed;
+          otherwise => pending) plus a short detail string and, for a
+          returned document, the auditor's actual reason.
+        get_document_timeline() itself is a thin wrapper: check access,
+        call _build_case_context(), call _build_timeline_events(),
+        return JSON. No new table, no new AI call — the SAME cached
+        authenticity/anomaly/matching results are just read again.
+    - tests/extraction/test_document_timeline.py (new): 34 checks —
+      the exact 4 scenarios the task named (fully approved invoice,
+      missing PO/GR invoice, returned invoice, Finance-corrected/
+      resubmitted invoice) plus edge cases (OCR/authenticity not yet
+      checked -> pending, an authenticity warning or a blocking
+      anomaly -> action_required, an informational-only anomaly does
+      NOT block, a "need_review" auditor action -> action_required)
+      and _require_timeline_access's role/ownership checks (auditor
+      unrestricted with zero DB lookups, finance owner accepted,
+      finance non-owner rejected 403, missing document 404, unknown
+      role rejected 403). Registered in tests/extraction/run_all.py.
+    - tests/extraction/test_ai_assistant.py: updated every hand-built
+      `fake_comparison`/`_pass_comparison()` fixture to include
+      uploaded_at/ocr_confidence in its invoice dict, matching the
+      real contract of _build_comparison() now that _build_case_
+      context() reads those two fields — a pure test-fixture fix, no
+      behavior assertions changed.
+  Frontend (auditlens-frontend/) — 1 new reusable component (4 files),
+  wired into both target pages:
+    - workflow-timeline/workflow-timeline.component.{ts,html,css,
+      spec.ts} (new, top-level — same "shared component" placement
+      convention as the existing calendar/ component, reused by both
+      auditor and finance pages): fetches GET /documents/<id>/timeline
+      whenever its documentId @Input() is set to a real value, renders
+      a vertical timeline (marker + label + detail + optional reason/
+      timestamp per event), and maps status -> icon/colour using
+      exactly the 3-status palette the feature specifies (completed:
+      ph-check-circle/success; action_required: ph-warning/warning;
+      pending: ph-circle/muted) — no colours beyond the app's existing
+      success/warning/muted design tokens.
+    - auditor-record-detail.component.ts/html: imported the new
+      component, added <app-workflow-timeline [documentId]="
+      documentId"> inside the existing *ngIf="!isLoading && comparison"
+      block, right after the Field-Comparison/Decision-Card content-row
+      and before the Send Back modal.
+    - finance-correction-detail.component.ts/html: same placement
+      pattern, inside the existing *ngIf="!isLoading && document" block,
+      after the Original-Invoice-Info/Finance-Resolution content-row.
+    - finance-correction-detail.component.spec.ts: both describe
+      blocks' afterEach now drain any outstanding GET .../timeline
+      request before calling httpMock.verify() — this component calls
+      this.cdr.detectChanges() directly inside its own HTTP handlers,
+      which (already, before this task) renders the template as soon as
+      `document` becomes truthy even without the test calling fixture.
+      detectChanges(); now that a child component with its own request-
+      firing ngOnChanges lives in that template, several existing tests
+      would otherwise fail on an unexpected outstanding request that
+      isn't what they're testing (the timeline component has its own
+      dedicated spec). auditor-record-detail.component.spec.ts needed
+      no such change — none of its existing tests happen to populate
+      `comparison` (only auditor-record-detail.component.ts's actual
+      loadComparison() does that, which none of its specs call).
+
+Why:
+  Understanding a document's full lifecycle — what happened, what
+  checks ran, what's outstanding — currently means checking the Field
+  Comparison table, the Authenticity/Anomaly pages, the Send Back
+  history box, and the review history separately. A single timeline
+  reusing data those pages already compute (rather than recomputing or
+  storing it a second time) gives both auditors and Finance the same
+  at-a-glance traceability without visiting multiple pages, and without
+  touching a single line of the extraction/matching/authenticity/
+  anomaly/send-back engines it summarizes.
+
+Testing:
+  - `python tests/extraction/run_all.py` — all 18 suites pass
+    (test_document_timeline.py: 34/34 checks, new; test_ai_assistant.py
+    unaffected in behavior, only its fixtures updated).
+  - `python -c "import app; print('APP IMPORT OK')"` — clean import (no
+    circular-import issue from routes/documents.py importing routes/
+    ai_assistant.py — the same cross-route-module import convention
+    already used by routes/authenticity.py and routes/ai_assistant.py
+    themselves, and confirmed acyclic: documents -> ai_assistant ->
+    auditor, nothing imports back the other way).
+  - `npx ng build --configuration production` — succeeded (exit 0;
+    same pre-existing budget warnings as prior tasks).
+  - `npx ng test --watch=false` — 100/101 pass (up from 94; +6 new
+    WorkflowTimelineComponent tests, all passing, plus every previously
+    passing Correction Detail test still passing after the afterEach
+    fix). The 1 failure is the same pre-existing, unrelated app.spec.ts
+    issue seen throughout this project's history.
+  - Verified exactly the 4 scenarios the task asked for, both as
+    automated backend checks (test_document_timeline.py) and via the
+    same component now rendering on both target pages.
+  - `git diff --stat` confirms the backend changes are additive-only to
+    2 existing files (2 new dict keys in one function; one wholly new
+    route + 2 new pure functions appended to the other) plus 1 new
+    test file — zero changes to extraction, the Claude/Gemini
+    extraction pipeline, the three-way matching engine (_build_
+    comparison is called, never modified), the authenticity engine,
+    the anomaly detection engine, the send-back workflow, or the
+    database schema (no new table, no new column). Zero new AI calls
+    anywhere in this feature.
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND — no schema change, no new environment
+     variables, just the new route becoming available.
+  2. Redeploy the Render FRONTEND.
+  3. No config changes needed.

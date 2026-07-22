@@ -267,7 +267,8 @@ def run_case_build_case_context_missing_documents_and_exception():
     print('Case: _build_case_context reports missing PO/GR and the classified exception')
     fake_comparison = {
         'invoice': {'invoice_no': 'INV-1', 'vendor_name': 'Coilcraft', 'total_amount': 500.0,
-                    'currency': 'RM', 'invoice_date': '2026-07-01'},
+                    'currency': 'RM', 'invoice_date': '2026-07-01',
+                    'uploaded_at': '2026-07-01T09:00:00', 'ocr_confidence': 95.0},
         'po': None, 'gr': None,
         'match_result': {'overall_status': 'PARTIAL', 'vendor_match': None, 'amount_match': None,
                           'po_reference_match': None, 'line_items_match': None, 'line_items_price_match': None},
@@ -300,7 +301,8 @@ def run_case_build_case_context_clean_pass_has_no_exception():
     print('Case: a clean PASS record has no missing_documents and no exception')
     fake_comparison = {
         'invoice': {'invoice_no': 'INV-2', 'vendor_name': 'Vendor B', 'total_amount': 100.0,
-                    'currency': 'RM', 'invoice_date': '2026-07-01'},
+                    'currency': 'RM', 'invoice_date': '2026-07-01',
+                    'uploaded_at': '2026-07-01T09:00:00', 'ocr_confidence': 95.0},
         'po': {'po_no': 'PO-1'}, 'gr': {'gr_no': 'GR-1'},
         'match_result': {'overall_status': 'PASS', 'vendor_match': True, 'amount_match': True,
                           'po_reference_match': True, 'line_items_match': True, 'line_items_price_match': True},
@@ -318,7 +320,8 @@ def run_case_build_case_context_includes_send_back_cycle_when_present():
     print('Case: _build_case_context includes the auditor\'s structured send-back request when one exists')
     fake_comparison = {
         'invoice': {'invoice_no': 'INV-3', 'vendor_name': 'Vendor C', 'total_amount': 200.0,
-                    'currency': 'RM', 'invoice_date': '2026-07-01'},
+                    'currency': 'RM', 'invoice_date': '2026-07-01',
+                    'uploaded_at': '2026-07-01T09:00:00', 'ocr_confidence': 95.0},
         'po': None, 'gr': None,
         'match_result': {'overall_status': 'PARTIAL', 'vendor_match': None, 'amount_match': None,
                           'po_reference_match': None, 'line_items_match': None, 'line_items_price_match': None},
@@ -347,7 +350,8 @@ def run_case_build_case_context_send_back_cycle_none_when_never_returned():
     print('Case: send_back_cycle is None for a document that was never sent back via the structured form')
     fake_comparison = {
         'invoice': {'invoice_no': 'INV-4', 'vendor_name': 'Vendor D', 'total_amount': 300.0,
-                    'currency': 'RM', 'invoice_date': '2026-07-01'},
+                    'currency': 'RM', 'invoice_date': '2026-07-01',
+                    'uploaded_at': '2026-07-01T09:00:00', 'ocr_confidence': 95.0},
         'po': {'po_no': 'PO-1'}, 'gr': {'gr_no': 'GR-1'},
         'match_result': {'overall_status': 'PASS', 'vendor_match': True, 'amount_match': True,
                           'po_reference_match': True, 'line_items_match': True, 'line_items_price_match': True},
@@ -508,7 +512,8 @@ def run_case_classify_anomaly_pending_low_pattern_is_informational():
 def _pass_comparison(invoice_no='INV-PASS'):
     return {
         'invoice': {'invoice_no': invoice_no, 'vendor_name': 'Vendor A', 'total_amount': 100.0,
-                    'currency': 'RM', 'invoice_date': '2026-07-01'},
+                    'currency': 'RM', 'invoice_date': '2026-07-01',
+                    'uploaded_at': '2026-07-01T09:00:00', 'ocr_confidence': 95.0},
         'po': {'po_no': 'PO-1'}, 'gr': {'gr_no': 'GR-1'},
         'match_result': {'overall_status': 'PASS', 'vendor_match': True, 'amount_match': True,
                           'po_reference_match': True, 'line_items_match': True, 'line_items_price_match': True},
@@ -544,7 +549,8 @@ def run_case_audit_status_missing_po_gr_document():
     print('Case 2/4: Missing PO/GR document -> REVIEW REQUIRED')
     fake_comparison = {
         'invoice': {'invoice_no': 'INV-MISSING', 'vendor_name': 'Vendor A', 'total_amount': 100.0,
-                    'currency': 'RM', 'invoice_date': '2026-07-01'},
+                    'currency': 'RM', 'invoice_date': '2026-07-01',
+                    'uploaded_at': '2026-07-01T09:00:00', 'ocr_confidence': 95.0},
         'po': None, 'gr': None,
         'match_result': {'overall_status': 'PARTIAL', 'vendor_match': None, 'amount_match': None,
                           'po_reference_match': None, 'line_items_match': None, 'line_items_price_match': None},

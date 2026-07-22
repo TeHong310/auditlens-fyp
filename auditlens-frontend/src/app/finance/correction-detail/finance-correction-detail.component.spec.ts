@@ -37,6 +37,15 @@ describe('FinanceCorrectionDetailComponent', () => {
   });
 
   afterEach(() => {
+    // This component calls this.cdr.detectChanges() directly inside its
+    // own HTTP success/error handlers, which renders the template (and
+    // any child component within an already-true *ngIf) even though
+    // fixture.detectChanges() is never called here — so whenever a test
+    // above makes `document` truthy, the nested <app-workflow-timeline>
+    // mounts and fires its own GET .../timeline call. That component has
+    // its own dedicated spec (workflow-timeline.component.spec.ts), so
+    // it's just drained here rather than asserted on in every test above.
+    httpMock.match(req => req.url.endsWith('/timeline')).forEach(req => req.flush({ events: [] }));
     httpMock.verify();
   });
 
@@ -182,6 +191,15 @@ describe('FinanceCorrectionDetailComponent — AI Correction Assistant', () => {
   });
 
   afterEach(() => {
+    // This component calls this.cdr.detectChanges() directly inside its
+    // own HTTP success/error handlers, which renders the template (and
+    // any child component within an already-true *ngIf) even though
+    // fixture.detectChanges() is never called here — so whenever a test
+    // above makes `document` truthy, the nested <app-workflow-timeline>
+    // mounts and fires its own GET .../timeline call. That component has
+    // its own dedicated spec (workflow-timeline.component.spec.ts), so
+    // it's just drained here rather than asserted on in every test above.
+    httpMock.match(req => req.url.endsWith('/timeline')).forEach(req => req.flush({ events: [] }));
     httpMock.verify();
   });
 

@@ -24,6 +24,7 @@ from helpers.ai_extractor_router import route_ai_extraction
 from helpers.confidence_engine import compute_field_confidence, compute_line_items_confidence, log_field_confidence
 from helpers.extraction_validator import validate_extraction
 from routes.authenticity import generate_invoice_authenticity_if_missing
+from routes.ai_assistant import _build_case_context
 from config import Config
 
 documents_bp = Blueprint('documents', __name__)
@@ -1345,6 +1346,217 @@ def get_supporting_documents(document_id):
             'po_uploaded':    po is not None,
             'gr_uploaded':    gr is not None,
         }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# DOCUMENT WORKFLOW TIMELINE — pure visualization layer. Reuses the
+# SAME already-computed data routes/ai_assistant.py::_build_case_
+# context() already assembles for the AI Audit Assistant (three-way
+# matching via routes.auditor._build_comparison, authenticity_checks,
+# anomalies with their blocking/informational classification,
+# review_records, send_back_cycles) — no new tables, no new AI calls,
+# no changes to any extraction/matching/authenticity/anomaly/send-back
+# engine. _build_timeline_events() below only reshapes data that
+# already exists into an ordered list of timeline steps.
+# ============================================================
+
+def _build_timeline_events(context):
+    """Pure transformation (no DB access, no AI call) — turns the case
+    context dict from _build_case_context() into an ordered list of
+    Document Workflow Timeline events: [{event, label, status, detail,
+    reason?, timestamp}, ...]. status is exactly one of 'completed' |
+    'action_required' | 'pending', per the feature's own status rules:
+      - completed: a check finished successfully.
+      - action_required: missing documents, a pending send-back, or a
+        blocking anomaly (see routes.ai_assistant._classify_anomaly —
+        the SAME classification the AI Audit Assistant already uses,
+        so the timeline and the AI card can never disagree).
+      - pending: waiting for the next workflow step.
+    """
+    events = []
+
+    # 1. Document Uploaded — always completed once the record exists.
+    events.append({
+        'event': 'document_uploaded', 'label': 'Document Uploaded',
+        'status': 'completed', 'detail': None,
+        'timestamp': context.get('uploaded_at'),
+    })
+
+    # 2. OCR Extraction
+    ocr_confidence = context.get('ocr_confidence')
+    if ocr_confidence is not None:
+        events.append({
+            'event': 'ocr_extraction', 'label': 'OCR Extraction',
+            'status': 'completed', 'detail': f'Confidence: {ocr_confidence:.2f}%',
+            'timestamp': None,
+        })
+    else:
+        events.append({
+            'event': 'ocr_extraction', 'label': 'OCR Extraction',
+            'status': 'pending', 'detail': 'Awaiting extraction',
+            'timestamp': None,
+        })
+
+    # 3. Three-way Matching — missing PO/GR is an explicit Action
+    # Required trigger (same as a real mismatch), not merely "pending".
+    matching_status = context.get('matching_status')
+    missing_documents = context.get('missing_documents') or []
+    if matching_status == 'PASS':
+        mt_status, mt_detail = 'completed', 'Status: PASS'
+    elif matching_status in ('REVIEW', 'FAIL'):
+        mt_status, mt_detail = 'action_required', 'Status: REVIEW REQUIRED'
+    elif missing_documents:
+        mt_status, mt_detail = 'action_required', f"Missing: {', '.join(missing_documents)}"
+    else:
+        mt_status, mt_detail = 'pending', 'Awaiting supporting documents'
+    events.append({
+        'event': 'three_way_matching', 'label': 'Three-way Matching',
+        'status': mt_status, 'detail': mt_detail, 'timestamp': None,
+    })
+
+    # 4. Authenticity Verification
+    authenticity = (context.get('authenticity') or {}).get('invoice')
+    if authenticity is None:
+        au_status, au_detail = 'pending', 'Not yet checked'
+    elif authenticity.get('status') == 'passed':
+        au_status, au_detail = 'completed', 'Status: Passed'
+    else:
+        au_status, au_detail = 'action_required', 'Status: Warning'
+    events.append({
+        'event': 'authenticity_verification', 'label': 'Authenticity Verification',
+        'status': au_status, 'detail': au_detail, 'timestamp': None,
+    })
+
+    # 5. Anomaly Evaluation — an 'informational' anomaly (already
+    # reviewed/dismissed, or a low-risk pattern) never blocks this step;
+    # only a 'blocking' one does.
+    anomalies = context.get('anomalies') or []
+    blocking_anomalies = [a for a in anomalies if a.get('classification') == 'blocking']
+    if blocking_anomalies:
+        an_status, an_detail = 'action_required', 'Status: Review Required'
+    else:
+        an_status, an_detail = 'completed', 'Status: No Blocking Issue'
+    events.append({
+        'event': 'anomaly_evaluation', 'label': 'Anomaly Evaluation',
+        'status': an_status, 'detail': an_detail, 'timestamp': None,
+    })
+
+    # 6. Auditor Review — the most recent AUDITOR action only;
+    # 'resubmitted' is a FINANCE action, reported separately as Finance
+    # Correction below, never conflated with this step.
+    audit_history = context.get('audit_history') or []
+    auditor_actions = [h for h in audit_history if h.get('action') in ('approved', 'returned', 'need_review')]
+    cycle = context.get('send_back_cycle')
+    if auditor_actions:
+        latest = auditor_actions[-1]
+        if latest['action'] == 'returned':
+            reason = (cycle or {}).get('auditor_instruction') or latest.get('remarks') or 'Sent back to Finance for correction'
+            events.append({
+                'event': 'auditor_review', 'label': 'Auditor Review Action',
+                'status': 'action_required', 'detail': 'Returned to Finance',
+                'reason': reason, 'timestamp': latest.get('reviewed_at'),
+            })
+        elif latest['action'] == 'approved':
+            events.append({
+                'event': 'auditor_review', 'label': 'Auditor Review Action',
+                'status': 'completed', 'detail': 'Approved',
+                'timestamp': latest.get('reviewed_at'),
+            })
+        else:  # need_review
+            events.append({
+                'event': 'auditor_review', 'label': 'Auditor Review Action',
+                'status': 'action_required', 'detail': 'Marked for further review',
+                'timestamp': latest.get('reviewed_at'),
+            })
+    else:
+        events.append({
+            'event': 'auditor_review', 'label': 'Auditor Review',
+            'status': 'pending', 'detail': 'Awaiting auditor review', 'timestamp': None,
+        })
+
+    # 7. Finance Correction — only shown when this record was actually
+    # returned via the structured send-back form at least once; a
+    # record that was never returned has nothing to show here.
+    if cycle:
+        cycle_status = cycle.get('cycle_status')
+        if cycle_status == 'action_required':
+            fc_status, fc_detail = 'action_required', 'Awaiting submission'
+        elif cycle_status in ('resubmitted', 'resolved'):
+            fc_status, fc_detail = 'completed', 'Completed'
+        else:
+            fc_status, fc_detail = 'pending', cycle_status or 'Pending'
+        events.append({
+            'event': 'finance_correction', 'label': 'Finance Correction',
+            'status': fc_status, 'detail': fc_detail,
+            'timestamp': cycle.get('sent_back_at'),
+        })
+
+    # 8. Final Approval
+    if context.get('document_status') == 'approved':
+        events.append({
+            'event': 'final_approval', 'label': 'Final Approval',
+            'status': 'completed', 'detail': 'Approved', 'timestamp': None,
+        })
+    else:
+        events.append({
+            'event': 'final_approval', 'label': 'Final Approval',
+            'status': 'pending', 'detail': 'Pending', 'timestamp': None,
+        })
+
+    return events
+
+
+def _require_timeline_access(document_id):
+    """Returns (user, None) on success, or (None, (response, status)) to
+    return immediately — same role-check pattern as routes/ai_assistant.
+    py's _require_auditor()/_require_finance_owner(). Auditor: any
+    document. Finance Executive: only documents they uploaded
+    themselves — same ownership rule as serve_document_file above."""
+    user_id = get_jwt_identity()
+    user = get_user_by_id(user_id)
+
+    if user['role'] not in ('auditor', 'finance_executive'):
+        return None, (jsonify({'error': 'Access denied'}), 403)
+
+    if user['role'] == 'finance_executive':
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute('SELECT uploaded_by FROM documents WHERE document_id = %s', (document_id,))
+        doc_row = cursor.fetchone()
+        conn.close()
+        if not doc_row:
+            return None, (jsonify({'error': 'Invoice document not found'}), 404)
+        if doc_row['uploaded_by'] != user['user_id']:
+            return None, (jsonify({'error': 'Access denied'}), 403)
+
+    return user, None
+
+
+# ------------------------------------------------------------
+# GET DOCUMENT WORKFLOW TIMELINE
+# GET /documents/<document_id>/timeline
+# ------------------------------------------------------------
+@documents_bp.route('/<int:document_id>/timeline', methods=['GET'])
+@jwt_required()
+def get_document_timeline(document_id):
+    _, err = _require_timeline_access(document_id)
+    if err:
+        return err
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        context = _build_case_context(cursor, document_id)
+        conn.close()
+
+        if context is None:
+            return jsonify({'error': 'Invoice document not found'}), 404
+
+        events = _build_timeline_events(context)
+        return jsonify({'document_id': document_id, 'events': events}), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500

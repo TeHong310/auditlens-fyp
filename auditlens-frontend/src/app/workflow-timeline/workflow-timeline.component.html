@@ -1,0 +1,20 @@
+<div class="wt-card">
+  <p class="wt-title"><i class="ph-duotone ph-clock-counter-clockwise"></i> Document Workflow Timeline</p>
+
+  <p class="wt-loading" *ngIf="isLoading">Loading timeline…</p>
+  <p class="wt-error" *ngIf="!isLoading && errorMessage">{{ errorMessage }}</p>
+
+  <div class="wt-list" *ngIf="!isLoading && !errorMessage && events.length">
+    <div class="wt-item" *ngFor="let ev of events; let last = last" [class.wt-last]="last">
+      <div class="wt-marker" [ngClass]="statusClass(ev.status)">
+        <i class="ph-duotone" [ngClass]="statusIcon(ev.status)"></i>
+      </div>
+      <div class="wt-content">
+        <p class="wt-label">{{ ev.label }}</p>
+        <p class="wt-detail" *ngIf="ev.detail">{{ ev.detail }}</p>
+        <p class="wt-reason" *ngIf="ev.reason"><span class="wt-reason-label">Reason:</span> {{ ev.reason }}</p>
+        <p class="wt-timestamp" *ngIf="ev.timestamp">{{ formatDate(ev.timestamp) }}</p>
+      </div>
+    </div>
+  </div>
+</div>
