@@ -120,6 +120,82 @@
   border-left-color: var(--danger);
 }
 
+/* Exception Summary — compact, evidence-first card below the status
+   banner. Deliberately plain (no gradients/animation) — a professional
+   audit-software read, not a highlighted "alert" competing with the
+   banner above it. */
+.exception-summary-card {
+  background: var(--bg-card);
+  border-radius: 12px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  border-left: 3px solid var(--border-hover);
+}
+
+.es-heading {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.es-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.es-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  min-width: 60px;
+  flex-shrink: 0;
+}
+
+.es-value {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.risk-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.risk-chip.risk-high   { background: var(--danger-bg);  color: var(--danger); }
+.risk-chip.risk-medium { background: var(--warning-bg); color: var(--warning); }
+.risk-chip.risk-low    { background: var(--success-bg); color: var(--success); }
+
+.es-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding-top: 8px;
+  margin-top: 6px;
+  border-top: 1px solid var(--bg-hover);
+}
+
+.es-evidence-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.es-evidence-item i { color: var(--danger); }
+
 /* Main Content */
 .content-row {
   display: grid;
@@ -506,6 +582,22 @@
 .doc-info-value { color: var(--text-primary); font-weight: 600; }
 
 /* Finance Response / Changes Since Send Back (Feature 4) */
+.audit-impact-box,
+.suggested-action-box {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.impact-text,
+.suggested-action-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
 .finance-response-box {
   background: var(--bg-hover);
   border: 1px solid var(--border);
@@ -923,6 +1015,26 @@
   margin: 0;
   padding-left: 18px;
 }
+
+.sb-context-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-soft);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.sb-context-note i { margin-top: 2px; }
+
+.sb-context-line { color: var(--text-primary); line-height: 1.5; }
+.sb-context-line + .sb-context-line { margin-top: 2px; }
+
+.sb-context-label { font-weight: 700; color: var(--text-primary); }
 
 .sb-field { margin-bottom: 14px; }
 

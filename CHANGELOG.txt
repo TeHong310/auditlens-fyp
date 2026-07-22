@@ -6997,3 +6997,86 @@ Setup/config needed:
      verify the 2025-2027 movable-holiday dates in helpers/malaysia_
      calendar.py against the official JPA public holiday gazette and
      correct any that have since been officially confirmed differently.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-22
+What was changed:
+  Frontend (auditlens-frontend/) — 3 files, all inside the Auditor
+  Record Detail page (the actual "Exception Investigation" experience —
+  the Exceptions list page just navigates here):
+    - auditor-record-detail.component.ts:
+        - getBannerText()/getBannerSubtitle() reworded ("Documents
+          Incomplete" -> "Missing Supporting Documents", "Not
+          Uploaded"/"Some documents missing" -> "Missing"/"Awaiting
+          Finance action" wording throughout).
+        - Added pure getters that classify the ALREADY-LOADED
+          `comparison` object (no new HTTP calls, no AI calls):
+          missingDocs, isMissingDocumentsIssue, mismatchedFields,
+          exceptionIssueTitle, exceptionRiskLevel, exceptionRiskClass,
+          evidenceListLabel, evidenceList, exceptionImpactShort,
+          auditImpact, suggestedAction, sendBackContextNote.
+        - openSendBackModal() now pre-fills reasonCategory=
+          'missing_document' and requiredActions=['upload_missing_
+          document'] when the record's issue is a missing-document
+          case (still fully editable; send-back submit/validation
+          logic untouched).
+    - auditor-record-detail.component.html:
+        - New "Exception Summary" card below the status banner
+          (Issue / Risk / Impact / missing-document checklist), shown
+          only when there's an actual exception (hidden for PASS).
+        - New "Audit Impact" and "Suggested Action" boxes inside the
+          decision card, above the existing Audit Note/Decision
+          buttons — short static sentences derived from the same
+          classification, reusing the existing .subsection-title style.
+        - Replaced every "Not Uploaded" instance (column headers, PO/GR
+          table cells, Source Documents button titles/filenames) with
+          "Missing" + an "Awaiting Finance Submission" hint; swapped
+          the misleading upload-arrow icon for an hourglass icon since
+          these cells were never clickable/interactive.
+        - Send Back modal: added a small context note ("Reason: Missing
+          supporting documents" / "Required Action: Upload ...") above
+          the existing form fields for the missing-document case only.
+    - auditor-record-detail.component.css:
+        - New styles for .exception-summary-card, .es-*, .risk-chip
+          (+ high/medium/low variants mirroring the existing
+          .priority-chip pattern), .audit-impact-box/.suggested-
+          action-box (reusing the .finance-response-box visual
+          language), .sb-context-note (accent-colored, distinct from
+          the danger-colored .error-box).
+
+Why:
+  The Exception Investigation workflow (Record Detail page) worked
+  correctly but made auditors re-derive the same information already
+  visible in the Field Comparison table every time: what's actually
+  wrong, how serious it is, why it blocks approval, and what to ask
+  Finance for. This was a frontend-only, presentation-layer pass to
+  surface that same data more directly — no redesign, no new backend
+  endpoints, no AI calls, no changes to extraction/OCR/three-way
+  matching/authenticity/anomaly detection/send-back backend logic or
+  the database schema. Every new UI element reads only the
+  `comparison` object the page already fetches via the existing
+  GET /auditor/record/<id>/comparison call.
+
+Testing:
+  - `npx ng build --configuration production`: succeeded (exit 0).
+    Only pre-existing bundle-size budget warnings (not errors, not
+    caused by this change beyond the expected small CSS growth).
+  - `npx ng test --watch=false`: 47/48 pass. The 1 failure is the same
+    pre-existing, unrelated app.spec.ts issue seen in every prior task
+    this session — confirmed via `git diff --stat` showing zero
+    changes to that file.
+  - `git diff --stat` against the full forbidden-file list (extraction
+    pipeline, Claude/Gemini integration, OCR, regex validation,
+    three-way matching, authenticity logic, anomaly detection,
+    send-back backend workflow in routes/reviews.py, database schema/
+    migrations): confirms only the 3 frontend files above changed.
+    Zero backend files touched.
+  - Zero Claude API calls, zero Gemini API calls, zero new AI
+    generation, zero fabricated/mock audit data — every new UI element
+    is a pure derivation of data the page already loads.
+
+Setup/config needed:
+  1. Redeploy the Render FRONTEND.
+  2. No backend redeploy needed (no backend changes).
+  3. No config changes needed.

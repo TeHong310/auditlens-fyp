@@ -322,6 +322,15 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
 
   openSendBackModal() {
     this.sendBack = emptySendBackForm();
+    // UI guidance only — pre-fills the obvious reason/required action
+    // for a missing-document record so the auditor doesn't have to
+    // re-derive what's already visible in the Field Comparison table.
+    // Every field remains fully editable; send-back validation/
+    // submission logic is untouched.
+    if (this.isMissingDocumentsIssue) {
+      this.sendBack.reasonCategory = 'missing_document';
+      this.sendBack.requiredActions = ['upload_missing_document'];
+    }
     this.sendBackErrors = [];
     this.showSendBackModal = true;
   }
@@ -439,17 +448,128 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     if (this.overallStatus === 'PASS') return 'All Fields Match';
     if (this.overallStatus === 'FAIL') return 'Mismatch Detected';
     if (this.overallStatus === 'REVIEW') return 'Review Required';
-    return 'Documents Incomplete';
+    return 'Missing Supporting Documents';
   }
 
   getBannerSubtitle(): string {
     if (this.overallStatus === 'PASS') return 'Ready for approval';
     if (this.overallStatus === 'FAIL') return 'Review required — see highlighted rows';
     if (this.overallStatus === 'REVIEW') return 'Some fields differ — see highlighted rows';
-    if (this.comparison && !this.comparison.po && !this.comparison.gr) return 'Awaiting PO and GR upload';
-    if (this.comparison && !this.comparison.po) return 'Awaiting PO upload';
-    if (this.comparison && !this.comparison.gr) return 'Awaiting GR upload';
-    return 'Some documents missing';
+    if (this.comparison && !this.comparison.po && !this.comparison.gr) return 'Awaiting Finance submission — PO and GR required';
+    if (this.comparison && !this.comparison.po) return 'Awaiting Finance submission — PO required';
+    if (this.comparison && !this.comparison.gr) return 'Awaiting Finance submission — GR required';
+    return 'Awaiting Finance action';
+  }
+
+  // ── Exception Summary / Audit Impact / Suggested Action ─────────
+  // Display-only classification derived purely from `comparison`
+  // (already loaded for the Field Comparison table below — no new API
+  // call, nothing fabricated). Mirrors the SAME severity/priority
+  // reasoning routes/auditor.py::_classify_exception() already uses
+  // (mismatch outranks a missing document) without calling or
+  // duplicating that backend logic — this is presentation only, for
+  // the ONE record already open on this page.
+
+  get missingDocs(): string[] {
+    if (!this.comparison) return [];
+    const missing: string[] = [];
+    if (!this.comparison.po) missing.push('Purchase Order');
+    if (!this.comparison.gr) missing.push('Goods Receipt');
+    return missing;
+  }
+
+  get isMissingDocumentsIssue(): boolean {
+    return this.overallStatus === 'PARTIAL' && this.missingDocs.length > 0;
+  }
+
+  get mismatchedFields(): string[] {
+    if (!this.comparison) return [];
+    const mr = this.comparison.match_result;
+    const fields: string[] = [];
+    if (mr.vendor_match === false) fields.push('Vendor / Supplier');
+    if (mr.amount_match === false) fields.push('Amount');
+    if (mr.line_items_match === false) fields.push('Line Items');
+    if (mr.po_reference_match === false) fields.push('PO Reference');
+    if (mr.line_items_price_match === false) fields.push('Line Item Amount');
+    return fields;
+  }
+
+  // '' means "no exception to summarize" — the Exception Summary card
+  // is hidden entirely for a clean PASS record rather than showing an
+  // empty/meaningless card.
+  get exceptionIssueTitle(): string {
+    if (this.overallStatus === 'FAIL') return 'Field Mismatch Detected';
+    if (this.overallStatus === 'REVIEW') return 'Fields Require Review';
+    if (this.isMissingDocumentsIssue) return 'Missing Supporting Documents';
+    return '';
+  }
+
+  get exceptionRiskLevel(): string {
+    if (this.overallStatus === 'FAIL') return 'High';
+    if (this.overallStatus === 'REVIEW') return 'Medium';
+    if (this.isMissingDocumentsIssue) return 'Medium';
+    return '';
+  }
+
+  exceptionRiskClass(level: string): string {
+    if (level === 'High') return 'risk-high';
+    if (level === 'Medium') return 'risk-medium';
+    return 'risk-low';
+  }
+
+  get evidenceListLabel(): string {
+    if (this.isMissingDocumentsIssue) return 'Missing';
+    if (this.overallStatus === 'FAIL' || this.overallStatus === 'REVIEW') return 'Affected Fields';
+    return '';
+  }
+
+  get evidenceList(): string[] {
+    if (this.isMissingDocumentsIssue) return this.missingDocs;
+    if (this.overallStatus === 'FAIL' || this.overallStatus === 'REVIEW') return this.mismatchedFields;
+    return [];
+  }
+
+  // Short line for the Exception Summary card.
+  get exceptionImpactShort(): string {
+    if (this.overallStatus === 'FAIL') return 'Invoice cannot be reliably matched against PO/GR records.';
+    if (this.overallStatus === 'REVIEW') return 'Some fields differ across documents and need verification.';
+    if (this.isMissingDocumentsIssue) return 'Three-way matching cannot be completed.';
+    return '';
+  }
+
+  // Fuller sentence for the standalone Audit Impact card.
+  get auditImpact(): string {
+    if (this.overallStatus === 'FAIL') {
+      return 'Invoice approval cannot be fully validated because key fields do not match across Invoice, PO and GR.';
+    }
+    if (this.overallStatus === 'REVIEW') {
+      return 'Invoice approval cannot be fully validated until the differing fields are reviewed and confirmed.';
+    }
+    if (this.isMissingDocumentsIssue) {
+      return 'Invoice approval cannot be fully validated because supporting documents are incomplete.';
+    }
+    return '';
+  }
+
+  get suggestedAction(): string {
+    if (this.isMissingDocumentsIssue) {
+      return `Request Finance team to provide the missing ${this.missingDocs.join(' and ')} before approval.`;
+    }
+    if (this.overallStatus === 'FAIL') {
+      return 'Verify the mismatched fields with Finance or the vendor. Send the record back for correction if the discrepancy cannot be explained.';
+    }
+    if (this.overallStatus === 'REVIEW') {
+      return 'Review the differing fields closely. Approve only if the difference is explainable, otherwise request clarification from Finance.';
+    }
+    return '';
+  }
+
+  // Shown inside the Send Back modal (Feature 5) only for the missing-
+  // document case, matching the task's own example wording exactly —
+  // UI guidance only, the auditor can still change every field.
+  get sendBackContextNote(): string {
+    if (!this.isMissingDocumentsIssue) return '';
+    return this.missingDocs.join(' and ');
   }
 
   // ── Field comparison table helpers ──────────────────────

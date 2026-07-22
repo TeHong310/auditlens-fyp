@@ -52,6 +52,31 @@
       </div>
     </div>
 
+    <!-- Exception Summary — compact, evidence-first framing of the
+         issue: what's wrong, how serious, why it matters, what's
+         missing/affected. Hidden entirely for a clean PASS record. -->
+    <div class="exception-summary-card" *ngIf="exceptionIssueTitle">
+      <p class="es-heading"><i class="ph-duotone ph-magnifying-glass"></i> Exception Summary</p>
+      <div class="es-row">
+        <span class="es-label">Issue</span>
+        <span class="es-value">{{ exceptionIssueTitle }}</span>
+      </div>
+      <div class="es-row">
+        <span class="es-label">Risk</span>
+        <span class="risk-chip" [ngClass]="exceptionRiskClass(exceptionRiskLevel)">{{ exceptionRiskLevel }}</span>
+      </div>
+      <div class="es-row">
+        <span class="es-label">Impact</span>
+        <span class="es-value">{{ exceptionImpactShort }}</span>
+      </div>
+      <div class="es-evidence" *ngIf="evidenceList.length">
+        <span class="es-label">{{ evidenceListLabel }}</span>
+        <span class="es-evidence-item" *ngFor="let item of evidenceList">
+          <i class="ph-duotone" [ngClass]="isMissingDocumentsIssue ? 'ph-x-circle' : 'ph-warning'"></i> {{ item }}
+        </span>
+      </div>
+    </div>
+
     <!-- Success / Error -->
     <div class="success-box" *ngIf="successMessage"><i class="ph-duotone ph-check-circle"></i> {{ successMessage }}</div>
     <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
@@ -81,13 +106,13 @@
                   <th>
                     <div class="col-head">PO</div>
                     <span class="col-badge" [ngClass]="comparison.po ? 'col-badge-uploaded' : 'col-badge-missing'">
-                      {{ comparison.po ? 'Uploaded' : 'Not Uploaded' }}
+                      {{ comparison.po ? 'Uploaded' : 'Missing' }}
                     </span>
                   </th>
                   <th>
                     <div class="col-head">GR</div>
                     <span class="col-badge" [ngClass]="comparison.gr ? 'col-badge-uploaded' : 'col-badge-missing'">
-                      {{ comparison.gr ? 'Uploaded' : 'Not Uploaded' }}
+                      {{ comparison.gr ? 'Uploaded' : 'Missing' }}
                     </span>
                   </th>
                 </tr>
@@ -105,9 +130,9 @@
                     <div class="cell-main-value">{{ comparison.po.vendor_name || '-' }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload PO</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                    <span class="not-uploaded-label">Missing</span>
+                    <span class="upload-hint">Awaiting Finance Submission</span>
                   </td>
                   <td class="cell-value" *ngIf="comparison.gr">
                     <span class="match-pill" [ngClass]="matchPillClass(vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name))">
@@ -117,9 +142,9 @@
                     <div class="cell-main-value">{{ comparison.gr.vendor_name || '-' }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload GR</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                    <span class="not-uploaded-label">Missing</span>
+                    <span class="upload-hint">Awaiting Finance Submission</span>
                   </td>
                 </tr>
 
@@ -140,17 +165,17 @@
                     <div class="cell-main-value">{{ comparison.po.po_no || '-' }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload PO</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                    <span class="not-uploaded-label">Missing</span>
+                    <span class="upload-hint">Awaiting Finance Submission</span>
                   </td>
                   <td class="cell-value" *ngIf="comparison.gr">
                     <div class="cell-main-value">{{ comparison.gr.po_reference || '-' }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload GR</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                    <span class="not-uploaded-label">Missing</span>
+                    <span class="upload-hint">Awaiting Finance Submission</span>
                   </td>
                 </tr>
 
@@ -183,9 +208,9 @@
                     <div class="cell-main-value cell-quantity" *ngIf="!li.missing_on_po">{{ formatQuantity(li.po_quantity) }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload PO</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                    <span class="not-uploaded-label">Missing</span>
+                    <span class="upload-hint">Awaiting Finance Submission</span>
                   </td>
                   <td class="cell-value" *ngIf="comparison.gr">
                     <span class="match-pill" [ngClass]="lineItemPillClass(li, 'gr')">
@@ -194,9 +219,9 @@
                     <div class="cell-main-value cell-quantity" *ngIf="!li.missing_on_gr">{{ formatQuantity(li.gr_quantity) }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload GR</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                    <span class="not-uploaded-label">Missing</span>
+                    <span class="upload-hint">Awaiting Finance Submission</span>
                   </td>
                 </tr>
                 <tr *ngIf="!comparison.line_items || comparison.line_items.length === 0">
@@ -218,18 +243,18 @@
                     <div class="cell-main-value cell-amount">{{ formatAmount(comparison.po.total_amount, comparison.po.currency) }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload PO</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                    <span class="not-uploaded-label">Missing</span>
+                    <span class="upload-hint">Awaiting Finance Submission</span>
                   </td>
                   <td class="cell-value" *ngIf="comparison.gr">
                     <span class="match-pill pill-na"><i class="ph-duotone ph-minus"></i> N/A</span>
                     <div class="cell-main-value cell-muted">No amount on GR</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload GR</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                    <span class="not-uploaded-label">Missing</span>
+                    <span class="upload-hint">Awaiting Finance Submission</span>
                   </td>
                 </tr>
 
@@ -241,17 +266,17 @@
                     <div class="cell-main-value cell-docno">{{ comparison.po.po_no || '-' }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload PO</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                    <span class="not-uploaded-label">Missing</span>
+                    <span class="upload-hint">Awaiting Finance Submission</span>
                   </td>
                   <td class="cell-value" *ngIf="comparison.gr">
                     <div class="cell-main-value cell-docno">{{ comparison.gr.gr_no || '-' }}</div>
                   </td>
                   <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-arrow-circle-up"></i></span>
-                    <span class="not-uploaded-label">Not Uploaded</span>
-                    <span class="upload-hint">+ Upload GR</span>
+                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                    <span class="not-uploaded-label">Missing</span>
+                    <span class="upload-hint">Awaiting Finance Submission</span>
                   </td>
                 </tr>
               </tbody>
@@ -270,21 +295,21 @@
                 </span>
               </button>
               <button class="btn-view-doc" [disabled]="!isDocAvailable('po')"
-                      [title]="!isDocAvailable('po') ? 'Not uploaded' : ''"
+                      [title]="!isDocAvailable('po') ? 'Missing — awaiting Finance submission' : ''"
                       (click)="openDocModal('po')">
                 <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
                 <span class="btn-view-doc-text">
                   <span class="btn-view-doc-label">View PO</span>
-                  <span class="btn-view-doc-filename">{{ comparison.po?.filename || 'Not uploaded' }}</span>
+                  <span class="btn-view-doc-filename">{{ comparison.po?.filename || 'Missing' }}</span>
                 </span>
               </button>
               <button class="btn-view-doc" [disabled]="!isDocAvailable('gr')"
-                      [title]="!isDocAvailable('gr') ? 'Not uploaded' : ''"
+                      [title]="!isDocAvailable('gr') ? 'Missing — awaiting Finance submission' : ''"
                       (click)="openDocModal('gr')">
                 <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
                 <span class="btn-view-doc-text">
                   <span class="btn-view-doc-label">View GR</span>
-                  <span class="btn-view-doc-filename">{{ comparison.gr?.filename || 'Not uploaded' }}</span>
+                  <span class="btn-view-doc-filename">{{ comparison.gr?.filename || 'Missing' }}</span>
                 </span>
               </button>
             </div>
@@ -315,6 +340,14 @@
             <span class="doc-info-label">Date</span>
             <span class="doc-info-value">{{ formatDate(comparison.invoice.invoice_date) }}</span>
           </div>
+        </div>
+
+        <!-- Audit Impact — a short, static sentence explaining why the
+             detected issue matters, wording chosen from the same
+             classification the Exception Summary card uses above. -->
+        <div class="audit-impact-box" *ngIf="auditImpact">
+          <p class="subsection-title"><i class="ph-duotone ph-shield-warning"></i> Audit Impact</p>
+          <p class="impact-text">{{ auditImpact }}</p>
         </div>
 
         <!-- Finance Response (Feature 4) — only once Finance has replied -->
@@ -354,6 +387,13 @@
             <p class="history-label">{{ historyLabel(h.action) }}<ng-container *ngIf="h.reviewer_name"> by {{ h.reviewer_name }}</ng-container></p>
             <p class="history-remarks" *ngIf="h.remarks">{{ h.remarks }}</p>
           </div>
+        </div>
+
+        <!-- Suggested Action — UI guidance only, does not modify the
+             send-back/approve logic below it. -->
+        <div class="suggested-action-box" *ngIf="suggestedAction">
+          <p class="subsection-title"><i class="ph-duotone ph-lightbulb"></i> Suggested Action</p>
+          <p class="suggested-action-text">{{ suggestedAction }}</p>
         </div>
 
         <!-- Audit Note -->
@@ -403,6 +443,18 @@
           <ul class="sendback-error-list">
             <li *ngFor="let e of sendBackErrors">{{ e }}</li>
           </ul>
+        </div>
+
+        <!-- Clearer context (Feature 5) — reason/required action are
+             already pre-filled below for the missing-document case;
+             this note just makes that visible at a glance. Auditor can
+             still change any field; send-back logic itself is untouched. -->
+        <div class="sb-context-note" *ngIf="sendBackContextNote">
+          <i class="ph-duotone ph-info"></i>
+          <div>
+            <p class="sb-context-line"><span class="sb-context-label">Reason:</span> Missing supporting documents</p>
+            <p class="sb-context-line"><span class="sb-context-label">Required Action:</span> Upload {{ sendBackContextNote }}</p>
+          </div>
         </div>
 
         <div class="sb-field">
