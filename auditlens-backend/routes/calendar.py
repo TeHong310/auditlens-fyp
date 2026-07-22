@@ -26,6 +26,7 @@ from helpers.send_back import is_overdue
 from helpers.calendar_events import (
     validate_task_payload, exception_to_calendar_event, anomaly_to_calendar_event,
 )
+from helpers.malaysia_calendar import get_public_holidays_in_range, deadline_status
 from routes.auditor import _build_comparison, _classify_exception
 
 calendar_bp = Blueprint('calendar', __name__)
@@ -116,6 +117,11 @@ def _finance_correction_events(cursor, owner_user_id=None):
             'description':       row['auditor_instruction'],
             'status':            'Overdue' if overdue else 'Awaiting Finance correction',
             'reason_category':   row['return_reason_category'],
+            # Working-day-aware deadline (Malaysia business calendar) —
+            # only computed when a real response_due_date was actually
+            # set (not the sent_back_at fallback used for `date` above,
+            # which is just when the cycle started, not a deadline).
+            'deadline':          deadline_status(row['response_due_date']),
         })
     return events
 
@@ -197,6 +203,10 @@ def _manual_task_events(cursor, user_id):
             'assigned_to':      row['assigned_to'],
             'assigned_to_name': row['assigned_to_name'],
             'created_by_name':  row['created_by_name'],
+            # calendar_tasks.event_date is NOT NULL, so a manual task
+            # always has a working-day-aware deadline — the frontend
+            # decides whether to still show it once status is 'done'.
+            'deadline':         deadline_status(row['event_date']),
         })
     return events
 
@@ -246,7 +256,14 @@ def get_calendar_events():
 
         events.sort(key=lambda e: e['date'] or '')
 
-        return jsonify({'total': len(events), 'events': events}), 200
+        # Malaysian public holidays (Feature 1) — kept in a SEPARATE
+        # `holidays` array, never merged into `events`, so the existing
+        # event shape/sources are completely unmodified and the
+        # frontend can render holidays as clearly-distinct, non-action
+        # markers rather than another workflow event card.
+        holidays = get_public_holidays_in_range(start, end) if (start and end) else []
+
+        return jsonify({'total': len(events), 'events': events, 'holidays': holidays}), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500

@@ -104,6 +104,57 @@ describe('CalendarComponent', () => {
     expect(day?.events[0].title).toBe('Review IX1');
   });
 
+  it('loadEvents captures the separate `holidays` array from the response', () => {
+    component.viewMonth = new Date(2026, 7, 1); // August 2026
+    component.loadEvents();
+
+    const req = httpMock.expectOne(`${environment.apiUrl}/calendar/events?start=2026-08-01&end=2026-08-31`);
+    req.flush({ total: 0, events: [], holidays: [{ date: '2026-08-31', name: 'Merdeka Day (National Day)' }] });
+
+    expect(component.holidays.length).toBe(1);
+    const day = component.calendarDays.find(d => d.iso === '2026-08-31');
+    expect(day?.holiday?.name).toBe('Merdeka Day (National Day)');
+    // A day with no holiday must not get one fabricated.
+    const otherDay = component.calendarDays.find(d => d.iso === '2026-08-15');
+    expect(otherDay?.holiday).toBeNull();
+  });
+
+  it('deadlineLabel renders "Due in N working days" / "Overdue by N working days" / "Due today"', () => {
+    const dueSoon = { deadline: { working_days: 3, overdue: false } } as any;
+    expect(component.deadlineLabel(dueSoon)).toBe('Due in 3 working days');
+
+    const dueOne = { deadline: { working_days: 1, overdue: false } } as any;
+    expect(component.deadlineLabel(dueOne)).toBe('Due in 1 working day');
+
+    const dueToday = { deadline: { working_days: 0, overdue: false } } as any;
+    expect(component.deadlineLabel(dueToday)).toBe('Due today');
+
+    const overdue = { deadline: { working_days: 2, overdue: true } } as any;
+    expect(component.deadlineLabel(overdue)).toBe('Overdue by 2 working days');
+  });
+
+  it('showDeadline hides the indicator once a manual task is marked done', () => {
+    const openTask = { event_type: 'manual_task', status: 'open', deadline: { working_days: 2, overdue: false } } as any;
+    expect(component.showDeadline(openTask)).toBe(true);
+
+    const doneTask = { event_type: 'manual_task', status: 'done', deadline: { working_days: 2, overdue: false } } as any;
+    expect(component.showDeadline(doneTask)).toBe(false);
+    expect(component.deadlineLabel(doneTask)).toBe('');
+  });
+
+  it('showDeadline is false for event types with no deadline (pending review, exceptions, anomalies)', () => {
+    const event = { event_type: 'pending_review', status: 'under_review', deadline: null } as any;
+    expect(component.showDeadline(event)).toBe(false);
+  });
+
+  it('deadlineClass maps urgency to a color bucket', () => {
+    expect(component.deadlineClass({ deadline: { working_days: 5, overdue: false } } as any)).toBe('deadline-ok');
+    expect(component.deadlineClass({ deadline: { working_days: 1, overdue: false } } as any)).toBe('deadline-soon');
+    expect(component.deadlineClass({ deadline: { working_days: 0, overdue: false } } as any)).toBe('deadline-soon');
+    expect(component.deadlineClass({ deadline: { working_days: 4, overdue: true } } as any)).toBe('deadline-overdue');
+    expect(component.deadlineClass({ deadline: null } as any)).toBe('');
+  });
+
   it('submitTask blocks an invalid form and never calls the API', () => {
     component.taskForm = emptyTaskForm('');
     component.taskForm.title = '';

@@ -6826,3 +6826,174 @@ Setup/config needed:
      exceptions / anomalies show up for an auditor, confirm a finance
      user only sees their own correction-due items, and create + mark
      complete a manual task from each role.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-22
+What was changed:
+  Malaysia business-calendar awareness added to the existing Audit
+  Workflow Calendar — presentation and date-calculation only. NOT a UI
+  redesign: the monthly grid, event chips, modals, and every existing
+  event source/query are untouched; this only ADDS holiday markers and
+  a working-day deadline indicator on top of what already existed.
+
+  Backend (auditlens-backend/):
+    - NEW helpers/malaysia_calendar.py (pure functions only — no DB, no
+      Flask, no AI calls):
+        - Timezone: MALAYSIA_TZ is a fixed UTC+8 `timezone` offset, used
+          instead of `zoneinfo.ZoneInfo('Asia/Kuala_Lumpur')` deliberately
+          — Malaysia has had a single, unchanging UTC+8 offset with NO
+          daylight saving since 1982, so the fixed offset is exactly
+          equivalent for every date, past or future, with zero new
+          dependency (zoneinfo needs the `tzdata` PyPI package on
+          Windows dev machines; the fixed offset needs nothing extra
+          and works identically on Render's Linux too).
+        - Public holidays: `_fixed_holidays(year)` (New Year, Labour
+          Day, Merdeka Day, Malaysia Day, Christmas — exact for any
+          year) and `_rule_based_holidays(year)` (Yang di-Pertuan
+          Agong's Birthday = first Monday of June, computed exactly via
+          a day-of-week rule, not guessed) are precise for any year.
+          `_MOVABLE_HOLIDAYS_BY_YEAR` (Chinese New Year, Hari Raya
+          Aidilfitri, Hari Raya Haji, Wesak Day, Awal Muharram, Maulidur
+          Rasul, Deepavali — Islamic/lunar-calendar dates) is populated
+          for 2025-2027 as best-effort estimates ONLY, with a prominent
+          module-docstring disclosure that these must be reconciled
+          against the official JPA government gazette before being
+          relied on for real compliance decisions — no movable holiday
+          is ever fabricated for an unpopulated year (get_public_
+          holidays() for e.g. 2040 returns only the 6 exact fixed/rule-
+          based entries).
+        - Working-day calculation: is_working_day() excludes Saturday,
+          Sunday, AND any known public holiday. working_days_until()
+          counts working days strictly after a start date up to and
+          including an end date (never negative). deadline_status(due_
+          date, today=malaysia_today()) returns {working_days, overdue}
+          — read as "Due in N working days" (0 = due today) or "Overdue
+          by N working days" — or None when no due date was ever set
+          (never fabricates a deadline).
+    - routes/calendar.py (additive edits only — see `git diff`, zero
+      lines removed from any existing function):
+        - _finance_correction_events(): added `event['deadline'] =
+          deadline_status(row['response_due_date'])` — computed from
+          the send-back cycle's REAL due-date column only, not the
+          sent_back_at fallback already used for grid placement, so a
+          cycle with no due date correctly gets deadline=None rather
+          than an invented one.
+        - _manual_task_events(): added `event['deadline'] =
+          deadline_status(row['event_date'])` — calendar_tasks.
+          event_date is NOT NULL, so every manual task has one; the
+          frontend decides whether to still show it once a task is
+          marked done.
+        - get_calendar_events(): added a SEPARATE `holidays` array to
+          the response (Malaysian public holidays within the requested
+          start/end range) — never merged into the existing `events`
+          array, so pending_review/exception_followup/anomaly_followup
+          (which have no due-date concept) are completely untouched and
+          the existing event shape/sources are unmodified.
+    - tests/calendar/test_malaysia_calendar.py (new, 15 cases / 66
+      checks): fixed-date holidays exact for any year, Agong's Birthday
+      computed correctly as a rule (not guessed) across several years,
+      movable holidays present only for populated years (nothing
+      fabricated for e.g. 2040), Sat/Sun + public-holiday exclusion,
+      working_days_until() across a weekend AND across a public
+      holiday, deadline_status() for due-in-future/overdue/due-today/
+      string-input/no-due-date cases, holiday range queries including a
+      year-boundary span, and the fixed UTC+8 offset.
+    - tests/calendar/test_calendar_routes.py: added cases for the new
+      `holidays` field (present and correctly separate from `events`
+      when start/end are given, empty when they're not) and for
+      `deadline` being None on a finance-correction event that never
+      had a due date set (nothing fabricated).
+    - tests/extraction/run_all.py: registered the new suite.
+  Frontend (auditlens-frontend/src/app/calendar/):
+    - calendar.component.ts: added `holidays: PublicHoliday[]` state
+      (populated from the new `holidays` field in loadEvents()'s
+      response), a `holiday` field on each DayCell (matched by ISO
+      date), a `deadline?: DeadlineInfo | null` field on CalendarEvent,
+      and three new small helpers — showDeadline() (hides the badge for
+      an event type with no deadline, or a manual task already marked
+      done), deadlineLabel() ("Due in N working days" / "Overdue by N
+      working days" / "Due today", singular/plural handled), and
+      deadlineClass() (ok/soon/overdue color bucket). No existing
+      method, grid-generation logic, or interface field was changed.
+    - calendar.component.html: day cells now show a small, non-
+      clickable, distinctly-styled (italic, amber, flag icon) holiday
+      label when `day.holiday` is set — structurally separate from the
+      priority-colored event chips beneath it, never part of
+      `day-events`, so it can never be mistaken for an audit workflow
+      task. The Event Detail modal gained a deadline chip next to the
+      existing date chip; the Day Events list modal gained a small
+      deadline line under each row. No existing element was removed or
+      restructured — the calendar's overall layout is unchanged.
+    - calendar.component.css: added .day-cell-holiday/.holiday-label,
+      .deadline-chip (+ ok/soon/overdue variants), and .day-event-
+      deadline. No existing selector was modified.
+    - calendar.component.spec.ts: added 5 cases — the `holidays` array
+      is captured and correctly attached to the matching day (and NOT
+      to a day with no holiday), deadlineLabel()'s three wordings
+      (including the 1-vs-N-working-days plural), showDeadline() hiding
+      the badge for a completed task and for event types with no
+      deadline concept, and deadlineClass()'s urgency-bucket mapping.
+  Untouched, confirmed via `git diff --stat`: app.py, helpers/send_
+  back.py, helpers/calendar_events.py, every extraction/matching/
+  authenticity/anomaly-detection helper and route file, routes/
+  documents.py, routes/reviews.py (send-back workflow), routes/
+  auditor.py, and both layout files — no existing calendar event source
+  query, the send-back workflow, anomaly logic, authenticity logic, or
+  matching logic was modified in any way.
+
+Why:
+  A due date shown only as a calendar date doesn't tell a Malaysian
+  auditor or Finance user how much real working time is actually left —
+  a "3 days" gap that includes a weekend and Merdeka Day is materially
+  different from 3 working days. Public holidays also weren't visible
+  on the calendar at all, so a task due "tomorrow" that happened to be
+  Hari Raya could look identical to any other day until it was too late.
+
+Tests run and results:
+  - `python tests/extraction/run_all.py`: 16/16 suites PASS (13 pre-
+    existing + 3 calendar suites, 20 previously-added + 15 new cases /
+    66 new checks for malaysia_calendar.py alone).
+  - `npx ng build --configuration production`: clean build (same pre-
+    existing bundle-size budget warnings as before, unrelated).
+  - `npx ng test --watch=false`: 47/48 tests pass (20 calendar tests,
+    5 of them new, all pass); the 1 failure is the same pre-existing,
+    unrelated app.spec.ts issue — confirmed via `git diff --stat`
+    showing zero changes to that file.
+  - Zero Claude API calls, zero Gemini API calls, zero extraction
+    triggered, zero anomalies generated, zero matching logic invoked —
+    every backend test mocks get_db_connection/_build_comparison/
+    _classify_exception/get_user_by_id; the new module makes no network
+    call of any kind (holiday/working-day logic is pure date
+    arithmetic).
+
+Assumptions / disclosures:
+  - Movable Islamic-calendar and lunar-calendar public holidays (Hari
+    Raya Aidilfitri, Hari Raya Haji, Awal Muharram, Maulidur Rasul,
+    Chinese New Year, Wesak Day, Deepavali) for 2025-2027 are best-
+    effort estimates, NOT sourced from a live government feed (none was
+    available to call, and Islamic dates are only officially confirmed
+    close to the date via moon-sighting) — clearly disclosed in the
+    module docstring and MUST be reconciled against the official
+    Malaysian government public holiday gazette (JPA) before being
+    relied on for real compliance/deadline decisions. Fixed-date and
+    day-of-week-rule holidays are exact.
+  - Only FEDERAL-level public holidays are included — state-specific
+    holidays (e.g. Thaipusam, individual state rulers' birthdays) are
+    out of scope, since they don't apply uniformly nationwide and this
+    system has no per-user state setting to key them off.
+  - No "holiday falls on a weekend -> day-in-lieu on the following
+    Monday" substitution logic was added — Malaysia's actual
+    substitution rules vary by holiday type and aren't uniformly
+    documented, so guessing would risk being wrong; holidays are listed
+    exactly on their gazetted date only.
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND — no schema change, no migration, no
+     new environment variables (pure-Python date logic only).
+  2. Redeploy the Render FRONTEND.
+  3. No config changes needed.
+  4. Recommended before relying on this for real audit deadlines:
+     verify the 2025-2027 movable-holiday dates in helpers/malaysia_
+     calendar.py against the official JPA public holiday gazette and
+     correct any that have since been officially confirmed differently.

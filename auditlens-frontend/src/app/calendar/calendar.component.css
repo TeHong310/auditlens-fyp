@@ -161,6 +161,24 @@
 
 .day-cell-today .day-number { color: var(--accent-soft); }
 
+/* Public holiday — a non-action marker, deliberately styled unlike the
+   priority-colored event chips below it (gold/amber, italic, a flag
+   icon) so it reads as informational, never as a workflow task. */
+.day-cell-holiday { background: color-mix(in srgb, var(--warning) 8%, var(--bg-hover)); }
+
+.holiday-label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9.5px;
+  font-weight: 600;
+  font-style: italic;
+  color: var(--warning);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .day-events {
   display: flex;
   flex-direction: column;
@@ -388,6 +406,16 @@
   margin-top: 2px;
 }
 
+.day-event-deadline {
+  font-size: 11px;
+  font-weight: 700;
+  margin-top: 3px;
+}
+
+.day-event-deadline.deadline-ok      { color: var(--accent-soft); }
+.day-event-deadline.deadline-soon     { color: var(--warning); }
+.day-event-deadline.deadline-overdue { color: var(--danger); }
+
 /* Event Detail modal */
 .detail-title {
   font-size: 15px;
@@ -416,6 +444,24 @@
   font-size: 12px;
   color: var(--text-muted);
 }
+
+/* Deadline indicator (Malaysia working-day calendar) — a small, plain-
+   worded badge: "Due in N working days" / "Overdue by N working days".
+   Color only signals urgency (ok/soon/overdue), no new icon family. */
+.deadline-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 14px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.deadline-ok      { background: var(--accent-bg); color: var(--accent-soft); }
+.deadline-soon     { background: var(--warning-bg); color: var(--warning); }
+.deadline-overdue { background: var(--danger-bg); color: var(--danger); }
 
 .detail-label {
   font-size: 10.5px;

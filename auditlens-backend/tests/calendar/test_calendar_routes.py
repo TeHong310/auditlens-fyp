@@ -10,7 +10,7 @@ Usage:
 """
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -189,6 +189,14 @@ def run_case_auditor_sees_all_four_event_types_plus_own_tasks():
     finance_event = next(e for e in body['events'] if e['event_type'] == 'finance_correction_due')
     check('finance correction event carries priority/reason_category', finance_event['priority'] == 'high'
           and finance_event['reason_category'] == 'possible_duplicate_invoice', finance_event)
+    check('finance correction event carries a working-day deadline (response_due_date was set)',
+          finance_event['deadline'] is not None and 'working_days' in finance_event['deadline'], finance_event)
+
+    task_event = next(e for e in body['events'] if e['event_type'] == 'manual_task')
+    check('manual task event carries a working-day deadline (event_date is NOT NULL)',
+          task_event['deadline'] is not None, task_event)
+
+    check('no `holidays` requested without start/end -> empty list', body['holidays'] == [], body['holidays'])
 
 
 def run_case_exception_events_skip_sent_back_type_to_avoid_duplication():
@@ -227,6 +235,42 @@ def run_case_finance_role_only_sees_own_correction_events_no_pending_review():
     types = set(e['event_type'] for e in body['events'])
     check('only finance_correction_due present (no pending_review/exception/anomaly for finance)',
           types == {'finance_correction_due'}, types)
+
+
+def run_case_holidays_returned_when_start_and_end_are_provided():
+    print('Case: GET /calendar/events?start=&end= returns Malaysian public holidays in that range, separate from `events`')
+    db = fresh_db()
+    app, auditor_token, _, _ = make_app(db)
+    client = app.test_client()
+
+    resp = client.get('/calendar/events?start=2026-08-01&end=2026-08-31',
+                       headers={'Authorization': f'Bearer {auditor_token}'})
+    check('200 OK', resp.status_code == 200, resp.get_json())
+    body = resp.get_json()
+    check('events is empty (no rows seeded)', body['events'] == [], body['events'])
+    holiday_names = [h['name'] for h in body['holidays']]
+    check('Merdeka Day present in August 2026', 'Merdeka Day (National Day)' in holiday_names, holiday_names)
+    check('holidays are a structurally separate array from events (not merged in)',
+          all('event_type' not in h for h in body['holidays']), body['holidays'])
+
+
+def run_case_finance_correction_due_has_no_deadline_when_due_date_was_never_set():
+    print('Case: a send-back cycle with no response_due_date has date=sent_back_at fallback but deadline=None (never fabricated)')
+    db = fresh_db()
+    db['finance_correction_rows'] = [{
+        'document_id': 70, 'response_due_date': None, 'priority': 'normal',
+        'return_reason_category': 'incorrect_extracted_information', 'auditor_instruction': 'Fix the amount.',
+        'cycle_status': 'action_required', 'sent_back_at': datetime(2026, 7, 20, 9, 0, 0),
+        'invoice_number': 'IX3', 'vendor_name': 'Epsilon Sdn Bhd',
+    }]
+    app, auditor_token, _, _ = make_app(db)
+    client = app.test_client()
+
+    resp = client.get('/calendar/events', headers={'Authorization': f'Bearer {auditor_token}'})
+    body = resp.get_json()
+    event = next(e for e in body['events'] if e['event_type'] == 'finance_correction_due')
+    check('date still falls back to sent_back_at for grid placement', event['date'] == '2026-07-20', event)
+    check('deadline is None — no due date was ever set, so nothing is fabricated', event['deadline'] is None, event)
 
 
 def run_case_create_task_requires_title_and_date():
@@ -305,6 +349,8 @@ if __name__ == '__main__':
     run_case_auditor_sees_all_four_event_types_plus_own_tasks()
     run_case_exception_events_skip_sent_back_type_to_avoid_duplication()
     run_case_finance_role_only_sees_own_correction_events_no_pending_review()
+    run_case_holidays_returned_when_start_and_end_are_provided()
+    run_case_finance_correction_due_has_no_deadline_when_due_date_was_never_set()
     run_case_create_task_requires_title_and_date()
     run_case_create_task_defaults_assignee_to_self()
     run_case_finance_can_also_create_tasks()

@@ -18,6 +18,16 @@ export type EventType =
 
 export type Priority = 'normal' | 'medium' | 'high';
 
+// Working-day-aware deadline (Malaysia business calendar: Sat/Sun +
+// Malaysian public holidays excluded) — only present on
+// finance_correction_due (when a due date was actually set) and
+// manual_task events; null/absent for the other event types, which
+// have no due-date concept.
+export interface DeadlineInfo {
+  working_days: number; // always >= 0
+  overdue: boolean;
+}
+
 export interface CalendarEvent {
   event_type: EventType;
   date: string; // YYYY-MM-DD
@@ -33,6 +43,12 @@ export interface CalendarEvent {
   assigned_to?: number;
   assigned_to_name?: string;
   created_by_name?: string;
+  deadline?: DeadlineInfo | null;
+}
+
+export interface PublicHoliday {
+  date: string; // YYYY-MM-DD
+  name: string;
 }
 
 interface DayCell {
@@ -41,6 +57,7 @@ interface DayCell {
   inMonth: boolean;
   isToday: boolean;
   events: CalendarEvent[];
+  holiday: PublicHoliday | null;
 }
 
 export interface TaskFormState {
@@ -91,6 +108,11 @@ export class CalendarComponent implements OnInit {
   userRole: 'auditor' | 'finance_executive' | '' = '';
   viewMonth: Date = new Date();
   events: CalendarEvent[] = [];
+  // Malaysian public holidays for the visible month — deliberately kept
+  // as a SEPARATE array from `events` (never merged in), so they render
+  // as clearly-distinct, non-action markers rather than another
+  // workflow event card.
+  holidays: PublicHoliday[] = [];
   isLoading: boolean = false;
   errorMessage: string = '';
 
@@ -189,12 +211,14 @@ export class CalendarComponent implements OnInit {
     }).subscribe({
       next: (res) => {
         this.events = res.events || [];
+        this.holidays = res.holidays || [];
         this.isLoading = false;
         this.cdr.detectChanges();
       },
       error: (err) => {
         this.isLoading = false;
         this.events = [];
+        this.holidays = [];
         this.errorMessage = err.error?.error || 'Failed to load calendar events.';
         this.cdr.detectChanges();
       }
@@ -228,6 +252,7 @@ export class CalendarComponent implements OnInit {
         inMonth: d.getMonth() === m,
         isToday: iso === todayIso,
         events: this.events.filter(e => e.date === iso),
+        holiday: this.holidays.find(h => h.date === iso) || null,
       });
     }
     return days;
@@ -293,6 +318,33 @@ export class CalendarComponent implements OnInit {
   formatEventDate(iso: string): string {
     if (!iso) return '-';
     return this.fromIso(iso).toLocaleDateString('en-MY', { day: 'numeric', month: 'long', year: 'numeric' });
+  }
+
+  // ── Deadline indicator (Malaysia working-day calendar) ──
+  // Only finance_correction_due (with a real due date) and manual_task
+  // events carry `deadline` — every other event type has no due-date
+  // concept, so this simply returns '' for them (nothing rendered).
+  // A completed manual task also hides the indicator — "Overdue" text
+  // on a task that's already done would be misleading.
+
+  showDeadline(event: CalendarEvent): boolean {
+    return !!event.deadline && event.status !== 'done';
+  }
+
+  deadlineLabel(event: CalendarEvent): string {
+    if (!this.showDeadline(event)) return '';
+    const { working_days, overdue } = event.deadline!;
+    const plural = working_days === 1 ? '' : 's';
+    if (overdue) return `Overdue by ${working_days} working day${plural}`;
+    if (working_days === 0) return 'Due today';
+    return `Due in ${working_days} working day${plural}`;
+  }
+
+  deadlineClass(event: CalendarEvent): string {
+    if (!event.deadline) return '';
+    if (event.deadline.overdue) return 'deadline-overdue';
+    if (event.deadline.working_days <= 1) return 'deadline-soon';
+    return 'deadline-ok';
   }
 
   // ── Related action (Event Detail panel) ─────────────────

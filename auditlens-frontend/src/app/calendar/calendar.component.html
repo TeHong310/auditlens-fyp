@@ -29,8 +29,15 @@
       <div class="day-cell" *ngFor="let day of calendarDays"
            [class.day-cell-outside]="!day.inMonth"
            [class.day-cell-today]="day.isToday"
+           [class.day-cell-holiday]="day.holiday"
            (click)="openDay(day)">
         <span class="day-number">{{ day.date.getDate() }}</span>
+        <!-- Public holiday — a non-action marker, structurally and
+             visually separate from the audit workflow event chips
+             below (no click action, no priority coloring). -->
+        <div class="holiday-label" *ngIf="day.holiday" [title]="day.holiday.name">
+          <i class="ph-duotone ph-flag"></i> {{ day.holiday.name }}
+        </div>
         <div class="day-events">
           <div class="event-chip" *ngFor="let event of visibleChips(day)"
                [ngClass]="priorityClass(event.priority)"
@@ -73,6 +80,7 @@
           <div class="day-event-main">
             <p class="day-event-title">{{ event.title }}</p>
             <p class="day-event-type"><i class="ph-duotone" [ngClass]="eventTypeIcon(event.event_type)"></i> {{ eventTypeLabel(event.event_type) }}</p>
+            <p class="day-event-deadline" [ngClass]="deadlineClass(event)" *ngIf="showDeadline(event)">{{ deadlineLabel(event) }}</p>
           </div>
         </div>
       </div>
@@ -93,6 +101,10 @@
           <span class="priority-chip" [ngClass]="priorityClass(selectedEvent.priority)">{{ priorityLabel(selectedEvent.priority) }} priority</span>
           <span class="date-chip">{{ formatEventDate(selectedEvent.date) }}</span>
         </div>
+
+        <span class="deadline-chip" [ngClass]="deadlineClass(selectedEvent)" *ngIf="showDeadline(selectedEvent)">
+          <i class="ph-duotone ph-clock-countdown"></i> {{ deadlineLabel(selectedEvent) }}
+        </span>
 
         <ng-container *ngIf="selectedEvent.invoice_no || selectedEvent.vendor_name">
           <p class="detail-label">Invoice Number</p>
