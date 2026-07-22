@@ -38,11 +38,21 @@
         <span class="sev-label">{{ severityLabel(exc.severity) }}</span>
       </div>
       <div class="exception-body">
+        <!-- Enterprise V3 Phase 6 (STEP 9) — transaction context, shown
+             only when this invoice belongs to a Finance Transaction
+             Package; absent entirely for a standalone/legacy invoice
+             (STEP 10), which keeps looking exactly as before. -->
+        <p class="exc-transaction-line" *ngIf="exc.transaction_context as txn">
+          <i class="ph-duotone ph-package"></i> Transaction: <strong>{{ txn.package_name }}</strong>
+        </p>
         <p class="exception-title">
           <span class="exc-invoice-no">{{ exc.invoice_no || 'Unknown Invoice' }}</span>
           <span class="exc-label">{{ exc.exception_label }}</span>
         </p>
         <p class="exception-detail">{{ exc.detail }}</p>
+        <p class="exc-related-line" *ngIf="exc.related_documents?.length">
+          Related Documents: {{ exc.related_documents.join(', ') }}
+        </p>
         <p class="exception-footer">{{ exc.vendor_name || 'Unknown vendor' }} • Uploaded {{ relativeTime(exc.uploaded_at) }}</p>
       </div>
       <button class="btn-investigate" (click)="investigate(exc)">Investigate →</button>

@@ -81,6 +81,112 @@
     <div class="success-box" *ngIf="successMessage"><i class="ph-duotone ph-check-circle"></i> {{ successMessage }}</div>
     <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
 
+    <!-- Enterprise V3 Phase 6 (STEP 4) — Transaction Overview + Related
+         Documents. Rendered ONLY when comparison.transaction_context
+         said this invoice belongs to a Finance Transaction Package
+         (Phase 5); invisible for a standalone/legacy invoice, which
+         keeps looking exactly as it did before this phase (STEP 10).
+         Every value here comes from GET /auditor/transactions/<id>,
+         itself pure aggregation over already-computed data — no new
+         calculation happens in this component. -->
+    <div class="comparison-card txn-overview-card" *ngIf="transactionDetail as txn">
+      <div class="txn-overview-header">
+        <div>
+          <h2 class="comparison-title"><i class="ph-duotone ph-package"></i> Transaction Overview</h2>
+          <p class="txn-package-name">{{ txn.package.package_name }}</p>
+          <p class="comparison-subtitle">{{ comparison.transaction_context.documents_count }} related documents</p>
+        </div>
+        <span class="badge" [ngClass]="'txn-status-' + txn.package.status">{{ txn.package.status | titlecase }}</span>
+      </div>
+
+      <div class="enterprise-related-section">
+        <div class="enterprise-related-group" *ngIf="txn.documents.purchase_orders?.length">
+          <p class="enterprise-related-label">Purchase Orders</p>
+          <a class="enterprise-related-item txn-clickable" *ngFor="let po of txn.documents.purchase_orders" (click)="openTransactionDocument('po', po.document_id)">
+            <i class="ph-duotone ph-file-text enterprise-check-icon"></i> <span class="enterprise-related-name">{{ po.po_number || po.file_name }}</span>
+          </a>
+        </div>
+        <div class="enterprise-related-group" *ngIf="txn.documents.invoices?.length">
+          <p class="enterprise-related-label">Invoices</p>
+          <a class="enterprise-related-item txn-clickable" *ngFor="let inv of txn.documents.invoices"
+             [class.txn-related-current]="inv.document_id === documentId"
+             (click)="openTransactionDocument('invoice', inv.document_id)">
+            <i class="ph-duotone ph-receipt enterprise-check-icon"></i> <span class="enterprise-related-name">{{ inv.invoice_number || inv.file_name }}</span>
+          </a>
+        </div>
+        <div class="enterprise-related-group" *ngIf="txn.documents.goods_receipts?.length">
+          <p class="enterprise-related-label">Goods Receipts</p>
+          <a class="enterprise-related-item txn-clickable" *ngFor="let gr of txn.documents.goods_receipts" (click)="openTransactionDocument('gr', gr.document_id)">
+            <i class="ph-duotone ph-truck enterprise-check-icon"></i> <span class="enterprise-related-name">{{ gr.gr_number || gr.file_name }}</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Transaction Matching View (STEP 5/6) — replaces the single-
+           invoice-vs-full-PO comparison for transaction-grouped
+           invoices with the allocation-aware view: PO total, EACH
+           invoice's own allocation, GRs, and a final status — every
+           number read directly from matching_summary (build_
+           comparison()'s own already-computed po_fulfilment/
+           invoice_result, aggregated once per package). No calculation
+           happens here. -->
+      <div class="enterprise-fulfilment-section" *ngIf="txn.matching_summary as ms">
+        <h3 class="source-docs-title"><i class="ph-duotone ph-scales"></i> Enterprise Matching Summary</h3>
+
+        <div class="enterprise-status-row" *ngFor="let pf of ms.po_fulfilment">
+          <span class="enterprise-stat-label">Purchase Order Total ({{ pf.po_number }})</span>
+          <span class="enterprise-stat-value">{{ formatAmount(pf.po_amount, 'MYR') }}</span>
+        </div>
+
+        <p class="enterprise-related-label" style="margin-top:12px;">Invoice Allocation</p>
+        <div class="enterprise-related-item" *ngFor="let alloc of ms.invoice_allocations">
+          <span class="enterprise-related-name">{{ alloc.invoice_number }}</span>
+          <span class="enterprise-related-detail">{{ formatAmount(alloc.amount, alloc.currency) }}</span>
+          <span class="match-pill" [ngClass]="alloc.status === 'PASS' ? 'pill-match' : 'pill-differ'">{{ alloc.status }}</span>
+        </div>
+
+        <ng-container *ngIf="ms.goods_receipts?.length">
+          <p class="enterprise-related-label" style="margin-top:12px;">Received</p>
+          <div class="enterprise-related-item" *ngFor="let gr of ms.goods_receipts">
+            <i class="ph-duotone ph-check-circle enterprise-check-icon"></i> <span class="enterprise-related-name">{{ gr.gr_number }}</span>
+          </div>
+        </ng-container>
+
+        <div class="enterprise-status-row" style="margin-top:12px;">
+          <span class="enterprise-stat-label">Final Status</span>
+          <span class="match-pill" [ngClass]="ms.final_status === 'MATCHED' ? 'pill-match' : 'pill-differ'">{{ ms.final_status }}</span>
+        </div>
+      </div>
+
+      <!-- Additional Requirement — Transaction Authenticity Summary.
+           Reuses the EXISTING authenticity_checks rows exactly as the
+           unmodified authenticity engine already computed them; this
+           block only counts/groups. -->
+      <div class="enterprise-fulfilment-section" *ngIf="txn.authenticity_summary as auth">
+        <h3 class="source-docs-title"><i class="ph-duotone ph-shield-check"></i> Transaction Authenticity Summary</h3>
+        <div class="enterprise-status-row">
+          <span class="enterprise-stat-label">Documents Checked</span>
+          <span class="enterprise-stat-value">{{ auth.documents_checked }} / {{ auth.documents_total }}</span>
+        </div>
+        <div class="enterprise-status-row">
+          <span class="enterprise-stat-label">Invoice</span>
+          <span class="enterprise-stat-value">{{ auth.completed_by_role.invoices.checked }}/{{ auth.completed_by_role.invoices.total }} completed</span>
+        </div>
+        <div class="enterprise-status-row">
+          <span class="enterprise-stat-label">PO</span>
+          <span class="enterprise-stat-value">{{ auth.completed_by_role.purchase_orders.checked }}/{{ auth.completed_by_role.purchase_orders.total }} completed</span>
+        </div>
+        <div class="enterprise-status-row">
+          <span class="enterprise-stat-label">GR</span>
+          <span class="enterprise-stat-value">{{ auth.completed_by_role.goods_receipts.checked }}/{{ auth.completed_by_role.goods_receipts.total }} completed</span>
+        </div>
+        <div class="enterprise-status-row" style="margin-top:8px;">
+          <span class="enterprise-stat-label">Overall Status</span>
+          <span class="match-pill" [ngClass]="auth.overall_status === 'PASS' ? 'pill-match' : 'pill-differ'">{{ auth.overall_status }}</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Main Content -->
     <div class="content-row">
 

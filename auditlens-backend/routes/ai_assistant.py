@@ -22,6 +22,7 @@ from db import get_db_connection, get_user_by_id
 from helpers.ai_assistant import ask_ai_assistant
 from helpers.send_back import REASON_CATEGORIES, REQUIRED_ACTIONS, PRIORITIES
 from routes.auditor import build_comparison, _classify_exception, _matching_status_for_comparison
+from helpers.transaction_packages import get_transaction_context_for_document, get_package_documents
 
 ai_assistant_bp = Blueprint('ai_assistant', __name__)
 
@@ -137,6 +138,51 @@ def _v2_ai_context_fields(comparison):
         'cumulative_received_quantity': sum((pf['received_quantity_cumulative'] or 0) for pf in po_fulfilment) if po_fulfilment else None,
         'remaining_quantity': sum((pf['remaining_to_invoice'] or 0) for pf in po_fulfilment) if po_fulfilment else None,
         'fulfilment_status': po_fulfilment[0]['status'] if po_fulfilment else None,
+    }
+
+
+def _transaction_ai_context_fields(document_id, comparison):
+    """Enterprise V3 Phase 6 (STEP 7) — additive AI-context describing
+    the Finance Transaction Package (Phase 5) this invoice belongs to,
+    if any. Returns None for a standalone/legacy invoice (no package)
+    — the AI's existing prompts already work correctly without this
+    field, matching STEP 10's backward-compatibility requirement. No
+    AI call, no new calculation: package_name/related documents come
+    straight from helpers/transaction_packages.py (Phase 5, unmodified)
+    and allocation_summary is read directly from build_comparison()'s
+    own already-computed po_fulfilment (Phase 2, unmodified)."""
+    context = get_transaction_context_for_document(document_id, 'invoice')
+    if not context:
+        return None
+
+    docs = get_package_documents(context['transaction_package_id'])
+    related_invoices = [
+        {'invoice_number': inv.get('invoice_number'), 'amount': inv.get('total_amount'), 'currency': inv.get('currency')}
+        for inv in docs['invoices']
+    ]
+    related_purchase_orders = [
+        {'po_number': po.get('po_number'), 'amount': po.get('total_amount'), 'currency': po.get('currency')}
+        for po in docs['purchase_orders']
+    ]
+    related_goods_receipts = [{'gr_number': gr.get('gr_number')} for gr in docs['goods_receipts']]
+
+    allocation_summary = None
+    if comparison.get('engine_version') == 'v2' and comparison.get('po_fulfilment'):
+        pf = comparison['po_fulfilment'][0]
+        allocation_summary = {
+            'po_ordered_quantity':          pf.get('ordered_quantity'),
+            'po_amount':                    pf.get('po_amount'),
+            'invoiced_amount_cumulative':   pf.get('invoiced_amount_cumulative'),
+            'remaining_amount':             pf.get('remaining_amount'),
+            'fulfilment_status':            pf.get('status'),
+        }
+
+    return {
+        'package_name':             context['package_name'],
+        'related_invoices':         related_invoices,
+        'related_purchase_orders':  related_purchase_orders,
+        'related_goods_receipts':   related_goods_receipts,
+        'allocation_summary':       allocation_summary,
     }
 
 
@@ -256,6 +302,7 @@ def _build_case_context(cursor, document_id):
         'audit_status_reasons':  audit_status_reasons,
         'send_back_cycle':       send_back_cycle,
         **_v2_ai_context_fields(comparison),
+        'transaction_context':   _transaction_ai_context_fields(document_id, comparison),
     }
 
 

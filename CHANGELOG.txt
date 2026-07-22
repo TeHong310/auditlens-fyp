@@ -9287,3 +9287,168 @@ Rollback instructions:
   purely additive and read by nothing outside this phase's own code, so
   they can be left in place indefinitely with zero effect on any other
   feature, or dropped manually if ever desired.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 6: Transaction-Centric Auditor Workflow Integration - upgrades
+  the Auditor from reviewing individual invoices to reviewing whole AP
+  Transaction Packages (built in Phase 5), plus a transaction-level
+  Authenticity summary. Presentation/aggregation only - no OCR, Claude,
+  Gemini, authenticity, anomaly, Enterprise Matching V2, or
+  document_relationships logic was modified; every new function reads
+  and aggregates data those engines already computed and stored.
+
+  Backend (auditlens-backend/):
+    - helpers/transaction_packages.py: added
+      get_transaction_context_for_document() (invoice -> package
+      lookup, returns None for a legacy/standalone invoice - the
+      backward-compatibility fallback every consumer checks),
+      list_all_packages_with_documents() (system-wide package list for
+      the merged auditor queue), list_standalone_invoices() (legacy
+      invoices with zero package links), and
+      get_transaction_authenticity_summary() (aggregates existing
+      authenticity_checks rows per package into documents_checked/
+      completed_by_role/overall_status, plus a per-document detail key
+      for the frontend's grouped view - a document with no check row
+      yet is never counted as a failure).
+    - routes/auditor.py: GET /auditor/record/<id>/comparison and GET
+      /auditor/exceptions now enrich their JSON with transaction_
+      context (added at the route-handler layer only, so build_
+      comparison()/_build_comparison_v2() remain byte-for-byte
+      unchanged - verified via git diff). New GET /auditor/transactions
+      (merged queue: real transaction packages + legacy standalone
+      invoices, each tagged kind, with a per-row matching_status derived
+      by looping the existing build_comparison() per invoice) and GET
+      /auditor/transactions/<id> (package + documents + a new
+      _get_transaction_matching_summary() that aggregates build_
+      comparison() output across every invoice in the package into
+      po_fulfilment/invoice_allocations/final_status, using ONLY the
+      already-computed comparison output - no new calculation - plus
+      the authenticity_summary and relationship_preview).
+    - routes/ai_assistant.py: _build_case_context() gains a
+      transaction_context field (package name, related invoices/POs/
+      GRs, allocation summary) via a new _transaction_ai_context_
+      fields() helper; None for a standalone invoice.
+    - helpers/ai_assistant.py: _SYSTEM_PREAMBLE gained one more audit-
+      status-interpretation rule instructing the AI to describe multi-
+      document cases at the transaction level using the real related_
+      invoices/related_purchase_orders/related_goods_receipts values,
+      and never say "Invoice amount does not match PO amount" when the
+      transaction's allocation is actually correct.
+    - Bug fix (found while writing this phase's own tests, not a
+      regression from any earlier phase): get_transaction_authenticity_
+      summary() was matching PO/GR authenticity_checks rows by po_id/
+      gr_id, but authenticity_checks.document_id always references
+      documents.document_id - for a PO/GR check that is purchase_
+      orders.document_id/goods_receipts.document_id (the invoice the
+      file was uploaded alongside), never the PO/GR's own primary key.
+      Fixed by having get_package_documents() additionally surface
+      host_document_id for PO/GR rows and using that for the
+      authenticity_checks lookup, so a genuine PO/GR authenticity
+      warning is no longer silently invisible to the transaction
+      summary.
+
+  Frontend (auditlens-frontend/):
+    - Auditor Dashboard: now reads GET /auditor/transactions instead of
+      GET /matching/queue - a "Transaction review queue" with columns
+      Transaction Package / Supplier / Documents / Invoice Count / PO
+      Count / GR Count / Matching Status / Action, covering both real
+      packages and legacy standalone invoices in one list.
+    - Auditor Record Detail: new Transaction Overview card (package
+      name, status, document count), Related Documents section (POs/
+      Invoices/GRs, each clickable - invoices navigate, PO/GR fetch and
+      open their file), Transaction Matching View (PO total, per-
+      invoice allocation with PASS/REVIEW pills, received GR list,
+      final status - all read straight from the existing matching
+      summary, no calculation in the frontend), and a Transaction
+      Authenticity Summary card (documents checked, per-role completed
+      counts, overall status). Reuses Phase 4's existing .enterprise-*/
+      .comparison-card/.match-pill CSS classes almost entirely to stay
+      under the component's 24kB style budget (final: 21.63kB).
+    - Auditor Authenticity page: added a collapsible "Transactions"
+      section grouping documents by package (status pill per package,
+      per-document authenticity row on expand) above the existing flat
+      list, which now shows only ungrouped/standalone documents under
+      an "Other Documents" heading. Zero new backend routes - reuses
+      GET /auditor/transactions + GET /auditor/transactions/<id>.
+    - Auditor Exceptions page: each exception now shows its transaction
+      package name (when it belongs to one) and the invoice numbers of
+      sibling documents in the same package.
+    - Legacy/standalone documents (no transaction package) render
+      exactly as before on every page - the new sections are all
+      conditional on a transaction_context/transactionDetail/
+      transactionGroups value being present.
+
+Why:
+  Reviewing a partial-fulfilment PO (e.g. one PO invoiced across two
+  separate invoices with two separate goods receipts) one invoice at a
+  time produced false "Invoice amount does not match PO amount"
+  mismatches, because the auditor and the AI Assistant only ever saw
+  one invoice in isolation. Transaction Packages (Phase 5) already
+  group the related documents together; this phase makes the Auditor's
+  own screens and the AI Assistant consume that grouping instead of
+  re-deriving a misleading single-invoice comparison.
+
+Database changes:
+  None. Zero new tables/columns - this phase is a pure read/aggregation
+  layer over transaction_packages, transaction_package_documents,
+  extracted_fields, purchase_orders, goods_receipts, and
+  authenticity_checks, all of which already existed before Phase 6.
+
+Transaction workflow (Test Case 2 - PO7710, 2 invoices, 2 GRs):
+  Auditor opens Dashboard -> sees ONE "PO7710 Transaction" row (not two
+  separate invoice rows) with Matching Status PASS -> opens the record
+  -> Transaction Overview shows all 5 linked documents -> Transaction
+  Matching View shows PO total 30000, Invoice A 15000 (PASS), Invoice B
+  15000 (PASS), GR A + GR B received, Final Status MATCHED -> AI
+  Assistant explains the case using both invoices and both GRs, and
+  does not report a false mismatch -> Authenticity page shows one
+  "PO7710 Transaction" group with a PASS/REVIEW REQUIRED summary
+  instead of two disconnected document cards.
+
+AI usage confirmation:
+  Claude API calls added: 0. Gemini API calls added: 0. This phase adds
+  no prompts, no new AI provider calls, and no new AI-facing routes -
+  the only AI-related change is wording inside the existing system
+  preamble string that routes/ai_assistant.py already sends.
+
+Test results:
+  - New tests/extraction/test_transaction_auditor_integration.py -
+    Test Case 1 (normal 1/1/1 workflow unchanged), Test Case 2
+    (PO7710 enterprise case - one transaction row, matching PASS,
+    allocation correct, AI context has transaction fields and no false
+    mismatch), Test Case 3 (transaction context survives a finance
+    correction/return cycle), Test Case 4 (legacy invoice with no
+    package - transaction_context is None everywhere, dashboard still
+    lists it as a standalone row, no errors), and the Additional
+    Requirement's authenticity aggregation case (5-document package,
+    2 invoices + 1 PO checked, 2 GRs not yet checked - overall_status
+    stays PASS; a genuine warning on one invoice flips it to REVIEW
+    REQUIRED) - all pass using a real Flask test client + real local
+    Postgres dev DB, rows created and cleaned up per test.
+  - python tests/extraction/run_all.py - all 25 suites pass (1 new:
+    test_transaction_auditor_integration.py; zero regressions in every
+    pre-existing suite, including extraction, matching, authenticity,
+    anomaly, send-back, and calendar tests).
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size and record-detail CSS budget warnings, no
+    new errors).
+
+Build result:
+  Backend: all 25 test suites pass, zero new tables. Frontend: clean
+  production build, exit 0.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - no migration step, no new
+     environment variables.
+  2. Redeploy the Render FRONTEND - the transaction-grouped Dashboard,
+     Record Detail, Authenticity, and Exceptions views are immediately
+     available; legacy standalone-invoice behavior is unchanged.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend/frontend build - this phase reads
+  existing tables only and writes nothing new, so rolling back has no
+  data-cleanup implications.

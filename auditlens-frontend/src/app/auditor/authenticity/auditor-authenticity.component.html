@@ -3,7 +3,35 @@
   <!-- Header -->
   <div class="header">
     <h1 class="page-title"><i class="ph-duotone ph-shield-check"></i> Authenticity Lens</h1>
-    <p class="page-subtitle">AI-powered visual signal detection • {{ filteredChecks.length }} documents checked</p>
+    <p class="page-subtitle">AI-powered visual signal detection • {{ checks.length }} documents checked</p>
+  </div>
+
+  <!-- Enterprise V3 Phase 6 (STEP 8 + Additional Requirement) —
+       Transaction-grouped authenticity view. The authenticity ENGINE
+       is never called here; every status shown is read straight from
+       authenticity_checks via GET /auditor/transactions/<id>. Hidden
+       entirely when there are no transaction packages yet — the flat
+       list below is unaffected either way (STEP 10). -->
+  <div class="txn-group-section" *ngIf="transactionGroups.length">
+    <h2 class="section-title" style="margin-bottom:10px;">Transactions</h2>
+    <div class="txn-group-card" *ngFor="let group of transactionGroups">
+      <div class="txn-group-header" (click)="toggleGroup(group.transaction_package_id)">
+        <i class="ph-duotone" [ngClass]="isGroupExpanded(group.transaction_package_id) ? 'ph-caret-down' : 'ph-caret-right'"></i>
+        <span class="txn-group-name">{{ group.package_name }}</span>
+        <span class="chip-count" *ngIf="group.authenticity_summary as auth">{{ auth.documents_checked }}/{{ auth.documents_total }} completed</span>
+        <span class="badge" [ngClass]="groupStatusClass(group.authenticity_summary?.overall_status === 'PASS' ? 'passed' : (group.authenticity_summary?.overall_status ? 'warning' : null))">
+          {{ group.authenticity_summary?.overall_status || 'PENDING' }}
+        </span>
+      </div>
+      <div class="txn-group-docs" *ngIf="isGroupExpanded(group.transaction_package_id)">
+        <div class="txn-group-doc-row" *ngFor="let doc of groupDocumentRows(group)" (click)="viewGroupDocument(doc)">
+          <span class="txn-group-doc-label">{{ doc.label }}</span>
+          <span class="badge" [ngClass]="groupStatusClass(doc.authenticity_status)">
+            Authenticity: {{ groupStatusLabel(doc.authenticity_status) }}
+          </span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Filter: status -->
@@ -48,7 +76,9 @@
     <p class="empty-text">No authenticity checks to show.</p>
   </div>
 
-  <!-- Cards -->
+  <!-- Cards — standalone documents not part of any transaction package
+       (STEP 10 backward compatibility: pre-Phase-6 behavior, unchanged). -->
+  <h2 class="section-title" style="margin-bottom:6px;" *ngIf="transactionGroups.length && filteredChecks.length">Other Documents</h2>
   <div class="check-list" *ngIf="!isLoading">
     <div class="check-card" [ngClass]="c.authenticity_status === 'warning' ? 'card-warning' : 'card-passed'" *ngFor="let c of filteredChecks" (click)="viewDocument(c)">
 

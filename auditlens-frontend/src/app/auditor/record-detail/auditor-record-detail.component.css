@@ -1271,3 +1271,13 @@
 .enterprise-fulfilment-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
 .enterprise-fulfilment-stat { display: flex; flex-direction: column; gap: 4px; padding: 12px; background: var(--bg-hover); border-radius: 10px; }
 .enterprise-stat-value { font-size: 16px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+
+/* Enterprise V3 Phase 6 — Transaction Overview card (reuses .comparison-card/.enterprise-* above; only genuinely new rules here). */
+.txn-overview-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.txn-package-name { font-size: 13px; font-weight: 600; color: var(--text-primary); margin: 4px 0 2px; }
+.txn-status-draft { background: var(--bg-hover); color: var(--text-secondary); }
+.txn-status-waiting_documents { background: var(--warning-bg); color: var(--warning); }
+.txn-status-processing { background: var(--accent-bg); color: var(--accent-soft); }
+.txn-status-completed { background: var(--success-bg); color: var(--success); }
+.txn-clickable { cursor: pointer; }
+.txn-related-current .enterprise-related-name { text-decoration: underline; }

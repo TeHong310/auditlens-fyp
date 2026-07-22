@@ -88,6 +88,24 @@ AUDIT STATUS INTERPRETATION RULES:
   come) while this specific invoice individually passed every check;
   never cite a partially-fulfilled PO as a reason this invoice failed
   unless it also appears in audit_status_reasons.
+- "transaction_context" (when present) describes the Finance
+  Transaction Package this invoice was grouped into — package_name,
+  every related_invoices/related_purchase_orders/related_goods_
+  receipts entry, and an allocation_summary (the PO's ordered quantity/
+  amount, cumulative invoiced amount, and remaining amount). When
+  present, describe the CASE at the transaction level, not just this
+  one invoice — e.g. "The transaction contains one PO (using its
+  po_number), two invoices (their amounts each), and two goods
+  receipts. The invoices represent partial fulfilment of the PO and
+  are fully allocated." — using the ACTUAL values from related_
+  purchase_orders/related_invoices/related_goods_receipts, never
+  placeholder text.
+  Never say "Invoice amount does not match PO amount" when audit_status
+  is "PASS" and allocation_summary shows the invoice's amount is
+  correctly accounted for within the PO's total — that is exactly the
+  false-mismatch pattern transaction-level matching exists to prevent.
+  "transaction_context" is null for a standalone invoice not part of
+  any package — describe that case exactly as before, invoice-only.
 
 CASE DATA (JSON):
 {context_json}

@@ -100,6 +100,13 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
 
   documentId: number | null = null;
   comparison: any = null;
+
+  // Enterprise V3 Phase 6 — populated only when comparison.
+  // transaction_context is present (this invoice belongs to a Finance
+  // Transaction Package). null for a standalone/legacy invoice — every
+  // *ngIf guarding the new sections below simply doesn't render, so
+  // the page looks and behaves exactly as before Phase 6 for those.
+  transactionDetail: any = null;
   authenticity: any = null;
   isLoading: boolean = false;
   isSubmitting: boolean = false;
@@ -179,12 +186,33 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
         this.comparison = res;
         this.isLoading = false;
         this.cdr.detectChanges();
+        if (res.transaction_context) {
+          this.loadTransactionDetail(res.transaction_context.transaction_package_id);
+        }
       },
       error: (err) => {
         this.isLoading = false;
         this.errorMessage = err.error?.error || 'Failed to load record comparison.';
         this.cdr.detectChanges();
       }
+    });
+  }
+
+  // Enterprise V3 Phase 6 (STEP 4/5/6) — the richer transaction-level
+  // view (documents by role, Enterprise Matching Summary, authenticity
+  // summary, relationship preview). Only ever called when comparison.
+  // transaction_context said this invoice belongs to a package; a
+  // failure here doesn't block the rest of the page (the existing
+  // Field Comparison / Audit Decision sections already loaded fine).
+  loadTransactionDetail(packageId: number) {
+    this.http.get<any>(`${this.apiUrl}/auditor/transactions/${packageId}`, {
+      headers: this.getHeaders()
+    }).subscribe({
+      next: (res) => {
+        this.transactionDetail = res;
+        this.cdr.detectChanges();
+      },
+      error: () => { /* non-blocking — transaction sections simply stay hidden */ }
     });
   }
 
@@ -885,6 +913,25 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return new Date(dateStr).toLocaleDateString('en-MY', {
       day: '2-digit', month: 'short', year: 'numeric'
     });
+  }
+
+  // ── Enterprise V3 Phase 6 — Related Documents (Transaction
+  // Overview) click-through. An invoice navigates this SAME page to
+  // that invoice's own record; a PO/GR opens its file directly (there
+  // is no "record detail" page for a PO/GR on its own). ──
+
+  openTransactionDocument(type: 'invoice' | 'po' | 'gr', documentId: number) {
+    if (type === 'invoice') {
+      if (documentId === this.documentId) return;
+      this.router.navigate(['/auditor/record-detail'], { queryParams: { document_id: documentId } });
+      return;
+    }
+    const path = type === 'po' ? `po/${documentId}/file` : `gr/${documentId}/file`;
+    const token = localStorage.getItem('access_token');
+    fetch(`${this.apiUrl}/documents/${path}`, { headers: { 'Authorization': `Bearer ${token}` } })
+      .then(res => { if (!res.ok) throw new Error('Failed'); return res.blob(); })
+      .then(blob => window.open(URL.createObjectURL(blob), '_blank'))
+      .catch(() => { this.errorMessage = 'Failed to open file.'; this.cdr.detectChanges(); });
   }
 
   // ── PDF quick-view modal ─────────────────────────────────

@@ -13,6 +13,10 @@ from helpers.document_relationships import (
     get_related_documents, get_related_purchase_orders, get_related_goods_receipts, get_related_invoices,
 )
 from helpers.enterprise_matching import compute_po_fulfilment, compute_invoice_result
+from helpers.transaction_packages import (
+    get_transaction_context_for_document, list_all_packages_with_documents, list_standalone_invoices,
+    get_transaction_authenticity_summary, get_package, get_package_documents, get_relationship_preview,
+)
 from config import Config
 
 auditor_bp = Blueprint('auditor', __name__)
@@ -1096,6 +1100,15 @@ def get_record_comparison(invoice_document_id):
         if result is None:
             return jsonify({'error': 'Invoice document not found'}), 404
 
+        # Enterprise V3 Phase 6 (STEP 2): additive transaction context —
+        # build_comparison()/_build_comparison_v2() themselves are
+        # completely untouched; this is assembled here in the route
+        # handler only. None for a legacy/standalone invoice (STEP 10
+        # backward compatibility — existing frontend code that doesn't
+        # know this key exists is unaffected).
+        result = dict(result)
+        result['transaction_context'] = get_transaction_context_for_document(invoice_document_id, 'invoice')
+
         return jsonify(result), 200
 
     except Exception as e:
@@ -1316,6 +1329,19 @@ def get_exceptions():
             if type_filter != 'all' and exc_type != type_filter:
                 continue
 
+            # Enterprise V3 Phase 6 (STEP 9): additive transaction
+            # context — None/empty for a legacy/standalone invoice
+            # (STEP 10), never affects _classify_exception()'s own
+            # verdict computed above.
+            transaction_context = get_transaction_context_for_document(doc_row['document_id'], 'invoice')
+            related_documents = []
+            if transaction_context:
+                sibling_docs = get_package_documents(transaction_context['transaction_package_id'])
+                related_documents = [
+                    inv.get('invoice_number') or inv.get('file_name')
+                    for inv in sibling_docs['invoices'] if inv['document_id'] != doc_row['document_id']
+                ]
+
             exceptions.append({
                 'invoice_document_id': doc_row['document_id'],
                 'invoice_no':          comparison['invoice']['invoice_no'],
@@ -1325,11 +1351,187 @@ def get_exceptions():
                 'exception_label':     label,
                 'detail':              detail,
                 'severity':            severity,
+                'transaction_context': transaction_context,
+                'related_documents':   related_documents,
             })
 
         conn.close()
 
         return jsonify(exceptions[offset:offset + limit]), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# ENTERPRISE V3 PHASE 6 — Transaction-Centric Auditor Workflow.
+#
+# Every function/route below is presentation/aggregation only, over
+# data build_comparison()/_build_comparison_v2() (unmodified) and
+# helpers/transaction_packages.py (Phase 5, unmodified) already
+# compute or store. No new matching calculation, no new AI call.
+# ------------------------------------------------------------
+
+def _get_transaction_matching_summary(cursor, package_id):
+    """Enterprise V3 Phase 6 (STEP 5/6) — aggregates the ALREADY-
+    COMPUTED Enterprise V2 result (build_comparison()/po_fulfilment)
+    for every invoice in a transaction package into one display-ready
+    summary. Performs no matching calculation of its own — every
+    number here is read directly from what build_comparison() already
+    returned per invoice; needs the routes-layer build_comparison(), so
+    it lives here rather than in helpers/transaction_packages.py (see
+    that module's own docstring on why it stays dependency-free of the
+    routes layer)."""
+    docs = get_package_documents(package_id)
+
+    po_fulfilment_by_po = {}
+    invoice_allocations = []
+    all_pass = True
+    engine_version = 'legacy'
+
+    for inv in docs['invoices']:
+        comparison = build_comparison(cursor, inv['document_id'])
+        if not comparison:
+            continue
+        status = _matching_status_for_comparison(comparison)
+        if status != 'PASS':
+            all_pass = False
+        if comparison.get('engine_version') == 'v2':
+            engine_version = 'v2'
+            for pf in (comparison.get('po_fulfilment') or []):
+                po_fulfilment_by_po[pf['po_id']] = pf
+        invoice_allocations.append({
+            'document_id':     inv['document_id'],
+            'invoice_number':  inv.get('invoice_number'),
+            'amount':          inv.get('total_amount'),
+            'currency':        inv.get('currency'),
+            'status':          status,
+        })
+
+    return {
+        'engine_version':       engine_version,
+        'po_fulfilment':        list(po_fulfilment_by_po.values()),
+        'invoice_allocations':  invoice_allocations,
+        'goods_receipts':       [{'document_id': gr['document_id'], 'gr_number': gr.get('gr_number')}
+                                  for gr in docs['goods_receipts']],
+        'final_status':         'MATCHED' if (all_pass and invoice_allocations) else 'REVIEW REQUIRED',
+    }
+
+
+# ------------------------------------------------------------
+# TRANSACTION QUEUE (Auditor Dashboard)
+# GET /auditor/transactions
+# Auditor only
+# ------------------------------------------------------------
+@auditor_bp.route('/transactions', methods=['GET'])
+@jwt_required()
+def get_auditor_transactions():
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    if user['role'] != 'auditor':
+        return jsonify({'error': 'Access denied. Auditor only.'}), 403
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        rows = []
+
+        for pkg in list_all_packages_with_documents():
+            docs = pkg['documents']
+            invoice_ids = [inv['document_id'] for inv in docs['invoices']]
+            statuses = []
+            for inv_id in invoice_ids:
+                comparison = build_comparison(cursor, inv_id)
+                if comparison:
+                    statuses.append(_matching_status_for_comparison(comparison))
+            if not statuses:
+                matching_status = 'PENDING'
+            elif all(s == 'PASS' for s in statuses):
+                matching_status = 'PASS'
+            else:
+                matching_status = 'REVIEW'
+
+            rows.append({
+                'kind':                  'transaction_package',
+                'transaction_package_id': pkg['id'],
+                'package_name':          pkg['package_name'],
+                'supplier':              pkg['supplier'],
+                'document_count':        len(invoice_ids) + len(docs['purchase_orders']) + len(docs['goods_receipts']),
+                'invoice_count':         len(invoice_ids),
+                'po_count':              len(docs['purchase_orders']),
+                'gr_count':              len(docs['goods_receipts']),
+                'matching_status':       matching_status,
+                'package_status':        pkg['status'],
+                'created_at':            pkg['created_at'].isoformat() if pkg['created_at'] else None,
+                'primary_document_id':   invoice_ids[0] if invoice_ids else None,
+            })
+
+        # STEP 10 backward compatibility: legacy/standalone invoices
+        # (never grouped into a package) still appear in the queue, one
+        # row each, exactly like the pre-Phase-6 dashboard showed.
+        for doc in list_standalone_invoices():
+            comparison = build_comparison(cursor, doc['document_id'])
+            matching_status = _matching_status_for_comparison(comparison) if comparison else 'PENDING'
+            rows.append({
+                'kind':                  'standalone_invoice',
+                'transaction_package_id': None,
+                'package_name':          doc['invoice_number'] or doc['file_name'],
+                'supplier':              doc['vendor_name'],
+                'document_count':        1,
+                'invoice_count':         1,
+                'po_count':              1 if (comparison and comparison.get('po')) else 0,
+                'gr_count':              1 if (comparison and comparison.get('gr')) else 0,
+                'matching_status':       matching_status,
+                'package_status':        doc['status'],
+                'created_at':            doc['uploaded_at'].isoformat() if doc['uploaded_at'] else None,
+                'primary_document_id':   doc['document_id'],
+            })
+
+        conn.close()
+
+        rows.sort(key=lambda r: r['created_at'] or '', reverse=True)
+        return jsonify(rows), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# TRANSACTION DETAIL (feeds Record Detail's Transaction Overview /
+# Related Documents / Enterprise Matching Summary / Authenticity
+# Summary sections)
+# GET /auditor/transactions/<package_id>
+# Auditor only
+# ------------------------------------------------------------
+@auditor_bp.route('/transactions/<int:package_id>', methods=['GET'])
+@jwt_required()
+def get_auditor_transaction_detail(package_id):
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    if user['role'] != 'auditor':
+        return jsonify({'error': 'Access denied. Auditor only.'}), 403
+
+    package = get_package(package_id)
+    if not package:
+        return jsonify({'error': 'Transaction package not found'}), 404
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        matching_summary = _get_transaction_matching_summary(cursor, package_id)
+        conn.close()
+
+        return jsonify({
+            'package':               package,
+            'documents':             get_package_documents(package_id),
+            'matching_summary':      matching_summary,
+            'authenticity_summary':  get_transaction_authenticity_summary(package_id),
+            'relationship_preview':  get_relationship_preview(package_id),
+        }), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500

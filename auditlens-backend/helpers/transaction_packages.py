@@ -210,7 +210,7 @@ def get_package_documents(package_id):
         purchase_orders = []
         if po_ids:
             cursor.execute(
-                'SELECT po_id AS document_id, file_name, po_number, vendor_name, total_amount, currency '
+                'SELECT po_id AS document_id, document_id AS host_document_id, file_name, po_number, vendor_name, total_amount, currency '
                 'FROM purchase_orders WHERE po_id = ANY(%s)',
                 (po_ids,)
             )
@@ -219,7 +219,7 @@ def get_package_documents(package_id):
         goods_receipts = []
         if gr_ids:
             cursor.execute(
-                'SELECT gr_id AS document_id, file_name, gr_number, vendor_name, quantity '
+                'SELECT gr_id AS document_id, document_id AS host_document_id, file_name, gr_number, vendor_name, quantity '
                 'FROM goods_receipts WHERE gr_id = ANY(%s)',
                 (gr_ids,)
             )
@@ -307,3 +307,172 @@ def list_packages(created_by):
         return packages
     finally:
         conn.close()
+
+
+# ============================================================
+# Enterprise V3 Phase 6 — Transaction-Centric Auditor Workflow
+# Integration. Every function below is a read-only lookup/aggregation
+# over data Phases 1/2/5 already computed and stored — none of them
+# perform matching, authenticity, or any other calculation of their
+# own, and none of them call Claude/Gemini. Functions that need the
+# Enterprise Matching V2 result (routes.auditor.build_comparison) live
+# in routes/auditor.py instead of here, to keep this module free of a
+# dependency on the routes layer (helpers/ never imports from routes/
+# in this codebase — see helpers/relationship_builder.py's own
+# docstring for the same established convention).
+# ============================================================
+
+def get_transaction_context_for_document(document_id, document_role='invoice'):
+    """Enterprise V3 Phase 6 (STEP 2) — the transaction package context
+    for ONE document, or None if it isn't part of any package (a
+    legacy/standalone document — the explicit backward-compatibility
+    fallback STEP 10 requires, and the ONLY thing every existing
+    invoice-based consumer needs to check before using this data)."""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute(
+            'SELECT package_id FROM transaction_package_documents WHERE document_role = %s AND document_id = %s',
+            (document_role, document_id)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        package_id = row['package_id']
+        cursor.execute('SELECT * FROM transaction_packages WHERE id = %s', (package_id,))
+        package = cursor.fetchone()
+        if not package:
+            return None
+    finally:
+        conn.close()
+
+    docs = get_package_documents(package_id)
+    return {
+        'transaction_package_id': package_id,
+        'package_name': package['package_name'],
+        'status': package['status'],
+        'documents_count': len(docs['invoices']) + len(docs['purchase_orders']) + len(docs['goods_receipts']),
+        'purchase_orders': len(docs['purchase_orders']),
+        'invoices': len(docs['invoices']),
+        'goods_receipts': len(docs['goods_receipts']),
+    }
+
+
+def list_all_packages_with_documents():
+    """Every transaction package system-wide (NOT scoped to a single
+    Finance user, unlike list_packages() — the auditor queue needs
+    global visibility across every Finance user's packages), each
+    annotated with its documents by role and a best-effort supplier
+    name. Enterprise V3 Phase 6 (STEP 3)."""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute('SELECT * FROM transaction_packages ORDER BY created_at DESC')
+        packages = [dict(r) for r in cursor.fetchall()]
+    finally:
+        conn.close()
+
+    for p in packages:
+        docs = get_package_documents(p['id'])
+        p['documents'] = docs
+        supplier = docs['invoices'][0].get('vendor_name') if docs['invoices'] else None
+        if not supplier and docs['purchase_orders']:
+            supplier = docs['purchase_orders'][0].get('vendor_name')
+        p['supplier'] = supplier
+    return packages
+
+
+def list_standalone_invoices():
+    """Every invoice-role document NOT linked to any transaction
+    package — the backward-compatibility fallback for documents
+    uploaded before Phase 5 existed, or never grouped into a package
+    (STEP 10). Returns raw document/extracted_fields rows only; the
+    caller (routes/auditor.py, which already imports build_comparison)
+    computes matching status itself, keeping this helper free of a
+    routes-layer dependency."""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute(
+            '''SELECT d.document_id, d.file_name, d.status, d.uploaded_at,
+                      ef.invoice_number, ef.vendor_name, ef.total_amount, ef.currency
+               FROM documents d
+               LEFT JOIN extracted_fields ef ON ef.document_id = d.document_id
+               WHERE d.document_id NOT IN (
+                   SELECT document_id FROM transaction_package_documents WHERE document_role = 'invoice'
+               )
+               ORDER BY d.uploaded_at DESC'''
+        )
+        return [dict(r) for r in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_transaction_authenticity_summary(package_id):
+    """Enterprise V3 Phase 6 Additional Requirement — aggregates
+    EXISTING authenticity_checks rows (the unmodified authenticity
+    engine's own output — same table, same authenticity_status values
+    it already computes elsewhere in this app) for every document in
+    this package. No new authenticity calculation, no AI call: a pure
+    read + count. A document that hasn't been checked yet simply isn't
+    counted toward documents_checked or overall_status — it does not
+    force a failure, matching the existing engine's own "not yet
+    checked" semantics used everywhere else in this app."""
+    docs = get_package_documents(package_id)
+    role_to_type = {'invoices': 'invoice', 'purchase_orders': 'po', 'goods_receipts': 'gr'}
+    all_ids = [doc['document_id'] for role_key in role_to_type for doc in docs[role_key]]
+    # authenticity_checks.document_id always references documents.document_id
+    # (never po_id/gr_id) — for PO/GR rows that is purchase_orders.document_id/
+    # goods_receipts.document_id (the invoice they were uploaded alongside),
+    # which get_package_documents() surfaces separately as host_document_id.
+    auth_lookup_ids = [doc.get('host_document_id', doc['document_id']) for role_key in role_to_type for doc in docs[role_key]]
+
+    checks_by_key = {}
+    if auth_lookup_ids:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            cursor.execute(
+                'SELECT document_id, document_type, authenticity_status, risk_level '
+                'FROM authenticity_checks WHERE document_id = ANY(%s)',
+                (auth_lookup_ids,)
+            )
+            for row in cursor.fetchall():
+                checks_by_key[(row['document_type'], row['document_id'])] = dict(row)
+        finally:
+            conn.close()
+
+    completed_by_role = {}
+    documents_by_role = {}
+    documents_checked = 0
+    has_warning = False
+    for role_key, doc_type in role_to_type.items():
+        checked = 0
+        role_docs = []
+        for doc in docs[role_key]:
+            check = checks_by_key.get((doc_type, doc.get('host_document_id', doc['document_id'])))
+            role_docs.append({
+                **doc,
+                'authenticity_status': check['authenticity_status'] if check else None,
+                'risk_level':          check['risk_level'] if check else None,
+            })
+            if check:
+                checked += 1
+                documents_checked += 1
+                if check['authenticity_status'] == 'warning':
+                    has_warning = True
+        completed_by_role[role_key] = {'checked': checked, 'total': len(docs[role_key])}
+        documents_by_role[role_key] = role_docs
+
+    return {
+        'documents_total': len(all_ids),
+        'documents_checked': documents_checked,
+        'completed_by_role': completed_by_role,
+        'overall_status': 'REVIEW REQUIRED' if has_warning else 'PASS',
+        # Per-document detail (STEP 8 / Additional Requirement's
+        # transaction-grouped Authenticity page — "▼ Invoice A /
+        # Authenticity: PASS") — additive, the aggregate fields above
+        # are unaffected and remain what Record Detail's Transaction
+        # Authenticity Summary card (STEP 4/5) already consumes.
+        'documents': documents_by_role,
+    }
