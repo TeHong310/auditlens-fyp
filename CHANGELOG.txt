@@ -9796,3 +9796,92 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous backend build - no schema change, no data
   written by this fix beyond normal transaction_package_documents rows.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 8: two more workflow gaps traced against the 5-document
+  PO3006231 test case (1 PO, 2 invoices, 2 GRs) after Phase 7.1's
+  auto-grouping fix.
+
+  Backend (auditlens-backend/):
+    - routes/reviews.py: POST /reviews/submit/<document_id> operated on
+      exactly one document_id, entirely unaware of transaction
+      packages. When Finance submitted one invoice, its sibling
+      invoice(s) in the same Finance Transaction Package stayed in
+      Finance's queue (still 'ocr_done'), invisible to the Auditor,
+      even though they're the same real AP transaction. Now, after the
+      submitted invoice's own status update, if it belongs to a
+      package, every sibling invoice currently in a submittable state
+      ('ocr_done'/'returned') is transitioned to 'under_review' too -
+      reusing the existing Phase 6 get_transaction_context_for_document/
+      get_package_documents helpers unchanged. A sibling already further
+      along (already under_review/approved) or still mid-OCR is left
+      alone - never regressed, never force-submitted. No new package,
+      no duplicated documents, no document ever rejected.
+
+  Frontend (auditlens-frontend/):
+    - auditor-record-detail.component.ts/html: the Line Items table's
+      PO-side cell still showed the PO line's full ordered quantity
+      (e.g. 30000) even on a row already recognized as a valid partial
+      allocation (Phase 7's isPartialAllocationLineItem), with a neutral
+      "Partial Allocation" pill instead of a clear Match. Now shows the
+      invoice's own allocated quantity (the same value already available
+      on the row - matched_quantity equals the invoice's own quantity
+      whenever the relationship builder found exactly one qualifying PO
+      candidate for it) with a green Match pill, and the raw PO ordered
+      quantity as small context text below - mirroring the Amount row's
+      existing "(Allocated)"/"PO Total (context)" pattern from Phase 7.
+      No new data fetched from the backend; purely a smarter read of
+      fields already present in the comparison response.
+
+Why:
+  Fixed invoice submission not synchronized within a transaction
+  package: Finance submitting one invoice out of a shared-PO
+  transaction left its sibling invisible to the Auditor, contradicting
+  the transaction-centric workflow the app is built around (Phase 6).
+  Fixed the remaining false-mismatch presentation in the Comparison
+  table: even once both invoices are correctly grouped and Enterprise
+  Matching V2 confirms a clean allocation, the Line Items row still
+  read as a disagreement rather than a confirmed Match.
+
+  helpers/relationship_builder.py and helpers/enterprise_matching.py
+  were not touched - both changes only decide which already-computed
+  value to update/display, matching the task's "do not create
+  duplicate matching logic" instruction.
+
+Test results:
+  - python tests/extraction/run_all.py - all 25 suites pass, including
+    tests/reviews/test_send_back_routes.py and test_send_back_
+    validation.py (existing submit/send-back flows unaffected).
+  - Live smoke test against the real local Postgres dev DB (rows
+    created and cleaned up) using the exact 5-document PO3006231
+    scenario: one package with all 5 documents auto-grouped (Phase
+    7.1); Finance submits only Invoice A; BOTH invoices become
+    "under_review"; both invoices' GET /auditor/record/<id>/comparison
+    return engine_version "v2", overall_status "PASS", vendor_match and
+    po_reference_match both true; GET /auditor/transactions shows
+    exactly ONE transaction row for the package (Enterprise Matching
+    Summary unaffected).
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+
+Build result:
+  Backend: all 25 test suites pass. Frontend: clean production build,
+  exit 0.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - no migration step, no new
+     environment variables.
+  2. Redeploy the Render FRONTEND - the corrected Line Items display
+     is immediately available.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend/frontend build - no schema change, no
+  new data written beyond the same documents.status column this
+  endpoint already updated.

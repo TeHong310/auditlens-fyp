@@ -4,6 +4,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 import psycopg2.extras
 from db import get_db_connection, get_user_by_id
 from helpers.audit_log import log_audit
+from helpers.transaction_packages import get_transaction_context_for_document, get_package_documents
 from helpers.send_back import (
     validate_send_back_payload, validate_finance_response_payload,
     compute_activity_summary, is_overdue,
@@ -665,7 +666,44 @@ def submit_for_review(document_id):
         log_audit(user['user_id'], 'SUBMIT_FOR_REVIEW', 'documents', document_id,
                   'Document submitted for auditor review')
 
-        return jsonify({'message': 'Document submitted for review successfully'}), 200
+        # Phase 8 (Bug 1): submission operates at the transaction package
+        # level. If this invoice belongs to a Finance Transaction
+        # Package (Phase 5), every SIBLING invoice in that same package
+        # is submitted too, so a package doesn't end up half-visible to
+        # the Auditor (one invoice under_review, its sibling still
+        # sitting in Finance's queue). Only siblings in the same
+        # submittable state ('ocr_done'/'returned') are touched — never
+        # regresses a sibling that's already further along (e.g.
+        # already under_review/approved) or forces one still mid-OCR.
+        # Reuses the existing Phase 6 helpers unchanged; no new
+        # matching/relationship logic, no duplicate documents, no new
+        # package.
+        submitted_siblings = []
+        context = get_transaction_context_for_document(document_id, 'invoice')
+        if context:
+            docs = get_package_documents(context['transaction_package_id'])
+            sibling_ids = [inv['document_id'] for inv in docs['invoices'] if inv['document_id'] != document_id]
+            if sibling_ids:
+                conn = get_db_connection()
+                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cursor.execute(
+                    "UPDATE documents SET status = 'under_review' "
+                    "WHERE document_id = ANY(%s) AND status IN ('ocr_done', 'returned') "
+                    "RETURNING document_id",
+                    (sibling_ids,)
+                )
+                submitted_siblings = [row['document_id'] for row in cursor.fetchall()]
+                conn.commit()
+                conn.close()
+                for sibling_id in submitted_siblings:
+                    log_audit(user['user_id'], 'SUBMIT_FOR_REVIEW', 'documents', sibling_id,
+                              f'Document submitted for auditor review (transaction package {context["transaction_package_id"]}, '
+                              f'synchronized with document {document_id})')
+
+        return jsonify({
+            'message': 'Document submitted for review successfully',
+            'submitted_sibling_document_ids': submitted_siblings,
+        }), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500

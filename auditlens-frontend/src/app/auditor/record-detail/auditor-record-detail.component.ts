@@ -886,16 +886,33 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   }
 
   // A PO-side line-item quantity "mismatch" that's actually just this
-  // invoice's partial share of a multi-invoice PO — informational, not
-  // a hard mismatch, as long as V2's own invoice_result found no real
-  // issue (exceeds-remaining-capacity/vendor mismatch/etc., surfaced via
-  // status !== 'PASS') and the invoice never bills MORE than the PO
-  // line (that would be a genuine over-invoicing problem regardless of
-  // allocation, and must still show as a mismatch).
-  private isPartialAllocationLineItem(li: any): boolean {
+  // invoice's allocated share of a multi-invoice PO — a genuine Match
+  // against its OWN allocation, not a mismatch, as long as V2's own
+  // invoice_result found no real issue (exceeds-remaining-capacity/
+  // vendor mismatch/etc., surfaced via status !== 'PASS') and the
+  // invoice never bills MORE than the PO line (that would be a genuine
+  // over-invoicing problem regardless of allocation, and must still
+  // show as a mismatch). When a single PO candidate matched this
+  // invoice (the common case), the relationship builder's own
+  // allocation rule (helpers/relationship_builder.py::build_
+  // relationships_for_invoice) gives it the FULL invoice quantity as
+  // its matched_quantity — which is exactly li.invoice_quantity, so no
+  // new value needs to be fetched from the backend to show it.
+  isPartialAllocationLineItem(li: any): boolean {
     if (!this.isV2Allocated || this.comparison.invoice_result.status !== 'PASS') return false;
     if (li.po_quantity == null || li.invoice_quantity == null) return false;
     return li.invoice_quantity <= li.po_quantity + 0.01;
+  }
+
+  // The value to show in the PO-side Line Items cell: the invoice's own
+  // allocated quantity (same as its own column, by definition of a
+  // valid allocation) instead of the PO line's full ordered quantity,
+  // whenever this row's quantity difference is explained by allocation.
+  lineItemPoDisplayQuantity(li: any): any {
+    if (li.quantity_match === false && this.isPartialAllocationLineItem(li)) {
+      return li.invoice_quantity;
+    }
+    return li.po_quantity;
   }
 
   lineItemRowClass(li: any): string[] {
@@ -915,20 +932,20 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
 
   lineItemPillClass(li: any, side: 'po' | 'gr'): string {
     if (this.lineItemMissing(li, side)) return 'pill-differ';
-    if (side === 'po' && li.quantity_match === false && this.isPartialAllocationLineItem(li)) return 'pill-na';
+    if (side === 'po' && li.quantity_match === false && this.isPartialAllocationLineItem(li)) return 'pill-match';
     return this.rowMatchPillClass(li.quantity_match);
   }
 
   lineItemPillIcon(li: any, side: 'po' | 'gr'): string {
     if (this.lineItemMissing(li, side)) return 'ph-warning';
-    if (side === 'po' && li.quantity_match === false && this.isPartialAllocationLineItem(li)) return 'ph-info';
+    if (side === 'po' && li.quantity_match === false && this.isPartialAllocationLineItem(li)) return 'ph-check';
     return this.rowMatchIcon(li.quantity_match);
   }
 
   lineItemPillText(li: any, side: 'po' | 'gr'): string {
     if (side === 'po' && li.missing_on_po) return 'Missing on PO';
     if (side === 'gr' && li.missing_on_gr) return 'Missing on GR';
-    if (side === 'po' && li.quantity_match === false && this.isPartialAllocationLineItem(li)) return 'Partial Allocation';
+    if (side === 'po' && li.quantity_match === false && this.isPartialAllocationLineItem(li)) return 'Match';
     return this.rowMatchText(li.quantity_match);
   }
 
