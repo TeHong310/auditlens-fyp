@@ -6636,3 +6636,193 @@ Setup/config needed:
      already-existing endpoints).
   2. Redeploy the Render FRONTEND.
   3. No config changes needed.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-22
+What was changed:
+  New module: "Audit Workflow Calendar" — a shared page for Auditor and
+  Finance to track review deadlines, correction due dates, and follow-up
+  tasks. Not a generic calendar clone: every event type except the new
+  Manual Audit Task is computed live from data that already exists;
+  nothing about extraction, matching, authenticity, anomaly detection,
+  or the send-back workflow's own logic was touched.
+
+  Backend (auditlens-backend/):
+    - NEW table `calendar_tasks` — the ONLY new stored data this task
+      adds (title, description, event_date, assigned_to, priority,
+      status, created_by/created_at/updated_at). Added via app.py's
+      established idempotent `_ensure_*()` auto-create-on-startup
+      pattern (CREATE TABLE IF NOT EXISTS — same as every other table
+      in this repo; no migration runner exists here). Documentation-
+      only mirror at migrations/2026-07-22_create_calendar_tasks_
+      table.sql (force-added past the repo's `*.sql` gitignore rule,
+      matching how send_back_cycles' migration file was already
+      tracked the same way).
+    - NEW helpers/calendar_events.py: pure functions only (no DB, no
+      Flask, no AI) — validate_task_payload() (title/date required,
+      priority from the SAME vocabulary already defined in helpers/
+      send_back.py's PRIORITIES, imported not redefined) and two small
+      shape-only converters, exception_to_calendar_event()/anomaly_to_
+      calendar_event(), that reformat an ALREADY-CLASSIFIED exception/
+      anomaly row into the calendar's common event shape — they don't
+      detect or classify anything themselves.
+    - NEW routes/calendar.py (new `calendar_bp`, registered at
+      `/calendar`): GET /calendar/events aggregates four event types
+      per role:
+        - pending_review: read directly from documents.status IN
+          (under_review, resubmitted) — same status set the existing
+          review queue already uses.
+        - finance_correction_due: read directly from the EXISTING
+          send_back_cycles table (created in the prior send-back-
+          workflow task) — reason/priority/due_date/status come
+          straight from that table's own columns; "Overdue" vs
+          "Awaiting Finance correction" reuses the EXISTING
+          helpers/send_back.py::is_overdue(), not reimplemented.
+        - exception_followup: imports and calls routes/auditor.py's
+          EXISTING _build_comparison()/_classify_exception() — the
+          exact same three-way-matching-derived exception
+          classification the Exceptions page already uses (same
+          import pattern routes/authenticity.py already uses for the
+          same two functions). A classification of type 'sent_back' is
+          skipped here since finance_correction_due already represents
+          that same situation with far richer detail — avoids showing
+          the same underlying issue twice.
+        - anomaly_followup: read directly from the EXISTING `anomalies`
+          table (status='pending'), the same rows GET /anomalies
+          already returns.
+        - manual_task: the one new data source, from calendar_tasks.
+      Role scoping: Auditor sees all four types (system-wide) plus
+      their own tasks; Finance Executive sees ONLY finance_correction_
+      due for THEIR OWN uploaded documents (same ownership scoping
+      GET /reviews/finance-dashboard already uses) plus their own
+      tasks — no pending-review/exception/anomaly data, matching every
+      other endpoint that already restricts those to auditors.
+      Also added: GET /calendar/assignable-users (a minimal {user_id,
+      full_name, role} list for auditor/finance_executive accounts
+      only — deliberately NOT the admin-only GET /admin/users, to
+      populate the "assigned user" dropdown without exposing full user
+      management), POST /calendar/tasks (create), and PATCH /calendar/
+      tasks/<id>/complete (only the task's assignee or creator may
+      complete it).
+    - app.py: registered calendar_bp and added the one new
+      _ensure_calendar_tasks_table() call, alongside the existing
+      _ensure_* calls — no existing migration function was touched.
+    - tests/calendar/ (new): test_calendar_events_validation.py (10
+      pure unit-test cases for helpers/calendar_events.py) and
+      test_calendar_routes.py (10 cases against a REAL Flask test
+      client + REAL JWT machinery hitting the REAL route functions, a
+      fully in-memory fake DB — role restrictions for both endpoints,
+      the full four-event-type aggregation for an auditor, the
+      'sent_back' exception-exclusion rule, finance-role scoping
+      producing zero pending_review/exception/anomaly events, task
+      creation validation/defaulting, and the complete-task ownership
+      check). Both added to tests/extraction/run_all.py's suite list.
+  Frontend (auditlens-frontend/):
+    - NEW shared component src/app/calendar/calendar.component.ts/
+      html/css — ONE component used by both /auditor/calendar and
+      /finance/calendar (role read from localStorage, the same pattern
+      the layouts already use), rather than building two near-
+      identical calendar UIs. Monthly grid (42-cell, leading/trailing
+      days from adjacent months grayed out), event chips color-coded
+      ONLY by priority (normal/medium/high — a deliberately small,
+      restrained palette; event TYPE is distinguished by icon instead,
+      per the "avoid too many colours" requirement), a Day Events list
+      for days with more than 3 events, an Event Detail modal
+      (document/vendor/type/priority/description/status + a role- and
+      type-aware "related action" button: Open Document / Review
+      Correction / Correct Document / View Exception / Mark Complete),
+      and a New Task modal (title/description/date/assigned
+      user/priority) reusing the same dark modal styling family as the
+      Send-Back modal on Record Detail. Shows "No scheduled audit
+      activities" when a month has zero events, never fabricated data.
+    - app.routes.ts: added `calendar` as a child route under BOTH
+      `/auditor` and `/finance`, pointing at the same component.
+    - auditor-layout / finance-layout (.ts + .html): added a
+      "Calendar" nav item (auditor order: Home, Authenticity,
+      Exceptions, Anomaly Detection, Calendar, Report & Log — exactly
+      as requested; finance: Home, Upload, OCR Review, Calendar,
+      Report) with a new calendar icon case in each layout's existing
+      icon-switch template. No other nav items changed.
+    - NEW calendar.component.spec.ts (15 cases) — every HTTP call
+      mocked via HttpTestingController, no real backend, no AI calls.
+      Covers: the local-timezone-safe date formatter (a regression
+      guard against the classic Date.toISOString() UTC-shift bug), the
+      42-cell grid generation, event-to-day grouping, task-form
+      validation, task creation/completion payloads, and role-aware
+      related-action routing (confirming a Finance user is never
+      routed into an /auditor/* page, since this app has no route
+      guard and the API itself would just 403 them there).
+  Untouched, confirmed via `git diff --stat`: every extraction/matching/
+  authenticity/anomaly-detection helper file, routes/matching.py,
+  routes/anomalies.py, routes/authenticity.py, routes/documents.py, and
+  the send-back workflow itself (routes/reviews.py, helpers/send_back.py
+  — send_back_cycles is only READ from, via a plain SELECT, never
+  written to by this task).
+
+Why:
+  There was no central place to see review deadlines, correction due
+  dates, and follow-up tasks together — an auditor had to separately
+  check the review queue, the Exceptions page, the Anomalies page, and
+  each record's Send-Back history to piece together "what needs
+  attention and by when," and Finance had no due-date view at all
+  beyond the Returned-for-Correction list (which has no date grouping).
+
+Data sources used (existing unless noted):
+  - pending_review: documents.status (existing).
+  - finance_correction_due: send_back_cycles (existing table, created
+    in the prior send-back-workflow task) + helpers/send_back.py::
+    is_overdue() (existing, reused).
+  - exception_followup: routes/auditor.py::_build_comparison()/
+    _classify_exception() (existing, imported and reused, not
+    reimplemented).
+  - anomaly_followup: the `anomalies` table (existing).
+  - manual_task: calendar_tasks — the ONE new table this task adds.
+  - assignable-user list: a new minimal query over the existing `users`
+    table (role IN auditor/finance_executive only).
+
+Tests run and results:
+  - `python tests/extraction/run_all.py`: 15/15 suites PASS (13
+    pre-existing + 2 new calendar suites, 20 new checks/cases total).
+  - `npx ng build --configuration production`: clean build (same
+    pre-existing bundle-size budget warnings as before, unrelated).
+  - `npx ng test --watch=false`: 42/43 tests pass (15 new calendar
+    tests all pass); the 1 failure is the same pre-existing, unrelated
+    app.spec.ts issue seen throughout this project's history — confirmed
+    via `git diff --stat` showing zero changes to that file.
+  - Zero Claude API calls, zero Gemini API calls, zero extraction
+    triggered, zero anomalies generated — every backend test mocks
+    get_db_connection/_build_comparison/_classify_exception/
+    get_user_by_id; the calendar aggregates only pre-existing data, it
+    never calls any AI helper or detection function.
+
+Assumptions:
+  - Exceptions/anomalies have no due-date column in this schema, so
+    their calendar event is anchored on the date the signal was first
+    raised (the document's uploaded_at / the anomaly's created_at) —
+    labeled as "outstanding since," never presented as an invented
+    deadline. Only finance_correction_due (send_back_cycles.response_
+    due_date) is a genuine due date.
+  - pending_review's calendar date is documents.updated_at (falls back
+    to uploaded_at) — the date the record most recently became
+    reviewable, which also correctly reflects a resubmission, not just
+    the original upload.
+  - Manual Audit Task intentionally has no document_id/link field — the
+    task only listed title/description/date/assigned user/priority as
+    fields, so no unrequested field was added.
+  - A minimal "mark complete" endpoint was added beyond the literal
+    "allow creating a task" ask, since a task that can never leave the
+    calendar would make the feature unusable in practice; delete/edit
+    were NOT added (not requested, kept to the smallest usable
+    lifecycle: open -> done).
+
+Setup/config needed:
+  1. Redeploy the Render BACKEND — the new calendar_tasks table is
+     created automatically on next boot (no manual migration step).
+  2. Redeploy the Render FRONTEND.
+  3. No new environment variables.
+  4. After deploy: open Calendar from both the Auditor and Finance
+     sidebars, confirm pending reviews / finance correction due dates /
+     exceptions / anomalies show up for an auditor, confirm a finance
+     user only sees their own correction-due items, and create + mark
+     complete a manual task from each role.

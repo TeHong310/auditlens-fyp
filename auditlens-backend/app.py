@@ -12,6 +12,7 @@ from routes.ocr_review import ocr_review_bp
 from routes.auditor import auditor_bp
 from routes.anomalies import anomalies_bp
 from routes.authenticity import authenticity_bp
+from routes.calendar import calendar_bp
 
 
 def _ensure_anomalies_table():
@@ -416,6 +417,42 @@ def _ensure_send_back_cycles_table():
         print(f'WARNING: could not create send_back_cycles table: {type(e).__name__}: {e}')
 
 
+def _ensure_calendar_tasks_table():
+    """Audit Workflow Calendar's ONLY new table — manual audit tasks
+    (title/description/date/assigned_to/priority) an auditor or finance
+    user creates by hand. Every OTHER calendar event type (pending
+    review, finance correction due, exception/anomaly follow-up) is
+    computed on the fly from existing tables (documents, send_back_
+    cycles, review_records-backed exception classification, anomalies) —
+    nothing about those is stored here or duplicated. Same auto-create-
+    on-startup pattern as every other _ensure_ function above (no
+    migration runner in this repo)."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS calendar_tasks (
+                task_id SERIAL PRIMARY KEY,
+                title VARCHAR(200) NOT NULL,
+                description TEXT,
+                event_date DATE NOT NULL,
+                assigned_to INTEGER REFERENCES users(user_id),
+                priority VARCHAR(10) NOT NULL DEFAULT 'normal',
+                status VARCHAR(10) NOT NULL DEFAULT 'open',
+                created_by INTEGER NOT NULL REFERENCES users(user_id),
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_calendar_tasks_date ON calendar_tasks(event_date)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_calendar_tasks_assigned ON calendar_tasks(assigned_to)')
+        conn.commit()
+        conn.close()
+        print('calendar_tasks table ready')
+    except Exception as e:
+        print(f'WARNING: could not create calendar_tasks table: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -433,6 +470,7 @@ app.register_blueprint(ocr_review_bp, url_prefix='/ocr-review')
 app.register_blueprint(auditor_bp,    url_prefix='/auditor')
 app.register_blueprint(anomalies_bp,  url_prefix='/anomalies')
 app.register_blueprint(authenticity_bp, url_prefix='/authenticity')
+app.register_blueprint(calendar_bp,   url_prefix='/calendar')
 
 _ensure_anomalies_table()
 _ensure_authenticity_checks_table()
@@ -446,6 +484,7 @@ _ensure_gemini_cache_table()
 _ensure_claude_cache_table()
 _ensure_authenticity_cache_table()
 _ensure_send_back_cycles_table()
+_ensure_calendar_tasks_table()
 
 @app.route('/')
 def hello_world():

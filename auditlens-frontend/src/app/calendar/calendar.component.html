@@ -1,0 +1,182 @@
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <div>
+      <h1 class="page-title"><i class="ph-duotone ph-calendar-blank"></i> Audit Workflow Calendar</h1>
+      <p class="page-subtitle">Review deadlines, correction due dates and follow-up tasks in one place</p>
+    </div>
+    <button class="btn-new-task" (click)="openTaskModal()"><i class="ph-duotone ph-plus"></i> New Task</button>
+  </div>
+
+  <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
+
+  <!-- Month navigation -->
+  <div class="month-nav">
+    <button class="nav-btn" (click)="prevMonth()" aria-label="Previous month"><i class="ph-duotone ph-caret-left"></i></button>
+    <span class="month-label">{{ monthLabel }}</span>
+    <button class="nav-btn" (click)="nextMonth()" aria-label="Next month"><i class="ph-duotone ph-caret-right"></i></button>
+    <button class="btn-today" (click)="goToToday()">Today</button>
+  </div>
+
+  <!-- Calendar grid -->
+  <div class="calendar-card">
+    <div class="weekday-row">
+      <span class="weekday-label" *ngFor="let w of weekdayLabels">{{ w }}</span>
+    </div>
+
+    <div class="calendar-grid" *ngIf="!isLoading">
+      <div class="day-cell" *ngFor="let day of calendarDays"
+           [class.day-cell-outside]="!day.inMonth"
+           [class.day-cell-today]="day.isToday"
+           (click)="openDay(day)">
+        <span class="day-number">{{ day.date.getDate() }}</span>
+        <div class="day-events">
+          <div class="event-chip" *ngFor="let event of visibleChips(day)"
+               [ngClass]="priorityClass(event.priority)"
+               (click)="openEventDetail(event, $event)">
+            <i class="ph-duotone" [ngClass]="eventTypeIcon(event.event_type)"></i>
+            <span class="event-chip-text">{{ event.title }}</span>
+          </div>
+          <span class="event-overflow" *ngIf="overflowCount(day) > 0">+{{ overflowCount(day) }} more</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="loading-wrap" *ngIf="isLoading">
+      <div class="spinner"></div>
+      <p>Loading calendar…</p>
+    </div>
+
+    <div class="empty-note" *ngIf="!isLoading && !errorMessage && !hasAnyEvents">
+      <i class="ph-duotone ph-confetti"></i> No scheduled audit activities.
+    </div>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend-row">
+    <span class="legend-item"><span class="legend-dot priority-normal"></span> Normal priority</span>
+    <span class="legend-item"><span class="legend-dot priority-medium"></span> Medium priority</span>
+    <span class="legend-item"><span class="legend-dot priority-high"></span> High priority</span>
+  </div>
+
+  <!-- ── Day Events Modal ── -->
+  <div class="modal-backdrop" *ngIf="showDayModal" (click)="closeDayModal()">
+    <div class="cal-modal-box" (click)="$event.stopPropagation()">
+      <div class="cal-modal-header">
+        <span class="cal-modal-title">{{ selectedDayLabel }}</span>
+        <button class="modal-close-btn" (click)="closeDayModal()"><i class="ph-duotone ph-x"></i></button>
+      </div>
+      <div class="cal-modal-body">
+        <div class="day-event-row" *ngFor="let event of selectedDayEvents" (click)="openEventDetail(event)">
+          <span class="event-dot" [ngClass]="priorityClass(event.priority)"></span>
+          <div class="day-event-main">
+            <p class="day-event-title">{{ event.title }}</p>
+            <p class="day-event-type"><i class="ph-duotone" [ngClass]="eventTypeIcon(event.event_type)"></i> {{ eventTypeLabel(event.event_type) }}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Event Detail Modal ── -->
+  <div class="modal-backdrop" *ngIf="showEventModal && selectedEvent" (click)="closeEventModal()">
+    <div class="cal-modal-box" (click)="$event.stopPropagation()">
+      <div class="cal-modal-header">
+        <span class="cal-modal-title"><i class="ph-duotone" [ngClass]="eventTypeIcon(selectedEvent.event_type)"></i> {{ eventTypeLabel(selectedEvent.event_type) }}</span>
+        <button class="modal-close-btn" (click)="closeEventModal()"><i class="ph-duotone ph-x"></i></button>
+      </div>
+      <div class="cal-modal-body">
+        <p class="detail-title">{{ selectedEvent.title }}</p>
+
+        <div class="detail-meta-row">
+          <span class="priority-chip" [ngClass]="priorityClass(selectedEvent.priority)">{{ priorityLabel(selectedEvent.priority) }} priority</span>
+          <span class="date-chip">{{ formatEventDate(selectedEvent.date) }}</span>
+        </div>
+
+        <ng-container *ngIf="selectedEvent.invoice_no || selectedEvent.vendor_name">
+          <p class="detail-label">Invoice Number</p>
+          <p class="detail-value">{{ selectedEvent.invoice_no || '-' }}</p>
+          <p class="detail-label">Vendor</p>
+          <p class="detail-value">{{ selectedEvent.vendor_name || '-' }}</p>
+        </ng-container>
+
+        <p class="detail-label" *ngIf="selectedEvent.description">Description</p>
+        <p class="detail-value" *ngIf="selectedEvent.description">{{ selectedEvent.description }}</p>
+
+        <p class="detail-label" *ngIf="selectedEvent.status">Status</p>
+        <p class="detail-value" *ngIf="selectedEvent.status">{{ selectedEvent.status }}</p>
+
+        <ng-container *ngIf="selectedEvent.event_type === 'manual_task'">
+          <p class="detail-label" *ngIf="selectedEvent.assigned_to_name">Assigned To</p>
+          <p class="detail-value" *ngIf="selectedEvent.assigned_to_name">{{ selectedEvent.assigned_to_name }}</p>
+          <p class="detail-label" *ngIf="selectedEvent.created_by_name">Created By</p>
+          <p class="detail-value" *ngIf="selectedEvent.created_by_name">{{ selectedEvent.created_by_name }}</p>
+        </ng-container>
+      </div>
+      <div class="cal-modal-footer" *ngIf="relatedActionLabel(selectedEvent)">
+        <button class="btn-modal-primary" (click)="runRelatedAction(selectedEvent)">{{ relatedActionLabel(selectedEvent) }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── New Task Modal ── -->
+  <div class="modal-backdrop" *ngIf="showTaskModal" (click)="closeTaskModal()">
+    <div class="cal-modal-box" (click)="$event.stopPropagation()">
+      <div class="cal-modal-header">
+        <span class="cal-modal-title">New Audit Task</span>
+        <button class="modal-close-btn" (click)="closeTaskModal()"><i class="ph-duotone ph-x"></i></button>
+      </div>
+      <div class="cal-modal-body">
+
+        <div class="error-box" *ngIf="taskErrors.length">
+          <i class="ph-duotone ph-x-circle"></i>
+          <ul class="task-error-list">
+            <li *ngFor="let e of taskErrors">{{ e }}</li>
+          </ul>
+        </div>
+
+        <div class="task-field">
+          <label class="task-label">Title <span class="task-required">*</span></label>
+          <input class="task-input" type="text" [(ngModel)]="taskForm.title" placeholder="e.g. Follow up with vendor on missing PO" />
+        </div>
+
+        <div class="task-field">
+          <label class="task-label">Description</label>
+          <textarea class="task-textarea" rows="3" [(ngModel)]="taskForm.description" placeholder="Optional details…"></textarea>
+        </div>
+
+        <div class="task-field-row">
+          <div class="task-field">
+            <label class="task-label">Date <span class="task-required">*</span></label>
+            <input class="task-input" type="date" [(ngModel)]="taskForm.date" />
+          </div>
+          <div class="task-field">
+            <label class="task-label">Priority</label>
+            <select class="task-input" [(ngModel)]="taskForm.priority">
+              <option value="normal">Normal</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="task-field">
+          <label class="task-label">Assigned User</label>
+          <select class="task-input" [(ngModel)]="taskForm.assigned_to">
+            <option value="">Myself</option>
+            <option *ngFor="let u of assignableUsers" [value]="u.user_id">{{ u.full_name }} ({{ u.role === 'auditor' ? 'Auditor' : 'Finance' }})</option>
+          </select>
+        </div>
+
+      </div>
+      <div class="cal-modal-footer">
+        <button class="btn-modal-secondary" (click)="closeTaskModal()" [disabled]="isSubmittingTask">Cancel</button>
+        <button class="btn-modal-primary" (click)="submitTask()" [disabled]="isSubmittingTask">
+          {{ isSubmittingTask ? 'Creating…' : 'Create Task' }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+</div>

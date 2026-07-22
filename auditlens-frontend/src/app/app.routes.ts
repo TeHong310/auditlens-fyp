@@ -15,6 +15,7 @@ import { AuditorExceptionsComponent } from './auditor/exceptions/auditor-excepti
 import { AuditorAnomaliesComponent } from './auditor/anomalies/auditor-anomalies.component';
 import { AuditorAuthenticityComponent } from './auditor/authenticity/auditor-authenticity.component';
 import { AuditorAuthenticityDetailComponent } from './auditor/authenticity-detail/auditor-authenticity-detail.component';
+import { CalendarComponent } from './calendar/calendar.component';
 export const routes: Routes = [
   { path: '', redirectTo: 'login', pathMatch: 'full' },
   { path: 'login', component: LoginComponent },
@@ -28,6 +29,7 @@ export const routes: Routes = [
       { path: 'upload', component: FinanceUploadComponent },
       { path: 'ocr-review', component: FinanceOcrReviewComponent },
       { path: 'report', component: FinanceReportComponent },
+      { path: 'calendar', component: CalendarComponent },
       { path: '', redirectTo: 'home', pathMatch: 'full' }
     ]
   },
@@ -41,6 +43,7 @@ export const routes: Routes = [
       { path: 'anomalies', component: AuditorAnomaliesComponent },
       { path: 'authenticity', component: AuditorAuthenticityComponent },
       { path: 'authenticity/:documentId', component: AuditorAuthenticityDetailComponent },
+      { path: 'calendar', component: CalendarComponent },
       { path: 'report', component: AuditorReportComponent },
       { path: '', redirectTo: 'home', pathMatch: 'full' }
     ]
