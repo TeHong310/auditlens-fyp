@@ -1,0 +1,63 @@
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <h1 class="page-title">Correction Center</h1>
+      <p class="page-subtitle">Resolve auditor feedback for invoices returned for correction</p>
+    </div>
+    <div class="header-right">
+      <button class="btn-refresh" (click)="loadCorrections()">
+        <i class="ph-duotone ph-arrow-clockwise" style="font-size:16px; color:white;"></i>
+        Refresh
+      </button>
+    </div>
+  </div>
+
+  <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
+
+  <div class="list-card">
+    <h2 class="section-title"><i class="ph-duotone ph-arrow-u-up-left"></i> Returned Invoices</h2>
+    <p class="section-subtitle">Invoices sent back by an auditor, awaiting Finance correction and resubmission.</p>
+
+    <div class="search-bar">
+      <i class="ph-duotone ph-magnifying-glass" style="font-size:15px; color:var(--text-muted);"></i>
+      <input type="text" placeholder="Search invoice number or vendor..."
+             class="search-input" [(ngModel)]="searchText"/>
+    </div>
+
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Invoice Number</th>
+            <th>Vendor</th>
+            <th>Returned Date</th>
+            <th>Priority</th>
+            <th>Return Reason</th>
+            <th>Required Action</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngIf="isLoading"><td colspan="7" class="loading-row">Loading...</td></tr>
+          <tr *ngIf="!isLoading && filteredCorrections.length === 0">
+            <td colspan="7" class="empty-row">
+              <p style="color:var(--success);font-weight:600">No invoices awaiting correction!</p>
+            </td>
+          </tr>
+          <tr *ngFor="let doc of filteredCorrections" (click)="openCorrection(doc)">
+            <td class="invoice-no">{{ doc.invoice_number || doc.file_name }}</td>
+            <td>{{ doc.vendor_name || 'Unknown vendor' }}</td>
+            <td>{{ returnedDateLabel(doc) }}</td>
+            <td><span class="badge" [ngClass]="priorityClass(doc)">{{ priorityLabel(doc) }}</span></td>
+            <td>{{ returnReasonLabel(doc) }}</td>
+            <td>{{ requiredActionsSummary(doc) }}</td>
+            <td><span class="badge badge-returned">{{ currentStatusLabel(doc) }}</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>

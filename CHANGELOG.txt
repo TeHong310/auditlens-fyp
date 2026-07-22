@@ -7386,3 +7386,115 @@ Setup/config needed:
   1. Redeploy the Render FRONTEND.
   2. No backend redeploy needed (no backend changes).
   3. No config changes needed.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-22 (later same day)
+
+What was changed:
+  Frontend (auditlens-frontend/) — 8 new files, 3 modified files, ZERO
+  backend changes (every endpoint used already existed):
+    New: Finance "Correction Center" — a dedicated workspace for
+    invoices an auditor sent back, separated out of the OCR Review page
+    (which previously mixed "review freshly OCR'd fields" with
+    "resolve auditor feedback" in one queue).
+      - finance/corrections/finance-corrections.component.{ts,html,css}
+        (list, route /finance/corrections): table of every returned
+        invoice — Invoice Number, Vendor, Returned Date, Priority,
+        Return Reason, Required Action, Status ("Awaiting Finance
+        Correction"). Built entirely by composing two EXISTING
+        endpoints client-side: GET /documents/ (already scoped to the
+        current Finance user, filtered here to status === 'returned' —
+        the same filter finance-ocr-review.component.ts's
+        returnedDocuments getter already applies) and, for each
+        returned invoice, GET /reviews/send-back-cycles/<id> (already
+        used by finance-ocr-review.component.ts for a single selected
+        document) fetched in parallel via forkJoin — the same forkJoin-
+        over-N-endpoint-calls pattern finance-ocr-review.component.ts's
+        loadRelatedDocsForAll() already uses for PO/GR status. No new
+        backend route.
+      - finance/correction-detail/finance-correction-detail.component.
+        {ts,html,css} (detail, route /finance/corrections/detail?
+        document_id=X): Original Invoice Information (read-only:
+        number/vendor/amount/date, from GET /documents/<id>), Auditor
+        Request (reason/instruction/required actions/priority, from
+        GET /reviews/send-back-cycles/<id>'s latest cycle), and Finance
+        Resolution — editable invoice fields + Save Changes (PUT
+        /documents/<id>/update-fields, the exact endpoint/payload
+        finance-ocr-review.component.ts already uses), Upload/Replace
+        PO and GR (POST /documents/upload-po|upload-gr/<id>, the exact
+        endpoints finance-upload.component.ts already uses), a
+        required Finance Response field, and Resubmit to Auditor (POST
+        /reviews/resubmit/<id> with {response}, the exact endpoint/
+        payload finance-ocr-review.component.ts already uses for a
+        returned document). PO/GR upload status comes from GET
+        /ocr-review/invoice/<id>/related-docs (already existed).
+      - Matching spec.ts files for both (15 new tests total):
+        list — a returned invoice appears with correct reason/priority/
+        required-action/status labels; a non-returned invoice (and a
+        mixed list) never triggers a send-back-cycles lookup and never
+        appears; a legacy return with no structured cycle still appears
+        with fallback labels; search filters by invoice number/vendor;
+        clicking a row navigates to the detail route with the right
+        document_id. detail — loading composes all 3 GET calls
+        correctly; a document with no cycle leaves latestCycle null
+        (fallback UI); Save Changes PUTs the exact expected payload;
+        uploadPO POSTs and refreshes related-docs on success; resubmit
+        is BLOCKED (no HTTP call at all) without a Finance response;
+        resubmit POSTs the exact expected payload and reports success;
+        a server-side resubmit error is surfaced without navigating
+        away; goBack navigates to the list.
+    Modified (all 3 changes purely additive, 8 lines total):
+      - app.routes.ts: registered the 2 new routes under the existing
+        /finance parent route (children array), alongside the existing
+        home/upload/ocr-review/report/calendar routes — none of those
+        existing routes changed.
+      - finance-layout.component.ts: added one new navItems entry
+        ("Correction Center") between "OCR Review" and "Calendar" —
+        the existing 5 entries are unchanged, same order.
+      - finance-layout.component.html: added one new *ngIf icon block
+        for the new nav item (ph-arrow-u-up-left, the same icon already
+        used for the send-back arrow elsewhere in the app) — the
+        existing icon blocks are unchanged.
+  The OCR Review page (finance-ocr-review.component.*) is entirely
+  UNTOUCHED — its own "Returned for Correction" panel and returned-
+  document handling still work exactly as before; Correction Center is
+  an additional, focused entry point for the same underlying data, not
+  a replacement (out of scope for this task to remove).
+
+Why:
+  OCR Review mixed two different workflows (reviewing freshly OCR'd
+  fields vs. resolving auditor correction requests) in one queue,
+  making it harder for Finance to focus specifically on what an auditor
+  is waiting on. Correction Center gives Finance a dedicated, auditor-
+  feedback-focused workspace, built entirely by composing already-
+  existing, already-tested backend endpoints — no new backend logic,
+  no duplicate send-back/resubmit workflow.
+
+Testing:
+  - `npx ng build --configuration production` — succeeded (exit 0;
+    same pre-existing budget warnings as prior tasks, slightly higher
+    main bundle size from the 2 new components, still just a warning).
+  - `npx ng test --watch=false` — 71/72 pass (up from 56; +15 new
+    tests, all passing). The 1 failure is the same pre-existing,
+    unrelated app.spec.ts issue seen throughout this project's history.
+  - Tested exactly what the task asked: a returned invoice appears in
+    the list; a non-returned invoice does not appear (including inside
+    a mixed-status response); Finance can open the correction detail
+    page (all 3 GET calls compose correctly); resubmit works (correct
+    payload, success path, blocked-without-response path, and
+    server-error path all covered).
+  - `git status`/`git diff --stat` confirm ZERO backend files changed
+    at all — every endpoint used (GET /documents/, GET /documents/
+    <id>, PUT /documents/<id>/update-fields, POST /documents/upload-po|
+    upload-gr/<id>, GET /ocr-review/invoice/<id>/related-docs, GET
+    /reviews/send-back-cycles/<id>, POST /reviews/resubmit/<id>)
+    already existed before this task. Extraction, Claude/Gemini
+    extraction, the matching engine, authenticity, and anomaly
+    detection were never touched, imported, or referenced by any new
+    code.
+
+Setup/config needed:
+  1. Redeploy the Render FRONTEND.
+  2. No backend redeploy needed (no backend changes).
+  3. No config changes needed.

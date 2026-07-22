@@ -1,0 +1,167 @@
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <button class="btn-back" (click)="goBack()">
+        <i class="ph-duotone ph-arrow-left" style="font-size:16px;"></i>
+        Back
+      </button>
+      <div>
+        <p class="page-label">Correction Detail</p>
+        <p class="page-subtitle" *ngIf="document">{{ document.invoice_number || document.file_name }}</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div class="loading-wrap" *ngIf="isLoading">
+    <div class="spinner"></div>
+    <p>Loading invoice...</p>
+  </div>
+
+  <!-- No document -->
+  <div class="empty-wrap" *ngIf="!isLoading && !document">
+    <p>{{ errorMessage || 'No document selected.' }}</p>
+    <button class="btn-back" (click)="goBack()">← Back to Correction Center</button>
+  </div>
+
+  <ng-container *ngIf="!isLoading && document">
+
+    <div class="success-box" *ngIf="successMessage"><i class="ph-duotone ph-check-circle"></i> {{ successMessage }}</div>
+    <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
+
+    <div class="content-row">
+
+      <!-- Left: Original Invoice Info + Auditor Request -->
+      <div class="main-column">
+
+        <div class="list-card">
+          <h2 class="section-title"><i class="ph-duotone ph-file-text"></i> Original Invoice Information</h2>
+          <div class="info-list">
+            <div class="info-item">
+              <span class="field-label">Invoice Number</span>
+              <span class="ar-value">{{ document.invoice_number || '-' }}</span>
+            </div>
+            <div class="info-item">
+              <span class="field-label">Vendor</span>
+              <span class="ar-value">{{ document.vendor_name || '-' }}</span>
+            </div>
+            <div class="info-item">
+              <span class="field-label">Amount</span>
+              <span class="ar-value">{{ formatAmount(document.total_amount, document.currency) }}</span>
+            </div>
+            <div class="info-item">
+              <span class="field-label">Date</span>
+              <span class="ar-value">{{ formatDate(document.invoice_date) }}</span>
+            </div>
+          </div>
+          <button type="button" class="btn-open" (click)="viewDocument()">
+            <i class="ph-duotone ph-eye"></i> View Invoice
+          </button>
+        </div>
+
+        <div class="list-card">
+          <h2 class="section-title"><i class="ph-duotone ph-user-circle-gear"></i> Auditor Request</h2>
+          <p class="ar-loading" *ngIf="!latestCycle">No structured auditor request found for this return.</p>
+          <ng-container *ngIf="latestCycle">
+            <div class="ar-meta-row">
+              <span class="badge" [ngClass]="'priority-' + latestCycle.priority">{{ latestCycle.priority }} priority</span>
+              <span class="badge badge-returned" *ngIf="latestCycle.is_overdue">Overdue</span>
+              <span class="ar-due" *ngIf="latestCycle.response_due_date">Due {{ formatDate(latestCycle.response_due_date) }}</span>
+            </div>
+            <p class="ar-label">Reason</p>
+            <p class="ar-value">{{ reasonCategoryLabel(latestCycle.return_reason_category) }}</p>
+            <p class="ar-label">Auditor instruction</p>
+            <p class="ar-value">{{ latestCycle.auditor_instruction }}</p>
+            <p class="ar-label">Required actions</p>
+            <ul class="ar-actions-list">
+              <li *ngFor="let action of latestCycle.required_actions">{{ requiredActionLabel(action) }}</li>
+            </ul>
+          </ng-container>
+        </div>
+
+      </div>
+
+      <!-- Right: Finance Resolution -->
+      <div class="detail-card">
+        <h2 class="section-title"><i class="ph-duotone ph-wrench"></i> Finance Resolution</h2>
+        <p class="section-subtitle">Correct fields, upload supporting documents, and resubmit for auditor review</p>
+
+        <div class="fields-list">
+          <div class="field-item">
+            <label class="field-label">Invoice Number</label>
+            <input class="field-input" type="text" [(ngModel)]="editFields.invoice_number"
+                   [class.field-missing]="!editFields.invoice_number" placeholder="Not detected"/>
+          </div>
+          <div class="field-item">
+            <label class="field-label">Vendor Name</label>
+            <input class="field-input" type="text" [(ngModel)]="editFields.vendor_name"
+                   [class.field-missing]="!editFields.vendor_name" placeholder="Not detected"/>
+          </div>
+          <div class="field-item">
+            <label class="field-label">Invoice Date</label>
+            <input class="field-input" type="text" [(ngModel)]="editFields.invoice_date"
+                   [class.field-missing]="!editFields.invoice_date" placeholder="Not detected"/>
+          </div>
+          <div class="field-item">
+            <label class="field-label">{{ document.currency ? 'Total Amount (' + document.currency + ')' : 'Total Amount' }}</label>
+            <input class="field-input" type="number" [(ngModel)]="editFields.total_amount"
+                   [class.field-missing]="!editFields.total_amount" placeholder="Not detected"/>
+          </div>
+        </div>
+        <button class="btn-save" (click)="saveChanges()" [disabled]="isSaving">
+          {{ isSaving ? 'Saving...' : 'Save Changes' }}
+        </button>
+
+        <div class="related-docs-row">
+          <span class="badge" [ngClass]="relatedDocs?.po?.uploaded ? 'badge-ready' : 'badge-missing'">
+            <i class="ph-duotone" [ngClass]="relatedDocs?.po?.uploaded ? 'ph-check-circle' : 'ph-warning'"></i>
+            {{ relatedDocs?.po?.uploaded ? 'PO Uploaded' : 'PO Missing' }}
+          </span>
+          <button type="button" class="btn-review" *ngIf="relatedDocs?.po?.uploaded" (click)="viewPO()">View PO</button>
+
+          <span class="badge" [ngClass]="relatedDocs?.gr?.uploaded ? 'badge-ready' : 'badge-missing'">
+            <i class="ph-duotone" [ngClass]="relatedDocs?.gr?.uploaded ? 'ph-check-circle' : 'ph-warning'"></i>
+            {{ relatedDocs?.gr?.uploaded ? 'GR Uploaded' : 'GR Missing' }}
+          </span>
+          <button type="button" class="btn-review" *ngIf="relatedDocs?.gr?.uploaded" (click)="viewGR()">View GR</button>
+        </div>
+
+        <div class="upload-row">
+          <label class="btn-upload-link">
+            <i class="ph-duotone ph-upload-simple"></i>
+            {{ isUploadingPO ? 'Uploading PO…' : (relatedDocs?.po?.uploaded ? 'Replace PO' : 'Upload PO') }}
+            <input type="file" hidden (change)="onPOFileSelected($event)" [disabled]="isUploadingPO" accept=".pdf,.jpg,.jpeg,.png"/>
+          </label>
+          <p class="submit-note" *ngIf="poMessage">{{ poMessage }}</p>
+
+          <label class="btn-upload-link">
+            <i class="ph-duotone ph-upload-simple"></i>
+            {{ isUploadingGR ? 'Uploading GR…' : (relatedDocs?.gr?.uploaded ? 'Replace GR' : 'Upload GR') }}
+            <input type="file" hidden (change)="onGRFileSelected($event)" [disabled]="isUploadingGR" accept=".pdf,.jpg,.jpeg,.png"/>
+          </label>
+          <p class="submit-note" *ngIf="grMessage">{{ grMessage }}</p>
+        </div>
+
+        <div class="field-item finance-response-field">
+          <label class="field-label">Finance Response <span class="field-required">*</span></label>
+          <textarea class="field-textarea" rows="3" [(ngModel)]="financeResponse"
+            placeholder='Describe what was corrected, e.g. "Purchase Order and Goods Receipt have been uploaded as requested."'></textarea>
+        </div>
+
+        <div class="submit-section">
+          <button class="btn-submit" (click)="resubmit()" [disabled]="isSubmitting || !canResubmit()">
+            {{ isSubmitting ? 'Resubmitting...' : 'Resubmit to Auditor' }}
+          </button>
+          <p class="submit-note" *ngIf="!canResubmit()">
+            <i class="ph-duotone ph-warning"></i> Add a Finance Response before resubmitting.
+          </p>
+        </div>
+      </div>
+
+    </div>
+
+  </ng-container>
+
+</div>

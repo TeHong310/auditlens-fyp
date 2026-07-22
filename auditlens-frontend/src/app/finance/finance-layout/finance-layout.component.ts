@@ -18,6 +18,7 @@ export class FinanceLayoutComponent implements OnInit {
     { label: 'Finance Home', icon: 'home', route: '/finance/home' },
     { label: 'Upload Document', icon: 'upload', route: '/finance/upload' },
     { label: 'OCR Review', icon: 'review', route: '/finance/ocr-review' },
+    { label: 'Correction Center', icon: 'correction', route: '/finance/corrections' },
     { label: 'Calendar', icon: 'calendar', route: '/finance/calendar' },
     { label: 'Report', icon: 'report', route: '/finance/report' },
   ];
