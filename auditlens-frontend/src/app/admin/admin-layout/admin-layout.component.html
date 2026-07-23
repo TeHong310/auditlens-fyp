@@ -1,0 +1,56 @@
+<div class="layout-wrapper">
+
+  <button class="hamburger" (click)="toggleSidebar()" aria-label="Menu"><i class="ph-duotone ph-list"></i></button>
+
+  <div class="sidebar-overlay" *ngIf="isSidebarOpen" (click)="closeSidebar()"></div>
+
+  <div class="sidebar" [class.open]="isSidebarOpen">
+    <div class="sidebar-top">
+      <div class="sidebar-logo">
+        <img src="logo.png" alt="AuditLens" class="sidebar-logo-img"/>
+      </div>
+
+      <nav class="sidebar-nav">
+        <a *ngFor="let item of navItems"
+           [routerLink]="item.route"
+           class="nav-item"
+           [class.active]="isActive(item.route)"
+           (click)="closeSidebar()">
+          <i *ngIf="item.icon === 'home'" class="ph-duotone ph-house"></i>
+          <span>{{ item.label }}</span>
+        </a>
+      </nav>
+    </div>
+
+    <!-- Sidebar Bottom -->
+    <div class="sidebar-bottom">
+      <div class="user-menu-wrapper">
+
+        <!-- Logout Dropdown -->
+        <div class="user-menu" *ngIf="showUserMenu">
+          <button class="user-menu-item logout" (click)="logout()">
+            <i class="ph-duotone ph-sign-out"></i>
+            Logout
+          </button>
+        </div>
+
+        <!-- User Info -->
+        <div class="user-info" (click)="toggleUserMenu()">
+          <div class="user-avatar">{{ getInitial() }}</div>
+          <div class="user-details">
+            <p class="user-name">{{ user?.full_name || 'Admin' }}</p>
+            <p class="user-role">Admin</p>
+          </div>
+          <i class="ph-duotone ph-caret-down" style="margin-left:auto; flex-shrink:0; font-size:14px; color:var(--text-muted);"></i>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main-content">
+    <router-outlet></router-outlet>
+  </div>
+
+</div>

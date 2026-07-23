@@ -10614,3 +10614,98 @@ Rollback instructions:
   DELETE /transaction-packages/<id> (empty-only) route and its
   behavior are completely unchanged, so rolling back only removes the
   new deletion capability, nothing else.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 16: authentication flow hardening + a real Admin login
+  destination.
+
+  Backend (auditlens-backend/):
+    - routes/auth.py: POST /auth/register's allowed_roles no longer
+      includes 'admin' (was ['admin', 'finance_executive', 'auditor'],
+      now ['finance_executive', 'auditor']) - the actual security fix.
+      Previously any client could self-register with role: 'admin' and
+      receive a working admin account. POST /admin/users/create
+      (routes/admin.py, unmodified) still allows an EXISTING admin to
+      create another admin, since that action already requires an
+      admin's own JWT - only the PUBLIC, unauthenticated registration
+      path was closed.
+    - app.py: new _ensure_admin_seed_account() - the one initial admin
+      account (loylth910@gmail.com), inserted directly into the
+      database with the exact same bcrypt hashing routes/auth.py's own
+      register()/login() already use (no new hashing/auth mechanism).
+      Idempotent and safe to run on every boot, same auto-run-on-
+      startup pattern as every other _ensure_ function in this file
+      (CREATE TABLE IF NOT EXISTS, etc.) - a no-op once the account
+      exists, so redeploying never duplicates or errors. Runs
+      automatically the next time the backend deploys; no manual
+      database access was used or needed to create it.
+
+  Frontend (auditlens-frontend/):
+    - register.component.ts: removed the "Admin" option from the role
+      dropdown entirely (now only Finance Executive / Auditor).
+    - New admin/admin-layout + admin/dashboard components - a real
+      landing page for role === 'admin' after login (previously
+      login.component.ts already routed admin to /admin/home, but
+      that route didn't exist at all, so it 404'd). A genuine
+      placeholder as scoped: reads the EXISTING, unmodified GET
+      /admin/statistics endpoint (routes/admin.py, already built with
+      a full set of admin endpoints - users, documents, exceptions,
+      audit logs - none of which had a frontend consumer yet) for a
+      few summary numbers, with a note that fuller admin screens are a
+      future phase. No hardcoded admin login logic anywhere in the
+      frontend - the ONLY thing that determines admin access is the
+      role value the backend returns after a normal password check.
+    - app.routes.ts: registered /admin (layout) and /admin/home
+      (dashboard) - additive only, every existing route unchanged.
+
+Why:
+  Fixed the actual vulnerability: public registration could mint an
+  admin account for anyone who simply POSTed role: "admin". Also
+  completed the admin login path that was already half-wired
+  (login.component.ts's redirect existed, but had nowhere to land).
+
+  Document upload, OCR, transaction packages, Enterprise Matching V2,
+  the auditor workflow, and extraction/authenticity/anomaly logic were
+  not touched at all - confirmed via git diff --stat against those
+  files/directories (empty).
+
+Test results:
+  - python tests/extraction/run_all.py - all 25 suites pass (no
+    matching/extraction/authenticity logic was touched, run to confirm
+    nothing else regressed).
+  - Live smoke test against the real local Postgres dev DB: Finance
+    Executive registration succeeds (role finance_executive); Auditor
+    registration succeeds (role auditor); registering with role=admin
+    is correctly rejected with 400 and no row is created; the seeded
+    admin account (loylth910@gmail.com / admin123) logs in successfully
+    and the response's role is "admin"; both newly-registered Finance
+    and Auditor users can also log in normally (existing login() path
+    confirmed unaffected).
+  - Confirmed the admin seed function is idempotent: importing app.py
+    twice creates the account once ("Admin seed account created"),
+    then reports "Admin seed account already exists" on the second run.
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+
+Build result:
+  Backend: all 25 test suites pass, admin account seeded successfully
+  on import. Frontend: clean production build, exit 0.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - the admin seed account is created
+     automatically on the next startup (loylth910@gmail.com / admin123
+     - change this password after first login).
+  2. Redeploy the Render FRONTEND - the updated registration form and
+     new Admin dashboard are immediately available.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend/frontend build - the seeded admin
+  account row would remain in the database (harmless either way); no
+  other data was written by this phase.

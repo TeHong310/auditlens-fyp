@@ -25,7 +25,15 @@ def register():
     password  = data['password']
     role      = data['role'].strip().lower()
 
-    allowed_roles = ['admin', 'finance_executive', 'auditor']
+    # Admin is deliberately NOT in this list — an admin account must
+    # never be creatable through public self-registration. The one
+    # initial admin account is seeded directly into the database at
+    # startup (see app.py::_ensure_admin_seed_account()); any further
+    # admin accounts can only be created by an existing admin via the
+    # authenticated POST /admin/users/create endpoint (routes/admin.py),
+    # which is intentionally left unchanged and still allows 'admin'
+    # there since that action already requires an admin's own JWT.
+    allowed_roles = ['finance_executive', 'auditor']
     if role not in allowed_roles:
         return jsonify({'error': f'Invalid role. Must be one of: {allowed_roles}'}), 400
 

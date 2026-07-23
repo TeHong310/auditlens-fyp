@@ -22,6 +22,8 @@ import { AuditorAnomaliesComponent } from './auditor/anomalies/auditor-anomalies
 import { AuditorAuthenticityComponent } from './auditor/authenticity/auditor-authenticity.component';
 import { AuditorAuthenticityDetailComponent } from './auditor/authenticity-detail/auditor-authenticity-detail.component';
 import { CalendarComponent } from './calendar/calendar.component';
+import { AdminLayoutComponent } from './admin/admin-layout/admin-layout.component';
+import { AdminDashboardComponent } from './admin/dashboard/admin-dashboard.component';
 export const routes: Routes = [
   { path: '', redirectTo: 'login', pathMatch: 'full' },
   { path: 'login', component: LoginComponent },
@@ -57,6 +59,14 @@ export const routes: Routes = [
       { path: 'authenticity/:documentId', component: AuditorAuthenticityDetailComponent },
       { path: 'calendar', component: CalendarComponent },
       { path: 'report', component: AuditorReportComponent },
+      { path: '', redirectTo: 'home', pathMatch: 'full' }
+    ]
+  },
+  {
+    path: 'admin',
+    component: AdminLayoutComponent,
+    children: [
+      { path: 'home', component: AdminDashboardComponent },
       { path: '', redirectTo: 'home', pathMatch: 'full' }
     ]
   },

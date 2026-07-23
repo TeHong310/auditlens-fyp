@@ -1,6 +1,7 @@
 from flask import Flask, jsonify
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
+import bcrypt
 from config import Config
 from db import get_db_connection
 from routes.auth import auth_bp
@@ -636,6 +637,41 @@ def _ensure_transaction_package_documents_table():
         print(f'WARNING: could not create transaction_package_documents table: {type(e).__name__}: {e}')
 
 
+# Authentication Phase — the one initial admin account. Admin is
+# deliberately NOT reachable through POST /auth/register (see routes/
+# auth.py::register()'s allowed_roles) — this is the only place an
+# admin account gets created without one already existing. Same auto-
+# run-on-startup, idempotent pattern as every other _ensure_ function
+# above: a no-op once the account exists, so it's safe to redeploy any
+# number of times. Uses the EXACT SAME bcrypt hashing routes/auth.py's
+# own register()/login() already use — no new auth mechanism, no
+# hardcoded login bypass anywhere in the frontend.
+_ADMIN_SEED_EMAIL = 'loylth910@gmail.com'
+_ADMIN_SEED_PASSWORD = 'admin123'
+
+
+def _ensure_admin_seed_account():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id FROM users WHERE email = %s', (_ADMIN_SEED_EMAIL,))
+        if cursor.fetchone():
+            conn.close()
+            print('Admin seed account already exists')
+            return
+        password_hash = bcrypt.hashpw(_ADMIN_SEED_PASSWORD.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        cursor.execute(
+            '''INSERT INTO users (full_name, email, password_hash, role)
+               VALUES (%s, %s, %s, 'admin')''',
+            ('System Administrator', _ADMIN_SEED_EMAIL, password_hash)
+        )
+        conn.commit()
+        conn.close()
+        print(f'Admin seed account created: {_ADMIN_SEED_EMAIL}')
+    except Exception as e:
+        print(f'WARNING: could not ensure admin seed account exists: {type(e).__name__}: {e}')
+
+
 app = Flask(__name__)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
@@ -676,6 +712,7 @@ _ensure_document_relationships_table()
 _ensure_document_relationships_v2_columns()
 _ensure_transaction_packages_table()
 _ensure_transaction_package_documents_table()
+_ensure_admin_seed_account()
 
 @app.route('/')
 def hello_world():

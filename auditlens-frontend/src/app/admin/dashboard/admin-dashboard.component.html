@@ -1,0 +1,42 @@
+<div class="page-wrapper">
+
+  <div class="header">
+    <h1 class="page-title">Admin Dashboard</h1>
+    <p class="page-subtitle">Welcome, {{ user?.full_name || 'Administrator' }}</p>
+  </div>
+
+  <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
+
+  <div class="skeleton-wrap" *ngIf="isLoading">
+    <div class="skeleton-card" *ngFor="let i of [1,2,3,4]"></div>
+  </div>
+
+  <div class="stats-row" *ngIf="!isLoading && stats">
+    <div class="stat-card">
+      <p class="stat-label">Total Users</p>
+      <p class="stat-value">{{ stats.users.total_users }}</p>
+      <p class="stat-sub">{{ stats.users.total_finance }} Finance · {{ stats.users.total_auditors }} Auditor · {{ stats.users.total_admins }} Admin</p>
+    </div>
+    <div class="stat-card">
+      <p class="stat-label">Total Documents</p>
+      <p class="stat-value">{{ stats.documents.total_documents }}</p>
+      <p class="stat-sub">{{ stats.documents.approved }} approved · {{ stats.documents.under_review }} under review</p>
+    </div>
+    <div class="stat-card">
+      <p class="stat-label">Exceptions</p>
+      <p class="stat-value">{{ stats.exceptions.total_exceptions }}</p>
+      <p class="stat-sub">{{ stats.exceptions.unresolved }} unresolved</p>
+    </div>
+    <div class="stat-card">
+      <p class="stat-label">Active Users</p>
+      <p class="stat-value">{{ stats.users.active_users }}</p>
+      <p class="stat-sub">of {{ stats.users.total_users }} total</p>
+    </div>
+  </div>
+
+  <div class="placeholder-note" *ngIf="!isLoading">
+    <i class="ph-duotone ph-info"></i>
+    This is an initial Admin dashboard. User management, document oversight, and audit log views (already available via the API) can be built out here in a future phase.
+  </div>
+
+</div>

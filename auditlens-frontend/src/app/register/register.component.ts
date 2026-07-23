@@ -25,10 +25,13 @@ export class RegisterComponent {
   errorMessage: string = '';
   successMessage: string = '';
 
+  // Admin is deliberately not offered here — an admin account can only
+  // be the seeded initial account or created by an existing admin
+  // (see app.py::_ensure_admin_seed_account, routes/admin.py::
+  // create_user) — never through public self-registration.
   roles = [
     { value: 'finance_executive', label: 'Finance Executive' },
-    { value: 'auditor', label: 'Auditor' },
-    { value: 'admin', label: 'Admin' }
+    { value: 'auditor', label: 'Auditor' }
   ];
 
   private apiUrl = environment.apiUrl;
