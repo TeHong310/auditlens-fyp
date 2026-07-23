@@ -1,0 +1,124 @@
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <h1 class="page-title">Review Queue</h1>
+      <p class="page-subtitle">Transactions requiring auditor review</p>
+    </div>
+  </div>
+
+  <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
+
+  <!-- Summary Cards -->
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-dot blue"></span>
+        <span class="stat-label">Pending Review</span>
+      </div>
+      <p class="stat-value">{{ pendingCount }}</p>
+      <p class="stat-sub">Not yet assessed</p>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-dot red"></span>
+        <span class="stat-label">High Risk</span>
+      </div>
+      <p class="stat-value">{{ highRiskCount }}</p>
+      <p class="stat-sub">Matching review required</p>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-dot orange"></span>
+        <span class="stat-label">Missing Documents</span>
+      </div>
+      <p class="stat-value">{{ missingDocsCount }}</p>
+      <p class="stat-sub">Missing PO or GR</p>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-dot green"></span>
+        <span class="stat-label">Completed</span>
+      </div>
+      <p class="stat-value">{{ completedCount }}</p>
+      <p class="stat-sub">Fully matched</p>
+    </div>
+  </div>
+
+  <div class="list-card">
+
+    <!-- Filters + Search -->
+    <div class="filter-row">
+      <button class="filter-chip" [class.active]="activeFilter === 'all'" (click)="setFilter('all')">
+        All <span class="chip-count">{{ transactions.length }}</span>
+      </button>
+      <button class="filter-chip" [class.active]="activeFilter === 'pending'" (click)="setFilter('pending')">
+        Pending Review <span class="chip-count">{{ pendingCount }}</span>
+      </button>
+      <button class="filter-chip" [class.active]="activeFilter === 'high_risk'" (click)="setFilter('high_risk')">
+        High Risk <span class="chip-count">{{ highRiskCount }}</span>
+      </button>
+      <button class="filter-chip" [class.active]="activeFilter === 'missing_docs'" (click)="setFilter('missing_docs')">
+        Missing Documents <span class="chip-count">{{ missingDocsCount }}</span>
+      </button>
+      <button class="filter-chip" [class.active]="activeFilter === 'passed'" (click)="setFilter('passed')">
+        Passed <span class="chip-count">{{ completedCount }}</span>
+      </button>
+    </div>
+
+    <div class="search-bar">
+      <i class="ph-duotone ph-magnifying-glass" style="font-size:15px; color:var(--text-muted);"></i>
+      <input type="text" placeholder="Search transaction package or supplier..." class="search-input" [(ngModel)]="searchText" />
+    </div>
+
+    <!-- Table -->
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Transaction Package</th>
+            <th>Supplier</th>
+            <th>Documents</th>
+            <th>Invoice Count</th>
+            <th>PO Count</th>
+            <th>GR Count</th>
+            <th>Matching Status</th>
+            <th>Risk Level</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngIf="isLoading"><td colspan="9" class="loading-row">Loading...</td></tr>
+          <tr *ngIf="!isLoading && filteredTransactions.length === 0">
+            <td colspan="9" class="empty-row">No transactions match this filter.</td>
+          </tr>
+          <tr *ngFor="let txn of filteredTransactions" (click)="goToRecord(txn)">
+            <td class="package-name">{{ txn.package_name || '-' }}</td>
+            <td>{{ txn.supplier || 'Unknown' }}</td>
+            <td>{{ txn.document_count }} document{{ txn.document_count === 1 ? '' : 's' }}</td>
+            <td>{{ txn.invoice_count }}</td>
+            <td>{{ txn.po_count }}</td>
+            <td>{{ txn.gr_count }}</td>
+            <td>
+              <span class="badge" [ngClass]="matchingStatusClass(txn.matching_status)">
+                {{ matchingStatusLabel(txn.matching_status) }}
+              </span>
+            </td>
+            <td>
+              <span class="badge" [ngClass]="riskClass(txn)">{{ riskLabel(txn) }}</span>
+            </td>
+            <td>
+              <button class="btn-open" (click)="goToRecord(txn); $event.stopPropagation()">Review →</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+</div>

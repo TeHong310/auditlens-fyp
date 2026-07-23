@@ -16,6 +16,7 @@ export class AuditorLayoutComponent implements OnInit {
 
   navItems = [
     { label: 'Auditor Home',      icon: 'home',          route: '/auditor/home' },
+    { label: 'Review Queue',      icon: 'review-queue',  route: '/auditor/review-queue' },
     { label: 'Authenticity',      icon: 'authenticity',  route: '/auditor/authenticity' },
     { label: 'Exceptions',        icon: 'exceptions',    route: '/auditor/exceptions' },
     { label: 'Anomaly Detection', icon: 'anomaly',       route: '/auditor/anomalies' },

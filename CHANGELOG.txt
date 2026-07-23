@@ -10350,3 +10350,88 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous frontend build - no backend/data changes this
   round at all.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 13 (UI only): added a dedicated auditor Review Queue page.
+
+  New workflow: Auditor Home -> Review Queue -> Record Detail (previously
+  Auditor Home -> Transaction Review Queue -> Open -> Record Detail; the
+  existing inline queue table on Auditor Home is unchanged and still
+  works exactly as before - this is a new, additional page, not a
+  replacement).
+
+  Frontend (auditlens-frontend/):
+    - New auditor/review-queue/auditor-review-queue.component.ts/html/css.
+      Reads the SAME GET /auditor/transactions endpoint the existing
+      Auditor Home dashboard already calls (Phase 6) - zero new backend
+      routes, zero new matching/risk calculation. Adds: four summary
+      cards (Pending Review / High Risk / Missing Documents / Completed),
+      filter chips (All / Pending Review / High Risk / Missing Documents
+      / Passed) plus a package-name/supplier search bar (the same search
+      pattern already used on Finance's Transaction Packages page), and
+      a table (Transaction Package / Supplier / Documents / Invoice
+      Count / PO Count / GR Count / Matching Status / Risk Level /
+      Action) whose Review button opens the EXISTING, unmodified Record
+      Detail page via the identical navigation logic the Auditor Home
+      queue already uses.
+    - "Risk Level" is a pure client-side bucketing of already-computed
+      fields (matching_status, po_count, gr_count) - missing documents
+      outranks a matching review, which outranks a clean pass, mirroring
+      the same severity-priority convention routes/auditor.py's own
+      _classify_exception() already uses. No new assessment of any
+      document is performed anywhere in this component.
+    - app.routes.ts: registered the new route /auditor/review-queue
+      (additive only - every existing auditor/finance route is
+      untouched).
+    - auditor-layout.component.ts/html: added a "Review Queue" sidebar
+      item between "Auditor Home" and "Authenticity", with a new
+      ph-list-checks icon branch (additive only - every existing nav
+      item, its route, label, and icon are untouched).
+
+Why:
+  Gives auditors a dedicated workspace for triaging transactions that
+  need review, with risk-based filtering and search, without disturbing
+  Auditor Home's existing dashboard/priority-queue content or any part
+  of the existing Record Detail workflow.
+
+  No backend files were touched at all - OCR extraction, Claude/Gemini
+  extraction, transaction package creation logic, relationship_builder,
+  Enterprise Matching V2, three-way matching calculation, the
+  authenticity engine, anomaly detection, and exception generation are
+  completely unmodified. Every existing API is unchanged; this phase
+  only added one new frontend page and two new navigation entries.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size and record-detail CSS budget warnings only,
+    no new errors).
+  - Verified by inspection: app.routes.ts's existing auditor/finance
+    routes are all still present and unchanged; auditor-layout's
+    existing nav items (Auditor Home, Authenticity, Exceptions, Anomaly
+    Detection, Calendar, Report & Log) are all still present with their
+    original routes/icons; the new Review button reuses the exact same
+    goToRecord() navigation logic Auditor Home's existing Open button
+    already uses, so Record Detail's own behavior is untouched.
+  - No backend changes this round, so python tests/extraction/run_all.py
+    was not re-run (nothing in it could have been affected) - git diff
+    --stat against auditlens-backend/ confirmed empty.
+
+Build result:
+  Frontend: clean production build, exit 0. Backend: unchanged.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. No backend redeploy needed this round.
+  2. Redeploy the Render FRONTEND - the new Review Queue page and
+     sidebar entry are immediately available.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no backend/data changes this
+  round at all; this phase only added new frontend files and two
+  additive route/nav-item registrations.
