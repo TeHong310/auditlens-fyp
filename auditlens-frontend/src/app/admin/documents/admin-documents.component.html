@@ -1,0 +1,64 @@
+<div class="page-wrapper">
+
+  <div class="header">
+    <div class="header-left">
+      <h1 class="page-title">Document Management</h1>
+      <p class="page-subtitle">{{ documents.length }} document{{ documents.length === 1 ? '' : 's' }} in the system</p>
+    </div>
+  </div>
+
+  <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
+
+  <div class="list-card">
+
+    <div class="filter-row">
+      <button class="filter-chip" [class.active]="activeStatus === 'all'" (click)="setStatusFilter('all')">
+        All <span class="chip-count">{{ documents.length }}</span>
+      </button>
+      <button *ngFor="let s of statusOptions" class="filter-chip"
+              [class.active]="activeStatus === s" (click)="setStatusFilter(s)">
+        {{ statusLabel(s) }} <span class="chip-count">{{ countFor(s) }}</span>
+      </button>
+    </div>
+
+    <div class="search-bar">
+      <i class="ph-duotone ph-magnifying-glass" style="font-size:15px; color:var(--text-muted);"></i>
+      <input type="text" placeholder="Search by document number or vendor..." class="search-input" [(ngModel)]="searchText" />
+    </div>
+
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Document Number</th>
+            <th>Vendor</th>
+            <th>Document Type</th>
+            <th>Uploaded By</th>
+            <th>Status</th>
+            <th>Created Date</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngIf="isLoading"><td colspan="7" class="loading-row">Loading...</td></tr>
+          <tr *ngIf="!isLoading && filteredDocuments.length === 0">
+            <td colspan="7" class="empty-row">No documents match this filter.</td>
+          </tr>
+          <tr *ngFor="let d of filteredDocuments" (click)="openRecord(d)">
+            <td class="doc-number-cell">{{ d.document_number }}</td>
+            <td>{{ d.vendor_name || 'Unknown' }}</td>
+            <td><span class="badge badge-type">{{ d.document_type | titlecase }}</span></td>
+            <td>{{ d.uploaded_by }}</td>
+            <td><span class="badge" [ngClass]="statusBadgeClass(d.status)">{{ statusLabel(d.status) }}</span></td>
+            <td>{{ d.uploaded_at | date:'mediumDate' }}</td>
+            <td>
+              <button class="btn-open" (click)="openRecord(d); $event.stopPropagation()">View →</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+</div>

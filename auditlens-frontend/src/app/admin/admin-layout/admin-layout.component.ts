@@ -23,6 +23,8 @@ export class AdminLayoutComponent implements OnInit {
 
   navItems = [
     { label: 'Dashboard', icon: 'home', route: '/admin/home' },
+    { label: 'User Management', icon: 'users', route: '/admin/users' },
+    { label: 'Document Management', icon: 'documents', route: '/admin/documents' },
   ];
 
   constructor(private router: Router) {}

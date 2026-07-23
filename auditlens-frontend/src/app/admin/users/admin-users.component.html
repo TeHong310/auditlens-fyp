@@ -1,0 +1,99 @@
+<div class="page-wrapper">
+
+  <div class="header">
+    <div class="header-left">
+      <h1 class="page-title">User Management</h1>
+      <p class="page-subtitle">{{ users.length }} user{{ users.length === 1 ? '' : 's' }} in the system</p>
+    </div>
+  </div>
+
+  <div class="success-box" *ngIf="successMessage"><i class="ph-duotone ph-check-circle"></i> {{ successMessage }}</div>
+  <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
+
+  <div class="list-card">
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>User ID</th>
+            <th>Full Name</th>
+            <th>Email</th>
+            <th>Role</th>
+            <th>Status</th>
+            <th>Created Date</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngIf="isLoading"><td colspan="7" class="loading-row">Loading...</td></tr>
+          <tr *ngIf="!isLoading && users.length === 0">
+            <td colspan="7" class="empty-row">No users found.</td>
+          </tr>
+          <tr *ngFor="let u of users">
+            <td>{{ u.user_id }}</td>
+            <td class="user-name-cell">{{ u.full_name }}</td>
+            <td>{{ u.email }}</td>
+            <td><span class="badge" [ngClass]="roleBadgeClass(u.role)">{{ roleLabel(u.role) }}</span></td>
+            <td>
+              <span class="badge" [ngClass]="u.is_active ? 'badge-active' : 'badge-inactive'">
+                {{ u.is_active ? 'Active' : 'Disabled' }}
+              </span>
+            </td>
+            <td>{{ u.created_at | date:'mediumDate' }}</td>
+            <td class="actions-cell">
+              <button class="btn-action" (click)="toggleStatus(u)" [disabled]="u.user_id === currentUserId"
+                      [title]="u.user_id === currentUserId ? 'You cannot disable your own account' : ''">
+                {{ u.is_active ? 'Disable' : 'Enable' }}
+              </button>
+              <button class="btn-action" (click)="openResetModal(u)">Reset Password</button>
+              <button class="btn-action btn-action-danger" (click)="openDeleteModal(u)" [disabled]="u.user_id === currentUserId"
+                      [title]="u.user_id === currentUserId ? 'You cannot delete your own account' : ''">
+                Delete
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- Delete confirmation modal -->
+<div class="modal-backdrop" *ngIf="userPendingDelete" (click)="cancelDelete()">
+  <div class="modal-box" (click)="$event.stopPropagation()">
+    <h3 class="modal-title"><i class="ph-duotone ph-warning"></i> Delete User</h3>
+    <p class="modal-text">
+      This will permanently delete this user account. This action cannot be undone.
+    </p>
+    <p class="modal-user-name">{{ userPendingDelete.full_name }} &middot; {{ userPendingDelete.email }}</p>
+    <div class="error-box" *ngIf="deleteError"><i class="ph-duotone ph-x-circle"></i> {{ deleteError }}</div>
+    <div class="modal-actions">
+      <button class="btn-modal-cancel" (click)="cancelDelete()" [disabled]="isDeleting">Cancel</button>
+      <button class="btn-modal-delete" (click)="confirmDelete()" [disabled]="isDeleting">
+        {{ isDeleting ? 'Deleting…' : 'Delete User' }}
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Reset password modal -->
+<div class="modal-backdrop" *ngIf="userPendingReset" (click)="cancelReset()">
+  <div class="modal-box" (click)="$event.stopPropagation()">
+    <h3 class="modal-title"><i class="ph-duotone ph-key"></i> Reset Password</h3>
+    <p class="modal-text">
+      Set a temporary password for <strong>{{ userPendingReset.full_name }}</strong>. Share it with them securely.
+    </p>
+    <div class="form-group">
+      <label class="form-label">New temporary password</label>
+      <input type="text" class="form-input" placeholder="Minimum 6 characters" [(ngModel)]="newPassword" />
+    </div>
+    <div class="error-box" *ngIf="resetError"><i class="ph-duotone ph-x-circle"></i> {{ resetError }}</div>
+    <div class="modal-actions">
+      <button class="btn-modal-cancel" (click)="cancelReset()" [disabled]="isResetting">Cancel</button>
+      <button class="btn-modal-confirm" (click)="confirmReset()" [disabled]="isResetting">
+        {{ isResetting ? 'Resetting…' : 'Reset Password' }}
+      </button>
+    </div>
+  </div>
+</div>

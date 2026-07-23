@@ -17,6 +17,8 @@
            [class.active]="isActive(item.route)"
            (click)="closeSidebar()">
           <i *ngIf="item.icon === 'home'" class="ph-duotone ph-house"></i>
+          <i *ngIf="item.icon === 'users'" class="ph-duotone ph-users"></i>
+          <i *ngIf="item.icon === 'documents'" class="ph-duotone ph-files"></i>
           <span>{{ item.label }}</span>
         </a>
       </nav>

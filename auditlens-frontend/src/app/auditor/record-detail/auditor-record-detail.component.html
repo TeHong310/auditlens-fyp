@@ -668,14 +668,14 @@
         </div>
 
         <!-- Audit Note -->
-        <div class="note-section">
+        <div class="note-section" *ngIf="userRole === 'auditor'">
           <label class="note-label">Remarks / Notes</label>
           <textarea class="note-input" [(ngModel)]="auditNote" rows="4"
             placeholder="Add audit remarks, findings, or follow-up instructions..."></textarea>
         </div>
 
         <!-- Action Buttons -->
-        <div class="action-buttons">
+        <div class="action-buttons" *ngIf="userRole === 'auditor'">
           <button class="btn-need-review" [disabled]="isSubmitting">
             <i class="ph-duotone ph-warning"></i> Need Review
           </button>
@@ -688,9 +688,36 @@
           </button>
         </div>
 
-        <p class="audit-trail-note">
+        <p class="audit-trail-note" *ngIf="userRole === 'auditor'">
           Last updated by auditor • Audit trail recorded automatically
         </p>
+
+        <!-- Admin Control — Admin-only oversight actions, kept entirely
+             separate from the Auditor's own approve/return above (which
+             stay untouched and call the Auditor-gated /reviews/* routes).
+             These call the new, admin-only /admin/documents/<id>/approve
+             and /admin/documents/<id>/send-back routes instead. -->
+        <div class="admin-control-section" *ngIf="userRole === 'admin'">
+          <h3 class="subsection-title"><i class="ph-duotone ph-shield-check"></i> Admin Control</h3>
+
+          <div class="success-box" *ngIf="adminActionSuccess"><i class="ph-duotone ph-check-circle"></i> {{ adminActionSuccess }}</div>
+          <div class="error-box" *ngIf="adminActionError"><i class="ph-duotone ph-x-circle"></i> {{ adminActionError }}</div>
+
+          <div class="action-buttons">
+            <button class="btn-return" (click)="openAdminSendBackModal('auditor')" [disabled]="isAdminSubmitting">
+              <i class="ph-duotone ph-arrow-u-up-left"></i> Send Back to Auditor
+            </button>
+            <button class="btn-return" (click)="openAdminSendBackModal('finance')" [disabled]="isAdminSubmitting">
+              <i class="ph-duotone ph-arrow-u-up-left"></i> Send Back to Finance
+            </button>
+            <button class="btn-approve" (click)="adminApproveDocument()" [disabled]="isAdminSubmitting">
+              <ng-container *ngIf="!isAdminSubmitting"><i class="ph-duotone ph-check-circle"></i> Approve</ng-container>
+              <ng-container *ngIf="isAdminSubmitting">Processing...</ng-container>
+            </button>
+          </div>
+
+          <p class="audit-trail-note">Admin action • Audit trail recorded automatically</p>
+        </div>
       </div>
 
     </div>
@@ -793,6 +820,39 @@
         <button class="btn-modal-secondary" (click)="closeSendBackModal()" [disabled]="isSubmitting">Cancel</button>
         <button class="btn-modal-primary" (click)="submitSendBack()" [disabled]="isSubmitting">
           {{ isSubmitting ? 'Sending…' : 'Send Back to Finance' }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Admin Send Back Modal (separate from the Auditor's structured
+       send-back modal above — Admin's version is deliberately simpler:
+       just reason + message, per the Admin module spec) ── -->
+  <div class="modal-backdrop" *ngIf="showAdminSendBackModal" (click)="closeAdminSendBackModal()">
+    <div class="modal-box" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <div class="modal-header-left">
+          <span class="modal-filename">Send Back to {{ adminSendBackTarget === 'finance' ? 'Finance' : 'Auditor' }}</span>
+        </div>
+        <button class="modal-close-btn" (click)="closeAdminSendBackModal()"><i class="ph-duotone ph-x"></i></button>
+      </div>
+      <div class="sendback-modal-body">
+        <div class="error-box" *ngIf="adminSendBackError"><i class="ph-duotone ph-x-circle"></i> {{ adminSendBackError }}</div>
+
+        <div class="sb-field">
+          <label class="sb-label">Reason <span class="sb-required">*</span></label>
+          <input type="text" class="sb-text-input" [(ngModel)]="adminReason" placeholder="Short reason for this action" />
+        </div>
+        <div class="sb-field">
+          <label class="sb-label">Message <span class="sb-required">*</span></label>
+          <textarea class="sb-textarea" rows="4" [(ngModel)]="adminMessage"
+            placeholder="Details for the recipient..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-modal-secondary" (click)="closeAdminSendBackModal()" [disabled]="isAdminSubmitting">Cancel</button>
+        <button class="btn-modal-primary" (click)="submitAdminSendBack()" [disabled]="isAdminSubmitting">
+          {{ isAdminSubmitting ? 'Sending…' : 'Send Back' }}
         </button>
       </div>
     </div>

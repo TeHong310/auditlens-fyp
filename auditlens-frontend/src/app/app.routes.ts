@@ -23,6 +23,8 @@ import { AuditorAuthenticityDetailComponent } from './auditor/authenticity-detai
 import { CalendarComponent } from './calendar/calendar.component';
 import { AdminLayoutComponent } from './admin/admin-layout/admin-layout.component';
 import { AdminDashboardComponent } from './admin/dashboard/admin-dashboard.component';
+import { AdminUsersComponent } from './admin/users/admin-users.component';
+import { AdminDocumentsComponent } from './admin/documents/admin-documents.component';
 export const routes: Routes = [
   { path: '', redirectTo: 'login', pathMatch: 'full' },
   { path: 'login', component: LoginComponent },
@@ -65,6 +67,9 @@ export const routes: Routes = [
     component: AdminLayoutComponent,
     children: [
       { path: 'home', component: AdminDashboardComponent },
+      { path: 'users', component: AdminUsersComponent },
+      { path: 'documents', component: AdminDocumentsComponent },
+      { path: 'record-detail', component: AuditorRecordDetailComponent },
       { path: '', redirectTo: 'home', pathMatch: 'full' }
     ]
   },

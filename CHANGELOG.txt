@@ -10775,3 +10775,156 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous frontend build - no data or schema changes
   were made this phase.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 18: expanded the existing Admin module (seeded admin account,
+  Admin dashboard, admin API from a prior phase) with User Management
+  and Document Management, per the Admin module spec. Purely additive
+  to that module; two small, disclosed exceptions to the "do not
+  touch" list were required and are called out below.
+
+  Backend (auditlens-backend/routes/admin.py, all new, all role=='admin'
+  gated, 403 otherwise):
+    - DELETE /admin/users/<id> - safe deletion. Users are referenced
+      (NO ACTION, no CASCADE) from 13 different FK relationships
+      (documents, purchase_orders, goods_receipts, review_records,
+      send_back_cycles, anomalies, calendar_tasks, transaction_
+      packages, audit_logs). Rather than hand-checking each one, the
+      DELETE is attempted and a ForeignKeyViolation is caught and
+      turned into a 409 with a clear message ("...disable the account
+      instead") - covers all 13 relationships automatically, can't go
+      stale if a future table adds its own FK to users, and documents
+      are never cascade-deleted. Self-delete is blocked, same pattern
+      as the existing self-deactivate guard.
+    - POST /admin/users/<id>/reset-password - admin sets a temporary
+      password (min 6 chars), hashed with the exact same bcrypt call
+      routes/auth.py's own register()/login() already use.
+    - GET /admin/documents (existing endpoint, enriched) - each row now
+      also carries document_number (invoice_number, falling back to
+      file_name) and document_type ('invoice'). These rows are always
+      invoices - purchase_orders/goods_receipts have no status column
+      of their own in this schema, so they remain visible via the
+      existing Record Detail related-documents view rather than as
+      separate top-level rows here.
+    - POST /admin/documents/<id>/approve, POST /admin/documents/<id>/
+      send-back ({target: 'finance'|'auditor', reason, message}) -
+      admin-only oversight actions. Deliberately separate endpoints
+      from Auditor's own POST /reviews/approve and POST /reviews/return
+      (routes/reviews.py, completely untouched) rather than broadening
+      their role check - they reuse the exact same documents.status /
+      review_records / send_back_cycles transitions those already
+      perform. "Send back to auditor" (documents.status -> 'under_
+      review', which is what already puts a case back in the Auditor's
+      own GET /reviews/queue) has no matching review_records.action in
+      that table's existing CHECK constraint (approved/returned/
+      resubmitted/closed all mean something else), so it's recorded via
+      the general-purpose audit_logs trail instead of review_records,
+      without altering that constraint.
+
+  Two disclosed, minimal exceptions to "do not touch" (routes/
+  auditor.py, routes/authenticity.py): the spec requires Admin to view
+  OCR/authenticity/matching results by reusing the existing Record
+  Detail page, and forbids duplicating the matching logic to build a
+  second view. The two read-only GET endpoints that page depends on
+  (GET /auditor/record/<id>/comparison, GET /authenticity/<id>) were
+  hard-gated role=='auditor' only - an admin JWT got a flat 403, so
+  Record Detail would have loaded empty for Admin. Both guards were
+  widened by one line each, from role != 'auditor' to role not in
+  ('auditor', 'admin'). No matching/authenticity computation logic was
+  touched - build_comparison()/run_authenticity_check() and every other
+  route in both files are unchanged, and Auditor's own access is
+  provably unaffected (see test results below).
+
+  Frontend (auditlens-frontend/):
+    - admin/users/ (new) - User Management page (/admin/users): table
+      of User ID / Full Name / Email / Role / Status / Created Date /
+      Actions; Disable/Enable (existing PUT /admin/users/<id>/status,
+      unchanged), Reset Password (modal), Delete (confirmation modal,
+      surfaces the 409 safe-deletion message verbatim). Self-actions
+      disabled on the admin's own row.
+    - admin/documents/ (new) - Document Management page (/admin/
+      documents): table of Document Number / Vendor / Document Type /
+      Uploaded By / Status / Created Date / Action, with client-side
+      search (document number/vendor) and status filter chips.
+    - auditor-record-detail.component.* - reused as-is for Admin
+      (Document Management's "View" action, routed via a new /admin/
+      record-detail path to the SAME component - no duplicated
+      matching-display markup). The Auditor's own Remarks/Action-
+      Buttons block (Approve/Send Back/Need Review, calling the
+      Auditor-gated /reviews/* routes) is now gated *ngIf="userRole
+      === 'auditor'" - this only HIDES it for any other role; for an
+      actual Auditor the condition is unconditionally true exactly as
+      before, so their experience is byte-for-byte unchanged. A new,
+      separate "Admin Control" section (gated *ngIf="userRole ===
+      'admin'") adds Approve / Send Back to Finance / Send Back to
+      Auditor, calling the new admin-only endpoints above through their
+      own small reason+message modal - never the Auditor's endpoints.
+      goBack() now returns Admin to /admin/documents instead of
+      /auditor/home when viewed in that context; Auditor's own goBack()
+      behavior is unchanged.
+    - admin-layout - sidebar gained "User Management" and "Document
+      Management" nav items alongside the existing "Dashboard".
+    - app.routes.ts - added /admin/users, /admin/documents, /admin/
+      record-detail (additive only; every existing route unchanged).
+
+Why:
+  Requested expansion of the existing Admin module (confirmed via a
+  pre-implementation review of admin.py/admin-layout/admin-dashboard/
+  app.routes.ts) with User Management and Document Management, reusing
+  the existing status workflow and Record Detail page rather than
+  building a parallel approval engine or duplicating matching-display
+  logic, per the spec's explicit "do not duplicate" instruction.
+
+Test results:
+  - python tests/extraction/run_all.py - all 25 suites pass (OCR,
+    extraction, matching, authenticity, anomaly, transaction packages
+    all untouched - run to confirm zero regression).
+  - Live smoke test against the real local Postgres dev DB (17/17
+    checks passed): admin login works; Finance/Auditor both correctly
+    blocked (403) from every admin endpoint; admin can view/disable/
+    re-enable/reset-password/delete users (delete correctly returns 409
+    "existing documents, reviews, or audit records..." for a user with
+    linked audit_logs rather than crashing or silently cascading);
+    admin cannot delete or disable their own account; admin can view
+    documents; existing Finance/Auditor logins unaffected.
+  - Dev DB currently has zero documents, so the widened Record-Detail
+    guards were additionally verified directly: GET /auditor/record/
+    999999/comparison and GET /authenticity/999999 with an admin token
+    both now return 404 "not found" (previously a flat 403), confirming
+    the auth gate correctly admits admin and reaches the real lookup
+    logic; an Auditor token still gets 200 on a real document id in the
+    smoke test's own doc-existence branch, and Finance is still 403 -
+    unaffected either way.
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - git diff --stat confirms zero changes to documents.py, OCR,
+    transaction_packages*, enterprise_matching.py,
+    relationship_builder.py, anomaly*.py, the authenticity/Claude/
+    Gemini engines themselves, and the Finance workflow - the only
+    non-additive touches are the two disclosed one-line guard widenings
+    above.
+
+Build result:
+  Backend: all 25 test suites pass, 17/17 live smoke checks pass.
+  Frontend: clean production build, exit 0.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - the new /admin/users/<id> (DELETE),
+     /admin/users/<id>/reset-password, /admin/documents/<id>/approve,
+     /admin/documents/<id>/send-back routes, the enriched GET /admin/
+     documents, and the two widened Record-Detail guards take effect
+     immediately. No schema/migration changes.
+  2. Redeploy the Render FRONTEND - the new /admin/users, /admin/
+     documents pages and the Admin Control section on Record Detail
+     take effect immediately.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend/frontend build - no data or schema
+  changes were made this phase.

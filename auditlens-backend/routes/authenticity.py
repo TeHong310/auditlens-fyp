@@ -430,7 +430,12 @@ def get_authenticity_check(document_id):
     user_id = get_jwt_identity()
     user    = get_user_by_id(user_id)
 
-    if user['role'] != 'auditor':
+    # Admin module — Record Detail's authenticity warning banner is
+    # reused as-is for Admin, so this read-only GET also accepts
+    # role='admin'. The authenticity engine itself, and every other
+    # auditor-only route in this file (list, image, recheck), are
+    # unchanged.
+    if user['role'] not in ('auditor', 'admin'):
         return jsonify({'error': 'Access denied. Auditor only.'}), 403
 
     # A document_id can have up to 3 checks now (invoice/po/gr all attach to

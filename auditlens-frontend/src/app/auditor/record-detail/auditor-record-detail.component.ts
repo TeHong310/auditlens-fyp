@@ -114,6 +114,27 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   errorMessage: string = '';
   auditNote: string = '';
 
+  // Role of the currently logged-in user (read from localStorage, same
+  // pattern used across every other layout/dashboard component). This
+  // page is reached both from /auditor/record-detail (role always
+  // 'auditor') and /admin/record-detail (role always 'admin') — the
+  // Auditor's own Action Buttons above only render for 'auditor', and
+  // are otherwise completely unaffected by this.
+  userRole: string = '';
+
+  // ── Admin Control (Admin module) — separate from the Auditor's own
+  // approve/return above. Calls the admin-only /admin/documents/<id>/
+  // approve and /admin/documents/<id>/send-back routes, never the
+  // Auditor-gated /reviews/* routes. ──
+  isAdminSubmitting: boolean = false;
+  adminActionSuccess: string = '';
+  adminActionError: string = '';
+  showAdminSendBackModal: boolean = false;
+  adminSendBackTarget: 'finance' | 'auditor' = 'finance';
+  adminReason: string = '';
+  adminMessage: string = '';
+  adminSendBackError: string = '';
+
   // ── Send-Back workflow (Features 1, 4, 5) ──
   reasonCategoryOptions = REASON_CATEGORY_OPTIONS;
   requiredActionOptions = REQUIRED_ACTION_OPTIONS;
@@ -153,6 +174,10 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit() {
+    if (typeof window !== 'undefined') {
+      const u = JSON.parse(localStorage.getItem('user') || '{}');
+      this.userRole = u?.role || '';
+    }
     this.route.queryParams.subscribe(params => {
       if (params['document_id']) {
         this.documentId = parseInt(params['document_id']);
@@ -459,7 +484,85 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   }
 
   goBack() {
-    this.router.navigate(['/auditor/home']);
+    if (this.userRole === 'admin') {
+      this.router.navigate(['/admin/documents']);
+    } else {
+      this.router.navigate(['/auditor/home']);
+    }
+  }
+
+  // ── Admin Control (Admin module) ──────────────────────────
+
+  adminApproveDocument() {
+    if (!this.documentId || this.isAdminSubmitting) return;
+    this.isAdminSubmitting = true;
+    this.adminActionError = '';
+    this.adminActionSuccess = '';
+    this.http.post<any>(`${this.apiUrl}/admin/documents/${this.documentId}/approve`,
+      {}, { headers: this.getHeaders() }
+    ).subscribe({
+      next: () => {
+        this.isAdminSubmitting = false;
+        this.adminActionSuccess = 'Document approved successfully!';
+        this.cdr.detectChanges();
+        setTimeout(() => {
+          this.router.navigate(['/admin/documents']);
+        }, 2000);
+      },
+      error: (err) => {
+        this.isAdminSubmitting = false;
+        this.adminActionError = err.error?.error || 'Failed to approve.';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  openAdminSendBackModal(target: 'finance' | 'auditor') {
+    this.adminSendBackTarget = target;
+    this.adminReason = '';
+    this.adminMessage = '';
+    this.adminSendBackError = '';
+    this.showAdminSendBackModal = true;
+  }
+
+  closeAdminSendBackModal() {
+    if (this.isAdminSubmitting) return;
+    this.showAdminSendBackModal = false;
+  }
+
+  submitAdminSendBack() {
+    if (!this.documentId || this.isAdminSubmitting) return;
+
+    if (!this.adminReason.trim() || !this.adminMessage.trim()) {
+      this.adminSendBackError = 'Reason and message are required.';
+      return;
+    }
+
+    this.isAdminSubmitting = true;
+    this.adminSendBackError = '';
+    this.adminActionError = '';
+    this.adminActionSuccess = '';
+
+    this.http.post<any>(`${this.apiUrl}/admin/documents/${this.documentId}/send-back`, {
+      target: this.adminSendBackTarget,
+      reason: this.adminReason.trim(),
+      message: this.adminMessage.trim(),
+    }, { headers: this.getHeaders() }).subscribe({
+      next: () => {
+        this.isAdminSubmitting = false;
+        this.showAdminSendBackModal = false;
+        this.adminActionSuccess = `Document sent back to ${this.adminSendBackTarget === 'finance' ? 'Finance' : 'Auditor'}!`;
+        this.cdr.detectChanges();
+        setTimeout(() => {
+          this.router.navigate(['/admin/documents']);
+        }, 2000);
+      },
+      error: (err) => {
+        this.isAdminSubmitting = false;
+        this.adminSendBackError = err.error?.error || 'Failed to send back.';
+        this.cdr.detectChanges();
+      }
+    });
   }
 
   // ── AI Audit Assistant ───────────────────────────────────

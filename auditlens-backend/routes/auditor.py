@@ -1121,7 +1121,12 @@ def get_record_comparison(invoice_document_id):
     user_id = get_jwt_identity()
     user    = get_user_by_id(user_id)
 
-    if user['role'] != 'auditor':
+    # Admin module — Record Detail is reused as-is for Admin's Document
+    # Management "view" action (no duplicate comparison/matching logic),
+    # so this read-only GET also accepts role='admin'. build_comparison()
+    # itself, and every other Auditor-only route in this file, are
+    # unchanged.
+    if user['role'] not in ('auditor', 'admin'):
         return jsonify({'error': 'Access denied. Auditor only.'}), 403
 
     try:

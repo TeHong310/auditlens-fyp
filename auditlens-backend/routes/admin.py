@@ -227,6 +227,118 @@ def update_user_role(target_user_id):
 
 
 # ------------------------------------------------------------
+# DELETE USER
+# DELETE /admin/users/<user_id>
+# Admin only
+#
+# Safe-deletion: users are referenced (NO ACTION, no CASCADE) from
+# documents, purchase_orders, goods_receipts, review_records,
+# send_back_cycles, anomalies, calendar_tasks, transaction_packages
+# and audit_logs. Rather than hand-checking every one of those tables,
+# the DELETE is simply attempted and a ForeignKeyViolation is caught —
+# this covers all of them automatically and can't go stale if a future
+# table adds its own FK to users. Documents are never cascade-deleted;
+# a user with any linked records must be disabled instead.
+# ------------------------------------------------------------
+@admin_bp.route('/users/<int:target_user_id>', methods=['DELETE'])
+@jwt_required()
+def delete_user(target_user_id):
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    if user['role'] != 'admin':
+        return jsonify({'error': 'Access denied. Admin only.'}), 403
+
+    if str(target_user_id) == str(user['user_id']):
+        return jsonify({'error': 'You cannot delete your own account'}), 400
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('SELECT full_name, email FROM users WHERE user_id = %s', (target_user_id,))
+        target = cursor.fetchone()
+        if not target:
+            conn.close()
+            return jsonify({'error': 'User not found'}), 404
+
+        try:
+            cursor.execute('DELETE FROM users WHERE user_id = %s', (target_user_id,))
+            conn.commit()
+        except psycopg2.errors.ForeignKeyViolation:
+            conn.rollback()
+            conn.close()
+            return jsonify({
+                'error': ('Cannot delete this user: they have existing documents, reviews, '
+                          'or audit records linked to their account. Disable the account instead.')
+            }), 409
+
+        conn.close()
+
+        log_audit(user['user_id'], 'DELETE_USER', 'users', target_user_id,
+                  f'Admin deleted user {target[1]}')
+
+        return jsonify({
+            'message': 'User deleted successfully',
+            'user_id': target_user_id
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# RESET USER PASSWORD
+# POST /admin/users/<user_id>/reset-password
+# Admin only
+# ------------------------------------------------------------
+@admin_bp.route('/users/<int:target_user_id>/reset-password', methods=['POST'])
+@jwt_required()
+def reset_user_password(target_user_id):
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    if user['role'] != 'admin':
+        return jsonify({'error': 'Access denied. Admin only.'}), 403
+
+    data          = request.get_json() or {}
+    new_password  = data.get('new_password', '')
+
+    if not new_password or len(new_password) < 6:
+        return jsonify({'error': 'new_password is required and must be at least 6 characters'}), 400
+
+    password_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('SELECT email FROM users WHERE user_id = %s', (target_user_id,))
+        target = cursor.fetchone()
+        if not target:
+            conn.close()
+            return jsonify({'error': 'User not found'}), 404
+
+        cursor.execute(
+            'UPDATE users SET password_hash = %s, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s',
+            (password_hash, target_user_id)
+        )
+        conn.commit()
+        conn.close()
+
+        log_audit(user['user_id'], 'RESET_PASSWORD', 'users', target_user_id,
+                  f'Admin reset password for user {target[0]}')
+
+        return jsonify({
+            'message': 'Password reset successfully',
+            'user_id': target_user_id
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
 # GET ALL DOCUMENTS (Admin view)
 # GET /admin/documents
 # Admin only
@@ -280,11 +392,192 @@ def get_all_documents():
             for k, v in row.items():
                 if hasattr(v, 'isoformat'):
                     row[k] = v.isoformat()
+            # These records are always invoices — documents.status is the
+            # only per-document workflow status in the schema; purchase_
+            # orders/goods_receipts have no status column of their own and
+            # remain visible via the existing Record Detail related-
+            # documents view rather than as separate rows here.
+            row['document_number'] = row.get('invoice_number') or row['file_name']
+            row['document_type']   = 'invoice'
             result.append(row)
 
         return jsonify({
             'total':     len(result),
             'documents': result
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# ADMIN APPROVE DOCUMENT
+# POST /admin/documents/<document_id>/approve
+# Admin only
+#
+# A separate endpoint from Auditor's own POST /reviews/approve
+# (routes/reviews.py, untouched) rather than broadening that route's
+# role check — reuses the exact same documents.status / review_records
+# / send_back_cycles transition it already performs.
+# ------------------------------------------------------------
+@admin_bp.route('/documents/<int:document_id>/approve', methods=['POST'])
+@jwt_required()
+def admin_approve_document(document_id):
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    if user['role'] != 'admin':
+        return jsonify({'error': 'Access denied. Admin only.'}), 403
+
+    data    = request.get_json() or {}
+    remarks = (data.get('remarks') or 'Approved by admin').strip()
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('SELECT status FROM documents WHERE document_id = %s', (document_id,))
+        doc = cursor.fetchone()
+        if not doc:
+            conn.close()
+            return jsonify({'error': 'Document not found'}), 404
+        if doc[0] == 'approved':
+            conn.close()
+            return jsonify({'error': 'Document is already approved'}), 400
+
+        cursor.execute(
+            '''INSERT INTO review_records (document_id, reviewed_by, action, remarks)
+               VALUES (%s, %s, 'approved', %s) RETURNING review_id''',
+            (document_id, user['user_id'], remarks)
+        )
+        review_id = cursor.fetchone()[0]
+
+        cursor.execute(
+            "UPDATE documents SET status = 'approved', updated_at = CURRENT_TIMESTAMP WHERE document_id = %s",
+            (document_id,)
+        )
+        cursor.execute(
+            "UPDATE exceptions SET is_resolved = TRUE, resolved_at = CURRENT_TIMESTAMP WHERE document_id = %s",
+            (document_id,)
+        )
+
+        # Resolve any open Finance send-back cycle, mirroring the Auditor's
+        # own approve() exactly.
+        cursor.execute(
+            '''SELECT cycle_id FROM send_back_cycles
+               WHERE document_id = %s AND cycle_status = 'resubmitted'
+               ORDER BY cycle_number DESC LIMIT 1''',
+            (document_id,)
+        )
+        open_cycle = cursor.fetchone()
+        if open_cycle:
+            cursor.execute(
+                '''UPDATE send_back_cycles
+                   SET cycle_status = 'resolved', resolution = 'approved',
+                       resolved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                   WHERE cycle_id = %s''',
+                (open_cycle[0],)
+            )
+
+        conn.commit()
+        conn.close()
+
+        log_audit(user['user_id'], 'ADMIN_APPROVE_DOCUMENT', 'documents', document_id,
+                  f'Admin approved document {document_id}')
+
+        return jsonify({
+            'message':     'Document approved successfully',
+            'document_id': document_id,
+            'review_id':   review_id,
+            'status':      'approved'
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# ADMIN SEND BACK DOCUMENT (to Finance or to Auditor)
+# POST /admin/documents/<document_id>/send-back
+# Admin only
+# Body: {"target": "finance" | "auditor", "reason": "...", "message": "..."}
+#
+# target=finance mirrors Auditor's own POST /reviews/return exactly
+# (review_records action='returned', documents.status='returned') — the
+# same valid review_records.action value the Auditor's return already
+# uses, so no schema/constraint change is needed.
+#
+# target=auditor re-opens an already-decided document (documents.status
+# -> 'under_review', which is what already puts it back in the
+# Auditor's own review queue — GET /reviews/queue). There is no
+# matching review_records.action for "re-opened for auditor" in that
+# table's existing CHECK constraint (approved/returned/resubmitted/
+# closed all mean something else), so this is recorded via the
+# general-purpose audit_logs trail instead, without altering that
+# constraint.
+# ------------------------------------------------------------
+@admin_bp.route('/documents/<int:document_id>/send-back', methods=['POST'])
+@jwt_required()
+def admin_send_back_document(document_id):
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    if user['role'] != 'admin':
+        return jsonify({'error': 'Access denied. Admin only.'}), 403
+
+    data    = request.get_json() or {}
+    target  = (data.get('target') or '').strip().lower()
+    reason  = (data.get('reason') or '').strip()
+    message = (data.get('message') or '').strip()
+
+    if target not in ('finance', 'auditor'):
+        return jsonify({'error': "target must be 'finance' or 'auditor'"}), 400
+    if not reason or not message:
+        return jsonify({'error': 'reason and message are required'}), 400
+
+    remarks = f'{reason}: {message}'
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('SELECT status FROM documents WHERE document_id = %s', (document_id,))
+        doc = cursor.fetchone()
+        if not doc:
+            conn.close()
+            return jsonify({'error': 'Document not found'}), 404
+
+        new_status = 'returned' if target == 'finance' else 'under_review'
+        if doc[0] == new_status:
+            conn.close()
+            return jsonify({'error': f'Document is already {new_status}'}), 400
+
+        review_id = None
+        if target == 'finance':
+            cursor.execute(
+                '''INSERT INTO review_records (document_id, reviewed_by, action, remarks)
+                   VALUES (%s, %s, 'returned', %s) RETURNING review_id''',
+                (document_id, user['user_id'], remarks)
+            )
+            review_id = cursor.fetchone()[0]
+
+        cursor.execute(
+            'UPDATE documents SET status = %s, updated_at = CURRENT_TIMESTAMP WHERE document_id = %s',
+            (new_status, document_id)
+        )
+
+        conn.commit()
+        conn.close()
+
+        action_name = 'ADMIN_SEND_BACK_TO_FINANCE' if target == 'finance' else 'ADMIN_SEND_BACK_TO_AUDITOR'
+        log_audit(user['user_id'], action_name, 'documents', document_id,
+                  f'Admin sent document {document_id} back to {target}. Reason: {reason}. Message: {message}')
+
+        return jsonify({
+            'message':     f'Document sent back to {target}',
+            'document_id': document_id,
+            'status':      new_status,
+            'review_id':   review_id
         }), 200
 
     except Exception as e:

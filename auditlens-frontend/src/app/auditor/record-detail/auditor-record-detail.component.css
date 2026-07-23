@@ -930,6 +930,15 @@
   text-align: center;
 }
 
+.admin-control-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 /* Misc */
 .success-box {
   background: var(--success-bg);
@@ -1205,7 +1214,7 @@
   font-size: 11px;
 }
 
-.sb-select, .sb-date-input {
+.sb-select, .sb-date-input, .sb-text-input {
   width: 100%;
   padding: 9px 12px;
   border: 1.5px solid var(--border);
@@ -1217,7 +1226,7 @@
   font-family: inherit;
 }
 
-.sb-select:focus, .sb-date-input:focus, .sb-textarea:focus { border-color: var(--accent-soft); }
+.sb-select:focus, .sb-date-input:focus, .sb-text-input:focus, .sb-textarea:focus { border-color: var(--accent-soft); }
 
 .sb-textarea {
   width: 100%;
