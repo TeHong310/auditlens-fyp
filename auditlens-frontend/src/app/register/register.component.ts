@@ -24,6 +24,8 @@ export class RegisterComponent {
   isLoading: boolean = false;
   errorMessage: string = '';
   successMessage: string = '';
+  showSuccessModal: boolean = false;
+  private redirectTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Admin is deliberately not offered here — an admin account can only
   // be the seeded initial account or created by an existing admin
@@ -75,13 +77,23 @@ export class RegisterComponent {
     }).subscribe({
       next: (res) => {
         this.isLoading = false;
-        this.router.navigate(['/register-success']);
+        this.showSuccessModal = true;
+        this.redirectTimer = setTimeout(() => this.confirmSuccessModal(), 3000);
       },
       error: (err) => {
         this.isLoading = false;
         this.errorMessage = err.error?.error || 'Registration failed. Please try again.';
       }
     });
+  }
+
+  confirmSuccessModal() {
+    if (this.redirectTimer) {
+      clearTimeout(this.redirectTimer);
+      this.redirectTimer = null;
+    }
+    this.showSuccessModal = false;
+    this.router.navigate(['/login']);
   }
 
   goToLogin() {

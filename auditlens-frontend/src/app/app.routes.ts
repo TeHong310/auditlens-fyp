@@ -1,7 +1,6 @@
 import { Routes } from '@angular/router';
 import { LoginComponent } from './login/login.component';
 import { RegisterComponent } from './register/register.component';
-import { RegisterSuccessComponent } from './register-success/register-success.component';
 import { FinanceLayoutComponent } from './finance/finance-layout/finance-layout.component';
 import { FinanceHomeComponent } from './finance/home/finance-home.component';
 import { FinanceUploadComponent } from './finance/upload/finance-upload.component';
@@ -28,7 +27,6 @@ export const routes: Routes = [
   { path: '', redirectTo: 'login', pathMatch: 'full' },
   { path: 'login', component: LoginComponent },
   { path: 'register', component: RegisterComponent },
-  { path: 'register-success', component: RegisterSuccessComponent },
   {
     path: 'finance',
     component: FinanceLayoutComponent,

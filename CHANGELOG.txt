@@ -10709,3 +10709,69 @@ Rollback instructions:
   Redeploy the previous backend/frontend build - the seeded admin
   account row would remain in the database (harmless either way); no
   other data was written by this phase.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 17: simplified the post-registration flow. No email
+  verification, OTP, or confirmation-token logic existed anywhere in
+  the app (confirmed by search - the backend register() already only
+  does validate -> bcrypt hash -> insert -> return success), so this
+  phase is a pure frontend UX simplification, not a removal of any
+  verification mechanism.
+
+  Frontend (auditlens-frontend/):
+    - register.component.ts: on a successful registration response,
+      instead of navigating to a separate /register-success page, now
+      shows an in-page success modal ("Registration successful. Please
+      login.") and auto-redirects to /login after 3 seconds; a "Go to
+      Login" button on the modal confirms immediately and cancels the
+      timer.
+    - register.component.html / .css: added the success modal markup
+      and styling, matching the existing modal-backdrop/modal-box
+      pattern already used elsewhere in the app (e.g. the transaction
+      package delete-confirmation modal).
+    - Removed the now-unreachable register-success/ component and its
+      /register-success route (app.routes.ts) - nothing else
+      referenced it once register.component.ts stopped navigating
+      there.
+
+  Backend: no changes. routes/auth.py's register() endpoint was
+  already exactly the requested shape (validate input, hash password
+  with the existing bcrypt method, insert the user row directly, return
+  a success response) - there was nothing to remove.
+
+Why:
+  Requested simplification of the registration flow's post-submit UX
+  (full-page redirect -> in-page popup + auto-redirect), while
+  explicitly confirming no email verification workflow exists to add
+  or remove. Admin security logic (public registration restricted to
+  finance_executive/auditor, seeded admin account) and the existing
+  login flow / role-based routing were left completely untouched.
+
+Test results:
+  - python tests/extraction/run_all.py - all 25 suites pass (backend
+    untouched this phase, run to confirm nothing regressed).
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - git diff --stat against the forbidden module list (documents, OCR,
+    transaction packages, Enterprise Matching V2, authenticity engine,
+    anomaly detection, routes/auditor.py) - empty, zero changes.
+
+Build result:
+  Backend: all 25 test suites pass, unchanged. Frontend: clean
+  production build, exit 0.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the new success modal and removed
+     register-success route take effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data or schema changes
+  were made this phase.
