@@ -10435,3 +10435,81 @@ Rollback instructions:
   Redeploy the previous frontend build - no backend/data changes this
   round at all; this phase only added new frontend files and two
   additive route/nav-item registrations.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 14 (frontend display fix only): Record Detail's Source
+  Documents section now shows every related Invoice/PO/GR, not just
+  one of each.
+
+  Root cause: the Source Documents buttons bound to comparison.invoice/
+  comparison.po/comparison.gr - singular objects holding only the
+  "primary" PO and "primary" GR (the first related one selected by
+  _build_comparison_v2, or the legacy co-located one) - never the full
+  related-documents arrays. For a transaction with 2 invoices, 1 PO,
+  and 2 GRs, this meant only 1 invoice/1 PO/1 GR button could ever
+  render, no matter how many documents actually existed - the section
+  had no way to loop over more than one of each type.
+
+  Frontend (auditlens-frontend/):
+    - auditor-record-detail.component.html: when this invoice belongs
+      to a Transaction Package, Source Documents now renders one button
+      per Invoice/PO/GR from transactionDetail.documents - data ALREADY
+      loaded by the existing loadTransactionDetail() call for the
+      Transaction Overview card above (no new API call). Falls back to
+      the exact previous single-document behavior (unchanged) for a
+      standalone/legacy invoice with no package, so nothing regresses
+      for that case.
+    - auditor-record-detail.component.ts: new openSourceInvoice(
+      documentId) - opens the CURRENT invoice's own file in the
+      existing in-page preview modal (openDocModal, unchanged), or
+      navigates to a SIBLING invoice's own Record Detail page
+      (openTransactionDocument, already existing and already used by
+      the Transaction Overview's Matching Summary rows since Phase 7).
+      PO/GR buttons reuse openTransactionDocument() directly, exactly
+      as already used elsewhere on this page - no new fetching/opening
+      logic was written anywhere in this change.
+    - auditor-record-detail.component.css: two small additive rules
+      for the new per-type group labels (Invoices / Purchase Orders /
+      Goods Receipts headings above each button row).
+
+Why:
+  An auditor reviewing a transaction with multiple invoices sharing one
+  PO, or multiple goods receipts against one PO, previously had no way
+  to open every document from Record Detail - only whichever one
+  happened to be selected as "primary" was reachable via Source
+  Documents (the sibling documents were only viewable by first
+  navigating to their own transaction context elsewhere on the page).
+
+  No backend files were touched - OCR extraction, Claude/Gemini
+  extraction, transaction package logic, relationship_builder,
+  Enterprise Matching V2, three-way matching calculation, and the
+  authenticity engine are completely unmodified; the API response
+  structure did not change at all.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; the
+    record-detail component's CSS budget usage stayed comfortably
+    under the 24kB error threshold at 21.75kB; same pre-existing
+    bundle-size warning, no new errors).
+  - No backend changes this round, so python tests/extraction/run_all.py
+    was not re-run (nothing in it could have been affected) - git diff
+    --stat against auditlens-backend/ confirmed empty.
+
+Build result:
+  Frontend: clean production build, exit 0. Backend: unchanged.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. No backend redeploy needed this round.
+  2. Redeploy the Render FRONTEND - the multi-document Source Documents
+     section is immediately available.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no backend/data changes this
+  round at all.

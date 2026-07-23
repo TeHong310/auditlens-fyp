@@ -1054,6 +1054,19 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
       .catch(() => { this.errorMessage = 'Failed to open file.'; this.cdr.detectChanges(); });
   }
 
+  // Phase 14 — Source Documents (multi-document). The invoice being
+  // viewed on THIS page opens in the existing in-page modal (same as
+  // before); every OTHER invoice in the same transaction package reuses
+  // openTransactionDocument() above (navigates to that invoice's own
+  // Record Detail) — no new fetching/opening logic.
+  openSourceInvoice(documentId: number) {
+    if (documentId === this.documentId) {
+      this.openDocModal('invoice');
+    } else {
+      this.openTransactionDocument('invoice', documentId);
+    }
+  }
+
   // ── PDF quick-view modal ─────────────────────────────────
 
   private fileUrlFor(type: DocType): string | null {

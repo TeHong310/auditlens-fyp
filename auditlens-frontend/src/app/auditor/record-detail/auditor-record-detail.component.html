@@ -385,33 +385,88 @@
           <!-- Source Documents -->
           <div class="source-docs-section">
             <h3 class="source-docs-title"><i class="ph-duotone ph-file-text"></i> Source Documents</h3>
-            <div class="source-docs-buttons">
-              <button class="btn-view-doc" (click)="openDocModal('invoice')">
-                <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
-                <span class="btn-view-doc-text">
-                  <span class="btn-view-doc-label">View Invoice</span>
-                  <span class="btn-view-doc-filename">{{ comparison.invoice.filename }}</span>
-                </span>
-              </button>
-              <button class="btn-view-doc" [disabled]="!isDocAvailable('po')"
-                      [title]="!isDocAvailable('po') ? 'Missing — awaiting Finance submission' : ''"
-                      (click)="openDocModal('po')">
-                <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
-                <span class="btn-view-doc-text">
-                  <span class="btn-view-doc-label">View PO</span>
-                  <span class="btn-view-doc-filename">{{ comparison.po?.filename || 'Missing' }}</span>
-                </span>
-              </button>
-              <button class="btn-view-doc" [disabled]="!isDocAvailable('gr')"
-                      [title]="!isDocAvailable('gr') ? 'Missing — awaiting Finance submission' : ''"
-                      (click)="openDocModal('gr')">
-                <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
-                <span class="btn-view-doc-text">
-                  <span class="btn-view-doc-label">View GR</span>
-                  <span class="btn-view-doc-filename">{{ comparison.gr?.filename || 'Missing' }}</span>
-                </span>
-              </button>
-            </div>
+
+            <!-- Enterprise V3 Phase 14 — when this invoice belongs to a
+                 Transaction Package, show EVERY linked Invoice/PO/GR
+                 (previously only the single "primary" comparison.po/
+                 comparison.gr rendered, hiding sibling documents).
+                 Reuses transactionDetail.documents — already loaded by
+                 loadTransactionDetail() for the Transaction Overview
+                 card above — and the existing openTransactionDocument()/
+                 openDocModal() openers; no new fetching logic. -->
+            <ng-container *ngIf="transactionDetail as txn; else legacySourceDocs">
+              <div class="source-docs-group" *ngIf="txn.documents.invoices?.length">
+                <p class="source-docs-group-label">Invoices</p>
+                <div class="source-docs-buttons">
+                  <button class="btn-view-doc" *ngFor="let inv of txn.documents.invoices" (click)="openSourceInvoice(inv.document_id)">
+                    <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
+                    <span class="btn-view-doc-text">
+                      <span class="btn-view-doc-label">View Invoice</span>
+                      <span class="btn-view-doc-filename">{{ inv.invoice_number || inv.file_name }}</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="source-docs-group" *ngIf="txn.documents.purchase_orders?.length">
+                <p class="source-docs-group-label">Purchase Orders</p>
+                <div class="source-docs-buttons">
+                  <button class="btn-view-doc" *ngFor="let po of txn.documents.purchase_orders" (click)="openTransactionDocument('po', po.document_id)">
+                    <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
+                    <span class="btn-view-doc-text">
+                      <span class="btn-view-doc-label">View PO</span>
+                      <span class="btn-view-doc-filename">{{ po.po_number || po.file_name }}</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="source-docs-group" *ngIf="txn.documents.goods_receipts?.length">
+                <p class="source-docs-group-label">Goods Receipts</p>
+                <div class="source-docs-buttons">
+                  <button class="btn-view-doc" *ngFor="let gr of txn.documents.goods_receipts" (click)="openTransactionDocument('gr', gr.document_id)">
+                    <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
+                    <span class="btn-view-doc-text">
+                      <span class="btn-view-doc-label">View GR</span>
+                      <span class="btn-view-doc-filename">{{ gr.gr_number || gr.file_name }}</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </ng-container>
+
+            <!-- Legacy/standalone fallback — unchanged single-document
+                 behavior for a record with no Transaction Package
+                 (STEP 10 backward compatibility). -->
+            <ng-template #legacySourceDocs>
+              <div class="source-docs-buttons">
+                <button class="btn-view-doc" (click)="openDocModal('invoice')">
+                  <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
+                  <span class="btn-view-doc-text">
+                    <span class="btn-view-doc-label">View Invoice</span>
+                    <span class="btn-view-doc-filename">{{ comparison.invoice.filename }}</span>
+                  </span>
+                </button>
+                <button class="btn-view-doc" [disabled]="!isDocAvailable('po')"
+                        [title]="!isDocAvailable('po') ? 'Missing — awaiting Finance submission' : ''"
+                        (click)="openDocModal('po')">
+                  <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
+                  <span class="btn-view-doc-text">
+                    <span class="btn-view-doc-label">View PO</span>
+                    <span class="btn-view-doc-filename">{{ comparison.po?.filename || 'Missing' }}</span>
+                  </span>
+                </button>
+                <button class="btn-view-doc" [disabled]="!isDocAvailable('gr')"
+                        [title]="!isDocAvailable('gr') ? 'Missing — awaiting Finance submission' : ''"
+                        (click)="openDocModal('gr')">
+                  <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
+                  <span class="btn-view-doc-text">
+                    <span class="btn-view-doc-label">View GR</span>
+                    <span class="btn-view-doc-filename">{{ comparison.gr?.filename || 'Missing' }}</span>
+                  </span>
+                </button>
+              </div>
+            </ng-template>
           </div>
         </div>
 
