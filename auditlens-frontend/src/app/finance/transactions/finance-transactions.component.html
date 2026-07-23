@@ -13,6 +13,7 @@
   </div>
 
   <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
+  <div class="success-box" *ngIf="successMessage"><i class="ph-duotone ph-check-circle"></i> {{ successMessage }}</div>
 
   <div class="list-card">
     <div class="search-bar">
@@ -45,11 +46,32 @@
             <td>{{ pkg.document_count }} document{{ pkg.document_count === 1 ? '' : 's' }}</td>
             <td><span class="badge" [ngClass]="statusClass(pkg.status)">{{ statusLabel(pkg.status) }}</span></td>
             <td>{{ formatDate(pkg.created_at) }}</td>
-            <td><button class="btn-open" (click)="openPackage(pkg); $event.stopPropagation()">Open</button></td>
+            <td class="action-cell">
+              <button class="btn-open" (click)="openPackage(pkg); $event.stopPropagation()">Open</button>
+              <button class="btn-delete" (click)="confirmDelete(pkg, $event)">Delete</button>
+            </td>
           </tr>
         </tbody>
       </table>
     </div>
   </div>
 
+</div>
+
+<!-- Delete confirmation modal -->
+<div class="modal-backdrop" *ngIf="packagePendingDelete" (click)="cancelDelete()">
+  <div class="modal-box" (click)="$event.stopPropagation()">
+    <h3 class="modal-title"><i class="ph-duotone ph-warning"></i> Delete Transaction Package</h3>
+    <p class="modal-text">
+      Delete this transaction package and all related documents? This action cannot be undone.
+    </p>
+    <p class="modal-package-name">{{ packagePendingDelete.package_name }}</p>
+    <div class="error-box" *ngIf="deleteError"><i class="ph-duotone ph-x-circle"></i> {{ deleteError }}</div>
+    <div class="modal-actions">
+      <button class="btn-modal-cancel" (click)="cancelDelete()" [disabled]="isDeleting">Cancel</button>
+      <button class="btn-modal-delete" (click)="deletePackage()" [disabled]="isDeleting">
+        {{ isDeleting ? 'Deleting…' : 'Delete Package' }}
+      </button>
+    </div>
+  </div>
 </div>

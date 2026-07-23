@@ -14,7 +14,7 @@ from db import get_user_by_id
 from helpers.transaction_packages import (
     create_package, get_package, link_document_to_package,
     get_package_documents, get_relationship_preview, list_packages,
-    resolve_package_for_document, delete_empty_package,
+    resolve_package_for_document, delete_empty_package, delete_package,
 )
 
 transaction_packages_bp = Blueprint('transaction_packages', __name__)
@@ -109,6 +109,40 @@ def delete_transaction_package(package_id):
         return jsonify({'error': 'Only an empty transaction package (no linked documents) can be deleted'}), 400
 
     return jsonify({'message': 'Empty transaction package deleted'}), 200
+
+
+# ------------------------------------------------------------
+# DELETE A TRANSACTION PACKAGE AND ITS DOCUMENTS (management feature)
+# DELETE /transaction-packages/<package_id>/force
+# Finance Executive only, owner only.
+#
+# Phase 15 — a separate, explicit endpoint from the plain DELETE above
+# on purpose: that route is called automatically and silently by the
+# create-package flow (finance-transaction-create.component.ts) to
+# clean up an empty "ghost" package, and must keep behaving exactly as
+# it always has (refuse anything non-empty). This route is the
+# deliberate, user-confirmed "delete this package and everything in
+# it" action — only ever called from an explicit Delete button behind
+# a confirmation modal.
+# ------------------------------------------------------------
+@transaction_packages_bp.route('/<int:package_id>/force', methods=['DELETE'])
+@jwt_required()
+def force_delete_transaction_package(package_id):
+    user, err = _require_finance()
+    if err:
+        return err
+    _, err = _require_package_owner(package_id, user)
+    if err:
+        return err
+
+    try:
+        result = delete_package(package_id)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        return jsonify({'error': f'Failed to delete transaction package: {e}'}), 500
+
+    return jsonify({'message': 'Transaction package deleted', **result}), 200
 
 
 @transaction_packages_bp.route('/<int:package_id>/documents', methods=['POST'])

@@ -27,7 +27,13 @@ export class FinanceTransactionsComponent implements OnInit {
   packages: any[] = [];
   isLoading: boolean = false;
   errorMessage: string = '';
+  successMessage: string = '';
   searchText: string = '';
+
+  // ── Delete (Phase 15) ──
+  packagePendingDelete: any = null;
+  isDeleting: boolean = false;
+  deleteError: string = '';
 
   private apiUrl = environment.apiUrl;
 
@@ -92,5 +98,47 @@ export class FinanceTransactionsComponent implements OnInit {
 
   createNewPackage() {
     this.router.navigate(['/finance/transactions/create']);
+  }
+
+  // ── Delete (Phase 15) — management feature only. Calls the new
+  // DELETE /transaction-packages/<id>/force endpoint (a separate route
+  // from the existing, automatic "empty ghost package" cleanup DELETE
+  // /transaction-packages/<id>, which must keep its own strict
+  // empty-only behavior unchanged). Every deletion decision (what's
+  // safe to remove vs. shared with another package) is made entirely
+  // server-side — this component only confirms intent and refreshes. ──
+
+  confirmDelete(pkg: any, event: Event) {
+    event.stopPropagation();
+    this.packagePendingDelete = pkg;
+    this.deleteError = '';
+  }
+
+  cancelDelete() {
+    this.packagePendingDelete = null;
+    this.deleteError = '';
+  }
+
+  deletePackage() {
+    if (!this.packagePendingDelete || this.isDeleting) return;
+    const pkg = this.packagePendingDelete;
+    this.isDeleting = true;
+    this.deleteError = '';
+
+    this.http.delete<any>(`${this.apiUrl}/transaction-packages/${pkg.id}/force`, { headers: this.getHeaders() }).subscribe({
+      next: () => {
+        this.isDeleting = false;
+        this.packagePendingDelete = null;
+        this.successMessage = `"${pkg.package_name}" and its documents were deleted.`;
+        this.cdr.detectChanges();
+        setTimeout(() => { this.successMessage = ''; this.cdr.detectChanges(); }, 4000);
+        this.loadPackages();
+      },
+      error: (err) => {
+        this.isDeleting = false;
+        this.deleteError = err.error?.error || 'Failed to delete transaction package.';
+        this.cdr.detectChanges();
+      }
+    });
   }
 }

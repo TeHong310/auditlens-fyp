@@ -10513,3 +10513,104 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous frontend build - no backend/data changes this
   round at all.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-23
+What was changed:
+  Phase 15: added a Delete management feature for Transaction Packages
+  (Finance's Transaction Packages page).
+
+  Backend (auditlens-backend/):
+    - helpers/transaction_packages.py: new delete_package(package_id) -
+      deletes a package and every document EXCLUSIVELY owned by it. A
+      document also linked to a DIFFERENT package (checked per
+      (document_role, document_id) pair via transaction_package_
+      documents) is left completely untouched - only this package's
+      own membership link disappears. Also accounts for the legacy
+      "co-located" PO/GR case (purchase_orders/goods_receipts.
+      document_id -> documents is ON DELETE NO ACTION, not CASCADE, so
+      an un-linked co-located PO/GR would otherwise block deleting its
+      host invoice) - unless that co-located PO/GR is itself
+      independently linked to a different package, in which case the
+      invoice is left untouched too rather than risking an incorrect
+      delete. Every statement runs on ONE transaction (commits only
+      once every delete has succeeded; any failure rolls back the
+      entire operation, so a package can never be left half-deleted).
+      No matching/relationship CALCULATION logic is touched anywhere -
+      every delete is a plain row removal of already-computed data, in
+      FK-safe order (verified against the actual live schema's FK
+      constraints before writing a single line).
+    - routes/transaction_packages.py: new DELETE /transaction-packages/
+      <id>/force route (Finance-only, package-owner-only) calling
+      delete_package(). Deliberately a SEPARATE route from the existing
+      DELETE /transaction-packages/<id> (which stays completely
+      unmodified) - that route is called automatically and silently by
+      the create-package flow to clean up an empty "ghost" package
+      (Phase 9) and must keep refusing anything non-empty; this new
+      route is the explicit, user-confirmed "delete everything" action,
+      only ever reachable from a confirmation modal.
+
+  Frontend (auditlens-frontend/):
+    - finance-transactions.component.ts/html/css: added a Delete button
+      beside the existing Open button in the Transaction Packages
+      table, and a confirmation modal ("Delete this transaction package
+      and all related documents? This action cannot be undone.") before
+      calling the new endpoint. On success: the package list refreshes
+      automatically and a success message is shown; on failure, the
+      error is shown inside the modal without closing it.
+
+Why:
+  Gives Finance a way to remove a transaction package (e.g. one created
+  by mistake, or a test/duplicate) along with its documents, without
+  needing direct database access - while guaranteeing a document shared
+  with another package (Phase 7.1 explicitly allows this) is never
+  deleted out from under that other package.
+
+  helpers/relationship_builder.py, helpers/enterprise_matching.py, OCR
+  extraction, Claude/Gemini extraction, and the authenticity engine
+  were not touched. Transaction package CREATION logic, auto-grouping
+  logic (resolve_package_for_document), and document LINKING logic
+  (link_document_to_package) are all completely unmodified - this
+  phase only adds a new deletion path alongside them.
+
+Test results:
+  - python tests/extraction/run_all.py - all 25 suites pass, including
+    test_transaction_packages.py (existing package creation/linking
+    behavior unaffected).
+  - Live smoke test against the real local Postgres dev DB (rows
+    created and cleaned up), covering every requirement explicitly:
+    (1) deleted Package A (PO3006231, 2 invoices, 2 GRs, all
+    exclusively owned) via the real DELETE .../force endpoint - package
+    disappears from the list, and all 5 documents are confirmed gone
+    from documents/purchase_orders/goods_receipts; (2) a completely
+    separate Package B (unrelated invoice) is confirmed untouched -
+    still listed, its document still in the DB; (3) an invoice
+    deliberately linked into BOTH Package C and Package D - deleting
+    Package C reports 0 deleted invoices / 1 kept-shared-document, the
+    shared invoice is confirmed still in the DB, and Package D still
+    shows it - the safety rule holds. Package C itself was still
+    correctly removed from the list.
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+
+Build result:
+  Backend: all 25 test suites pass. Frontend: clean production build,
+  exit 0.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - no migration step, no new
+     environment variables.
+  2. Redeploy the Render FRONTEND - the Delete button and confirmation
+     modal are immediately available.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend/frontend build - the new DELETE .../
+  force route and delete_package() are purely additive; the existing
+  DELETE /transaction-packages/<id> (empty-only) route and its
+  behavior are completely unchanged, so rolling back only removes the
+  new deletion capability, nothing else.

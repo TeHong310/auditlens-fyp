@@ -124,8 +124,108 @@
   cursor: pointer;
 }
 
+.action-cell { display: flex; gap: 8px; }
+
+.btn-delete {
+  padding: 5px 14px;
+  background: var(--danger-bg);
+  color: var(--danger);
+  border: none;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .loading-row, .empty-row {
   text-align: center;
   padding: 32px;
   color: var(--text-muted);
 }
+
+.success-box {
+  background: var(--success-bg);
+  border: 1px solid var(--success);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--success);
+  margin-bottom: 16px;
+}
+
+/* Delete confirmation modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-box {
+  background: var(--bg-card);
+  border-radius: 14px;
+  padding: 24px;
+  width: 420px;
+  max-width: 90vw;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.35);
+}
+
+.modal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--danger);
+  margin-bottom: 12px;
+}
+
+.modal-text {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.modal-package-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 16px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.btn-modal-cancel {
+  padding: 9px 18px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border: none;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-modal-delete {
+  padding: 9px 18px;
+  background: var(--danger);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-modal-delete:disabled, .btn-modal-cancel:disabled { opacity: 0.6; cursor: not-allowed; }

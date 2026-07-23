@@ -638,3 +638,161 @@ def get_transaction_authenticity_summary(package_id):
         # Authenticity Summary card (STEP 4/5) already consumes.
         'documents': documents_by_role,
     }
+
+
+# ------------------------------------------------------------
+# Phase 15 — Delete Transaction Package (management feature).
+#
+# Deletes a package and every document EXCLUSIVELY owned by it. A
+# document also linked to a DIFFERENT package (or a legacy co-located
+# PO/GR still needed by one) is left completely untouched — only this
+# package's own membership link disappears. No matching/relationship
+# CALCULATION logic is touched anywhere below; every statement here is
+# a plain row removal of already-computed data, in FK-safe order
+# (children before parents), all on ONE transaction — nothing commits
+# until every delete has succeeded, so a package can never be left
+# half-deleted.
+# ------------------------------------------------------------
+
+def _package_exclusive_entities(cursor, package_id):
+    """For every document explicitly linked to this package (via
+    transaction_package_documents), determines whether it is also
+    linked to any OTHER package under the same (document_role,
+    document_id) pair — the "do not delete documents shared with
+    another package" rule. Returns (exclusive: {'invoice': [...],
+    'purchase_order': [...], 'goods_receipt': [...]}, shared_count)."""
+    cursor.execute(
+        'SELECT document_role, document_id FROM transaction_package_documents WHERE package_id = %s',
+        (package_id,)
+    )
+    entries = cursor.fetchall()
+
+    exclusive = {'invoice': [], 'purchase_order': [], 'goods_receipt': []}
+    shared_count = 0
+    for e in entries:
+        cursor.execute(
+            'SELECT 1 FROM transaction_package_documents '
+            'WHERE document_role = %s AND document_id = %s AND package_id != %s',
+            (e['document_role'], e['document_id'], package_id)
+        )
+        if cursor.fetchone():
+            shared_count += 1
+        else:
+            exclusive[e['document_role']].append(e['document_id'])
+    return exclusive, shared_count
+
+
+def _is_linked_to_other_package(cursor, role, entity_id, package_id):
+    cursor.execute(
+        'SELECT 1 FROM transaction_package_documents '
+        'WHERE document_role = %s AND document_id = %s AND package_id != %s',
+        (role, entity_id, package_id)
+    )
+    return cursor.fetchone() is not None
+
+
+def delete_package(package_id):
+    """Deletes transaction package `package_id` and every document
+    exclusively owned by it. Returns {'deleted_invoices', 'deleted_
+    purchase_orders', 'deleted_goods_receipts', 'kept_shared_documents'}
+    counts on success. Raises (with the transaction rolled back, so
+    nothing is left partially deleted) if the package doesn't exist or
+    any delete fails."""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute('SELECT id FROM transaction_packages WHERE id = %s', (package_id,))
+        if not cursor.fetchone():
+            raise ValueError(f'transaction package {package_id} does not exist')
+
+        exclusive, shared_count = _package_exclusive_entities(cursor, package_id)
+        po_ids = set(exclusive['purchase_order'])
+        gr_ids = set(exclusive['goods_receipt'])
+
+        # purchase_orders/goods_receipts.document_id -> documents is
+        # ON DELETE NO ACTION (not CASCADE), so a legacy co-located PO/
+        # GR (uploaded alongside an invoice but never given its own
+        # transaction_package_documents entry) would block deleting
+        # that invoice's documents row unless it's accounted for here
+        # too — safe to include UNLESS it's independently linked to a
+        # DIFFERENT package, in which case the invoice can't be fully
+        # deleted either (that package still needs it) and is left
+        # untouched instead of risking a partial/incorrect delete.
+        invoice_ids = []
+        for inv_id in exclusive['invoice']:
+            cursor.execute('SELECT po_id FROM purchase_orders WHERE document_id = %s', (inv_id,))
+            co_po_ids = [r['po_id'] for r in cursor.fetchall()]
+            cursor.execute('SELECT gr_id FROM goods_receipts WHERE document_id = %s', (inv_id,))
+            co_gr_ids = [r['gr_id'] for r in cursor.fetchall()]
+
+            conflict = (
+                any(_is_linked_to_other_package(cursor, 'purchase_order', p, package_id) for p in co_po_ids) or
+                any(_is_linked_to_other_package(cursor, 'goods_receipt', g, package_id) for g in co_gr_ids)
+            )
+            if conflict:
+                shared_count += 1
+                continue
+            invoice_ids.append(inv_id)
+            po_ids.update(co_po_ids)
+            gr_ids.update(co_gr_ids)
+
+        po_ids = list(po_ids)
+        gr_ids = list(gr_ids)
+
+        # ── FK-safe deletion order (children before parents) ──
+        if invoice_ids:
+            cursor.execute('DELETE FROM exceptions WHERE document_id = ANY(%s)', (invoice_ids,))
+            cursor.execute('DELETE FROM record_matches WHERE document_id = ANY(%s)', (invoice_ids,))
+            cursor.execute('DELETE FROM three_way_matches WHERE document_id = ANY(%s)', (invoice_ids,))
+            cursor.execute('DELETE FROM review_records WHERE document_id = ANY(%s)', (invoice_ids,))
+            cursor.execute('DELETE FROM extracted_fields WHERE document_id = ANY(%s)', (invoice_ids,))
+
+        if po_ids:
+            cursor.execute('DELETE FROM three_way_matches WHERE po_id = ANY(%s)', (po_ids,))
+        if gr_ids:
+            cursor.execute('DELETE FROM three_way_matches WHERE gr_id = ANY(%s)', (gr_ids,))
+
+        # document_relationships is polymorphic with no real FK (see
+        # helpers/document_relationships.py) — cleaned up explicitly
+        # for every entity actually being deleted.
+        if invoice_ids or po_ids or gr_ids:
+            cursor.execute(
+                "DELETE FROM document_relationships WHERE "
+                "(parent_type = 'invoice' AND parent_id = ANY(%s)) OR (child_type = 'invoice' AND child_id = ANY(%s)) OR "
+                "(parent_type = 'po' AND parent_id = ANY(%s)) OR (child_type = 'po' AND child_id = ANY(%s)) OR "
+                "(parent_type = 'gr' AND parent_id = ANY(%s)) OR (child_type = 'gr' AND child_id = ANY(%s))",
+                (invoice_ids, invoice_ids, po_ids, po_ids, gr_ids, gr_ids)
+            )
+
+        if po_ids:
+            cursor.execute('DELETE FROM purchase_orders WHERE po_id = ANY(%s)', (po_ids,))
+        if gr_ids:
+            cursor.execute('DELETE FROM goods_receipts WHERE gr_id = ANY(%s)', (gr_ids,))
+
+        if invoice_ids:
+            # documents' own ON DELETE CASCADE already removes
+            # ai_assistant_cache/anomalies/authenticity_checks/document_
+            # line_items/send_back_cycles for these ids; everything
+            # deleted explicitly above is the NO ACTION children only.
+            cursor.execute('DELETE FROM documents WHERE document_id = ANY(%s)', (invoice_ids,))
+
+        # transaction_package_documents.package_id -> transaction_
+        # packages is ON DELETE CASCADE, so this alone removes every
+        # remaining link row for this package (both the ones just
+        # exclusively deleted above and any SHARED ones being kept —
+        # only the LINK disappears for those, never the document).
+        cursor.execute('DELETE FROM transaction_packages WHERE id = %s', (package_id,))
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return {
+        'deleted_invoices': len(invoice_ids),
+        'deleted_purchase_orders': len(po_ids),
+        'deleted_goods_receipts': len(gr_ids),
+        'kept_shared_documents': shared_count,
+    }
