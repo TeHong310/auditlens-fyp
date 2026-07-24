@@ -7,6 +7,7 @@ import { catchError } from 'rxjs/operators';
 import { Chart, registerables } from 'chart.js';
 import { environment } from '../../../environments/environment';
 import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
+import { FinanceUserMenuComponent } from '../shared/finance-user-menu.component';
 
 Chart.register(...registerables);
 
@@ -38,7 +39,7 @@ const CHART_PALETTE = {
 @Component({
   selector: 'app-finance-home',
   standalone: true,
-  imports: [CommonModule, FinanceNotificationBellComponent],
+  imports: [CommonModule, FinanceNotificationBellComponent, FinanceUserMenuComponent],
   templateUrl: './finance-home.component.html',
   styleUrls: ['./finance-home.component.css']
 })

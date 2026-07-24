@@ -1,0 +1,87 @@
+<div class="page-wrapper">
+
+  <div class="header">
+    <div class="header-left">
+      <button class="btn-back" (click)="goBack()">
+        <i class="ph-duotone ph-arrow-left" style="font-size:16px;"></i>
+        Back
+      </button>
+      <div>
+        <p class="page-label">Account</p>
+        <p class="page-subtitle">Profile &amp; Settings</p>
+      </div>
+    </div>
+    <div class="header-right">
+      <app-finance-notification-bell></app-finance-notification-bell>
+      <app-finance-user-menu></app-finance-user-menu>
+    </div>
+  </div>
+
+  <div class="profile-layout">
+
+    <!-- Identity card -->
+    <div class="profile-card identity-card">
+      <div class="profile-avatar-lg">{{ getInitial() }}</div>
+      <p class="identity-name">{{ user?.full_name || 'Finance User' }}</p>
+      <p class="identity-email">{{ user?.email || '-' }}</p>
+      <span class="role-badge">{{ roleLabel() }}</span>
+    </div>
+
+    <div class="profile-forms">
+
+      <!-- Update profile form -->
+      <div class="profile-card">
+        <p class="card-section-title">Update Profile</p>
+        <p class="card-section-subtitle">Update your display name and email address</p>
+
+        <div class="form-group">
+          <label class="form-label">Full Name</label>
+          <input type="text" class="form-input" [(ngModel)]="fullName" placeholder="Full name" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Email Address</label>
+          <input type="email" class="form-input" [(ngModel)]="email" placeholder="name@company.com" />
+        </div>
+
+        <div class="form-note" *ngIf="profileNote">
+          <i class="ph-duotone ph-info"></i> {{ profileNote }}
+        </div>
+
+        <button class="btn-save" (click)="saveProfile()">Save Changes</button>
+      </div>
+
+      <!-- Change password section -->
+      <div class="profile-card">
+        <p class="card-section-title">Change Password</p>
+        <p class="card-section-subtitle">Use a strong password you don't use elsewhere</p>
+
+        <div class="form-group">
+          <label class="form-label">Current Password</label>
+          <input type="password" class="form-input" [(ngModel)]="currentPassword" placeholder="••••••" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">New Password</label>
+          <input type="password" class="form-input" [(ngModel)]="newPassword" placeholder="••••••" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Confirm New Password</label>
+          <input type="password" class="form-input" [(ngModel)]="confirmPassword" placeholder="••••••" />
+        </div>
+
+        <div class="form-error" *ngIf="passwordError">
+          <i class="ph-duotone ph-x-circle"></i> {{ passwordError }}
+        </div>
+        <div class="form-note" *ngIf="passwordNote">
+          <i class="ph-duotone ph-info"></i> {{ passwordNote }}
+        </div>
+
+        <button class="btn-save" (click)="changePassword()">Change Password</button>
+      </div>
+
+    </div>
+  </div>
+
+</div>

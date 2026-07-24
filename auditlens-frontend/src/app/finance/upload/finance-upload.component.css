@@ -29,19 +29,6 @@
   gap: 12px;
 }
 
-.avatar-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent), var(--accent));
-  color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .content-row {
   display: grid;
   grid-template-columns: 1fr 0.6fr;

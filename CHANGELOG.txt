@@ -12479,3 +12479,162 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous frontend build - no data, schema, or backend
   logic changes were made this phase.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-25
+What was changed:
+  Phase 33: upgraded the Finance header's notification bell into a
+  realistic workflow-notification component, and upgraded the user
+  avatar into a dropdown menu (Profile / Settings / Change Password /
+  Logout) plus a new Profile Settings page. UI only — no backend,
+  routing (beyond one new page's own route), or business logic
+  changed; auth logic (login/register/JWT) untouched.
+
+  Key finding during inspection (backend audit before writing any
+  frontend code): confirmed there is no self-service profile-update
+  endpoint, no self-service change-password endpoint (the only
+  password-reset route is POST /admin/users/<id>/reset-password,
+  admin-only, for resetting OTHER users — not usable for a user
+  changing their own), and no notifications table/route/helper
+  anywhere in the backend. GET /auth/me and the login response DO
+  return user_id/full_name/email/role (already used via localStorage
+  elsewhere in this app, e.g. finance-layout.component.ts), which is
+  what the new Profile page displays — no new backend call needed for
+  that part.
+
+  1. Notification bell (auditlens-frontend/src/app/finance/shared/):
+    - New finance-notification.service.ts: a WorkflowNotification
+      interface (id, type, icon, colorClass, documentRef, message,
+      reason?, timestamp) and a FinanceNotificationService with
+      getNotifications(): Observable<WorkflowNotification[]>. Returns
+      mock data (of(...)) today, matching the exact 3 workflow events
+      requested (correction/OCR review/approved) with realistic
+      invoice references and reasons — but structured so connecting a
+      real API later is a one-line change inside this one method
+      (swap the mock for this.http.get(...)), with zero changes needed
+      in any component that already consumes the service.
+    - finance-notification-bell.component.*: now injects the service
+      and renders each notification's icon, document reference,
+      message, optional reason, and a relative timestamp (reused the
+      same relativeTime() pattern already established elsewhere in
+      this app, e.g. auditor-authenticity.component.ts). The unread
+      badge count is now the live notifications.length instead of a
+      hardcoded number.
+
+  2. User avatar → dropdown menu (auditlens-frontend/src/app/finance/
+     shared/finance-user-menu.component.*, new):
+    - Replaces the old static `<div class="avatar-btn">F</div>` on
+      every Finance page with a clickable button that opens a dropdown
+      (same open/close + outside-click-to-close pattern as the
+      notification bell) showing the real logged-in user's name/email
+      at the top, then Profile / Settings / Change Password (all three
+      navigate to the new /finance/profile page — see below) and
+      Logout (mirrors finance-layout.component.ts's own logout()
+      exactly: clears access_token + user from localStorage, redirects
+      to /login — a second entry point for the same existing action,
+      not new logic).
+
+  3. New Profile Settings page (auditlens-frontend/src/app/finance/
+     profile/, new component + new route 'profile' under the existing
+     finance children array in app.routes.ts):
+    - Displays the real logged-in user (from localStorage, same source
+      finance-layout.component.ts already uses): avatar initial, full
+      name, email, and a role badge.
+    - Update Profile form (Full Name, Email) and a Change Password
+      form (Current/New/Confirm, with client-side validation: all
+      fields required, new password >= 6 chars, confirmation must
+      match) are both fully built and interactive, but — since no
+      backend endpoint exists for either — submitting does NOT fake a
+      persisted success. Each shows a clear, honestly-worded note
+      ("...aren't connected to a backend endpoint yet — this form is
+      ready to wire up once one exists.") instead of a misleading
+      "Profile updated"/"Password changed" message, since falsely
+      claiming a password change succeeded would be a genuine trust
+      problem for security-sensitive software, not just a cosmetic
+      shortcut.
+
+  Every one of the 7 existing Finance pages (Home, Upload, OCR Review,
+  Corrections, Correction Detail, Report, Transactions) had its
+  `imports: [...]` array updated to include the new
+  FinanceUserMenuComponent, its static avatar `<div>` replaced with
+  `<app-finance-user-menu>`, and its now-dead per-page `.avatar-btn`
+  CSS rule removed (that styling now lives once, inside the shared
+  component).
+
+Why:
+  Requested improvement of the Finance header UX: real, useful
+  workflow notifications instead of a placeholder list, and a
+  functioning account menu (the avatar previously did nothing when
+  clicked) leading to a real profile/settings surface — while being
+  explicit that nothing here should misrepresent backend state that
+  doesn't exist yet.
+
+Confirmed unchanged:
+  - No backend files touched (git diff --stat before committing shows
+    only frontend files: the 7 existing Finance pages, 5 shared-
+    component files, 1 new page's 3 files, and app.routes.ts).
+  - No authentication logic changed - login/register/JWT flows in
+    routes/auth.py are completely untouched; logout still does exactly
+    what it always did (clear 2 localStorage keys, navigate to
+    /login).
+  - The only routing change is additive: one new child route
+    (`finance/profile`) under the EXISTING finance layout - every
+    existing route path is unchanged.
+  - No API calls added anywhere - the notification service and both
+    profile-page forms are 100% client-side; GET /auth/me itself was
+    not even called (the already-in-localStorage user object, the
+    same source every other Finance page already reads, was reused
+    instead of adding a new network request).
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - Live-verified in a real browser (Playwright, throwaway
+    finance_executive account "Priya Wong", cleaned up afterward):
+    - Notification dropdown: confirmed all 3 items render with the
+      correct document reference, relative timestamp ("2 hr ago"/
+      "5 hr ago"/"1 day ago"), message, and reason (present for the
+      correction/OCR items, correctly absent/null for the approved
+      item, which has no reason field).
+    - User menu: confirmed exactly the 4 requested items (Profile,
+      Settings, Change Password, Logout) and that the dropdown header
+      shows the REAL logged-in user's name/email, not a placeholder.
+    - Clicked Profile -> confirmed navigation to /finance/profile and
+      that every displayed field (name, email, role badge, avatar
+      initial, and both form inputs' pre-filled values) exactly
+      matches the real logged-in test account's data.
+    - Clicked Save Changes -> confirmed the honest "not connected"
+      note appears (not a fake success message).
+    - Tested Change Password validation: mismatched confirmation
+      correctly blocked with an inline error; corrected input then
+      correctly showed the same honest "not connected" note.
+    - Clicked Logout from the header menu -> confirmed navigation to
+      /login and that access_token was actually removed from
+      localStorage (verified the value is null afterward, not just
+      that the page changed).
+    - Zero console errors, zero page errors across the entire flow.
+    - Screenshot-verified all three surfaces (notification dropdown,
+      user dropdown, profile page) visually match the dark navy /
+      violet accent / enterprise dashboard style used elsewhere in
+      this app.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser checks clean
+  (0 console/page errors; notification data, user menu, profile page
+  data, form validation, and logout all verified functionally correct,
+  not just visually present). No backend changes this phase, so the
+  backend test suite was not re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the upgraded notification bell,
+     user menu, and new Profile Settings page take effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data, schema, or backend
+  logic changes were made this phase.

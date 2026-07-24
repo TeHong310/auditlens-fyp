@@ -9,8 +9,16 @@
     <div class="notif-list">
       <div class="notif-item" *ngFor="let n of notifications">
         <span class="notif-icon" [ngClass]="n.colorClass"><i class="ph-duotone" [ngClass]="n.icon"></i></span>
-        <span class="notif-title">{{ n.title }}</span>
+        <div class="notif-body">
+          <div class="notif-top-row">
+            <span class="notif-ref">{{ n.documentRef }}</span>
+            <span class="notif-time">{{ relativeTime(n.timestamp) }}</span>
+          </div>
+          <p class="notif-message">{{ n.message }}</p>
+          <p class="notif-reason" *ngIf="n.reason"><i class="ph-duotone ph-info"></i> {{ n.reason }}</p>
+        </div>
       </div>
+      <div class="notif-empty" *ngIf="notifications.length === 0">No notifications.</div>
     </div>
   </div>
 </div>

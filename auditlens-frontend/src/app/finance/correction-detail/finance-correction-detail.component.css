@@ -44,19 +44,6 @@
   flex-shrink: 0;
 }
 
-.avatar-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
 
 .page-label {
   font-size: 11px;

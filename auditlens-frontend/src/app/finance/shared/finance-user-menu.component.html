@@ -1,0 +1,29 @@
+<div class="user-menu-wrap">
+  <button class="avatar-btn" (click)="toggle($event)" aria-label="User menu" type="button">{{ getInitial() }}</button>
+
+  <div class="user-dropdown" *ngIf="isOpen">
+    <div class="user-dropdown-header">
+      <div class="user-dropdown-avatar">{{ getInitial() }}</div>
+      <div class="user-dropdown-info">
+        <p class="user-dropdown-name">{{ user?.full_name || 'Finance User' }}</p>
+        <p class="user-dropdown-email">{{ user?.email || '' }}</p>
+      </div>
+    </div>
+
+    <div class="user-menu-list">
+      <button class="user-menu-item" (click)="goToProfile()">
+        <i class="ph-duotone ph-user-circle"></i> Profile
+      </button>
+      <button class="user-menu-item" (click)="goToProfile()">
+        <i class="ph-duotone ph-gear-six"></i> Settings
+      </button>
+      <button class="user-menu-item" (click)="goToProfile()">
+        <i class="ph-duotone ph-lock-key"></i> Change Password
+      </button>
+      <div class="user-menu-divider"></div>
+      <button class="user-menu-item logout-item" (click)="logout()">
+        <i class="ph-duotone ph-sign-out"></i> Logout
+      </button>
+    </div>
+  </div>
+</div>

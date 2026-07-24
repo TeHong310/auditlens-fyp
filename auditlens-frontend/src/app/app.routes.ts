@@ -11,6 +11,7 @@ import { FinanceReportComponent } from './finance/report/finance-report.componen
 import { FinanceTransactionsComponent } from './finance/transactions/finance-transactions.component';
 import { FinanceTransactionCreateComponent } from './finance/transaction-create/finance-transaction-create.component';
 import { FinanceTransactionDetailComponent } from './finance/transaction-detail/finance-transaction-detail.component';
+import { FinanceProfileComponent } from './finance/profile/finance-profile.component';
 import { AuditorLayoutComponent } from './auditor/auditor-layout/auditor-layout.component';
 import { AuditorDashboardComponent } from './auditor/dashboard/auditor-dashboard.component';
 import { AuditorReviewQueueComponent } from './auditor/review-queue/auditor-review-queue.component';
@@ -43,6 +44,7 @@ export const routes: Routes = [
       { path: 'transactions', component: FinanceTransactionsComponent },
       { path: 'transactions/create', component: FinanceTransactionCreateComponent },
       { path: 'transactions/detail', component: FinanceTransactionDetailComponent },
+      { path: 'profile', component: FinanceProfileComponent },
       { path: '', redirectTo: 'home', pathMatch: 'full' }
     ]
   },

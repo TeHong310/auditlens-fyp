@@ -6,13 +6,14 @@ import { Chart, registerables } from 'chart.js';
 import { FormsModule } from '@angular/forms';
 import { environment } from '../../../environments/environment';
 import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
+import { FinanceUserMenuComponent } from '../shared/finance-user-menu.component';
 
 Chart.register(...registerables);
 
 @Component({
   selector: 'app-finance-report',
   standalone: true,
-  imports: [CommonModule, FormsModule, FinanceNotificationBellComponent],
+  imports: [CommonModule, FormsModule, FinanceNotificationBellComponent, FinanceUserMenuComponent],
   templateUrl: './finance-report.component.html',
   styleUrls: ['./finance-report.component.css']
 })

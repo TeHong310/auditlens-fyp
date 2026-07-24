@@ -6,11 +6,12 @@ import { forkJoin, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
+import { FinanceUserMenuComponent } from '../shared/finance-user-menu.component';
 
 @Component({
   selector: 'app-finance-ocr-review',
   standalone: true,
-  imports: [CommonModule, FormsModule, FinanceNotificationBellComponent],
+  imports: [CommonModule, FormsModule, FinanceNotificationBellComponent, FinanceUserMenuComponent],
   templateUrl: './finance-ocr-review.component.html',
   styleUrls: ['./finance-ocr-review.component.css']
 })

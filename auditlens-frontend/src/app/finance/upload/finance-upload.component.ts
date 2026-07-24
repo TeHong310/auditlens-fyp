@@ -4,11 +4,12 @@ import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
+import { FinanceUserMenuComponent } from '../shared/finance-user-menu.component';
 
 @Component({
   selector: 'app-finance-upload',
   standalone: true,
-  imports: [CommonModule, FinanceNotificationBellComponent],
+  imports: [CommonModule, FinanceNotificationBellComponent, FinanceUserMenuComponent],
   templateUrl: './finance-upload.component.html',
   styleUrls: ['./finance-upload.component.css']
 })

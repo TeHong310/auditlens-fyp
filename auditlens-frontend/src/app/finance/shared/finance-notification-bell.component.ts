@@ -1,19 +1,7 @@
-import { Component, ElementRef, HostListener } from '@angular/core';
+import { Component, ElementRef, HostListener, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FinanceNotificationService, WorkflowNotification } from './finance-notification.service';
 
-interface MockNotification {
-  icon: string;
-  colorClass: string;
-  title: string;
-}
-
-// Frontend-only notification bell shared across every Finance page
-// header. No backend notification system exists yet — the list below
-// is static mock data, per this task's explicit "frontend only, no
-// backend" scope. Kept as one shared component (rather than copied
-// per page, unlike this app's usual per-component-copy convention for
-// small label lookups) because this is a genuinely stateful, reusable
-// interactive widget used identically across 7 pages.
 @Component({
   selector: 'app-finance-notification-bell',
   standalone: true,
@@ -21,16 +9,23 @@ interface MockNotification {
   templateUrl: './finance-notification-bell.component.html',
   styleUrls: ['./finance-notification-bell.component.css']
 })
-export class FinanceNotificationBellComponent {
+export class FinanceNotificationBellComponent implements OnInit {
   isOpen = false;
+  notifications: WorkflowNotification[] = [];
 
-  notifications: MockNotification[] = [
-    { icon: 'ph-arrow-u-up-left', colorClass: 'notif-danger', title: 'Invoice returned for correction' },
-    { icon: 'ph-scan', colorClass: 'notif-warning', title: 'OCR review required' },
-    { icon: 'ph-check-circle', colorClass: 'notif-success', title: 'Document approved' },
-  ];
+  constructor(
+    private elementRef: ElementRef,
+    private notificationService: FinanceNotificationService
+  ) {}
 
-  constructor(private elementRef: ElementRef) {}
+  ngOnInit() {
+    // See FinanceNotificationService — mock data today, same
+    // Observable<WorkflowNotification[]> shape a real API call would
+    // return, so no change needed here once a backend endpoint exists.
+    this.notificationService.getNotifications().subscribe(list => {
+      this.notifications = list;
+    });
+  }
 
   toggle(event: Event) {
     event.stopPropagation();
@@ -42,5 +37,18 @@ export class FinanceNotificationBellComponent {
     if (this.isOpen && !this.elementRef.nativeElement.contains(event.target)) {
       this.isOpen = false;
     }
+  }
+
+  relativeTime(dateStr: string): string {
+    if (!dateStr) return '-';
+    const diffMs = Date.now() - new Date(dateStr).getTime();
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return 'just now';
+    if (diffMin < 60) return `${diffMin} min ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr} hr ago`;
+    const diffDay = Math.floor(diffHr / 24);
+    if (diffDay === 1) return '1 day ago';
+    return `${diffDay} days ago`;
   }
 }
