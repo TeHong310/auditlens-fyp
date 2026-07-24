@@ -798,20 +798,6 @@ def get_statistics():
         )
         monthly_uploads = [dict(r) for r in cursor.fetchall()]
 
-        # Authenticity failures (Admin Dashboard Risk Overview) — a
-        # small, read-only aggregate added for this one count only.
-        # risk_level is set by the existing, unmodified authenticity
-        # engine (helpers/authenticity_check.py) to LOW/MEDIUM/HIGH;
-        # HIGH is that engine's own REJECT-decision tier, i.e. what it
-        # already considers a failed check. No new classification
-        # logic, no calculation duplicated elsewhere.
-        cursor.execute(
-            '''SELECT COUNT(*) AS failed
-               FROM authenticity_checks
-               WHERE risk_level = 'HIGH' '''
-        )
-        authenticity_stats = cursor.fetchone()
-
         conn.close()
 
         return jsonify({
@@ -819,8 +805,7 @@ def get_statistics():
             'documents':       dict(doc_stats),
             'matching':        dict(match_stats),
             'exceptions':      dict(exception_stats),
-            'monthly_uploads': monthly_uploads,
-            'authenticity':    dict(authenticity_stats)
+            'monthly_uploads': monthly_uploads
         }), 200
 
     except Exception as e:

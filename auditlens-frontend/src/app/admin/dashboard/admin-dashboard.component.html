@@ -11,126 +11,144 @@
     <div class="skeleton-card" *ngFor="let i of [1,2,3,4]"></div>
   </div>
 
-  <ng-container *ngIf="!isLoading && stats">
-
-    <!-- Risk Overview -->
-    <div class="risk-panel">
-      <div class="risk-panel-header">
-        <span class="risk-panel-title">Risk Overview</span>
-        <span class="risk-panel-total">{{ riskTotal }} tracked items</span>
-      </div>
-      <div class="risk-bar">
-        <div class="risk-seg risk-seg-normal" [style.width.%]="riskNormalPct" *ngIf="riskNormal > 0"></div>
-        <div class="risk-seg risk-seg-attention" [style.width.%]="riskAttentionPct" *ngIf="riskAttention > 0"></div>
-        <div class="risk-seg risk-seg-critical" [style.width.%]="riskCriticalPct" *ngIf="riskCritical > 0"></div>
-        <div class="risk-bar-empty" *ngIf="riskTotal === 0">No tracked activity yet</div>
-      </div>
-      <div class="risk-legend">
-        <span class="risk-legend-item"><span class="risk-dot risk-dot-normal"></span>Normal <strong>{{ riskNormal }}</strong></span>
-        <span class="risk-legend-item"><span class="risk-dot risk-dot-attention"></span>Attention <strong>{{ riskAttention }}</strong></span>
-        <span class="risk-legend-item"><span class="risk-dot risk-dot-critical"></span>Critical <strong>{{ riskCritical }}</strong></span>
+  <!-- Summary Cards -->
+  <div class="stats-row" *ngIf="!isLoading && stats">
+    <div class="stat-card" style="--card-color:var(--accent);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-users-three" style="font-size:20px;"></i></div>
+      <div class="stat-info">
+        <p class="stat-label">Total Users</p>
+        <p class="stat-value" style="color:var(--accent)">{{ stats.users.total_users }}</p>
+        <p class="stat-sub">{{ stats.users.total_finance }} Finance &middot; {{ stats.users.total_auditors }} Auditor &middot; {{ stats.users.total_admins }} Admin</p>
       </div>
     </div>
 
-    <!-- Metric Ticker -->
-    <div class="ticker">
-      <div class="ticker-item">
-        <span class="ticker-label">Total Users</span>
-        <span class="ticker-value">{{ stats.users.total_users }}</span>
-      </div>
-      <div class="ticker-item">
-        <span class="ticker-label">Active Users</span>
-        <span class="ticker-value">{{ stats.users.active_users }}</span>
-      </div>
-      <div class="ticker-item">
-        <span class="ticker-label">Total Documents</span>
-        <span class="ticker-value">{{ stats.documents.total_documents }}</span>
-      </div>
-      <div class="ticker-item">
-        <span class="ticker-label">Unresolved Exceptions</span>
-        <span class="ticker-value" [class.ticker-value-alert]="stats.exceptions.unresolved > 0">{{ stats.exceptions.unresolved }}</span>
+    <div class="stat-card" style="--card-color:var(--accent-soft);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-files" style="font-size:20px;"></i></div>
+      <div class="stat-info">
+        <p class="stat-label">Total Documents</p>
+        <p class="stat-value" style="color:var(--accent-soft)">{{ stats.documents.total_documents }}</p>
+        <p class="stat-sub">{{ stats.documents.approved }} approved &middot; {{ stats.documents.under_review }} under review</p>
       </div>
     </div>
 
-    <!-- Items Requiring Attention + Supporting Charts -->
-    <div class="main-row">
-
-      <div class="attention-panel">
-        <div class="panel-header">
-          <span class="panel-title">Items Requiring Attention</span>
-          <span class="panel-count" *ngIf="attentionItemsTotal">{{ attentionItemsTotal }}</span>
-        </div>
-
-        <div class="attention-empty" *ngIf="allDataLoaded && attentionItems.length === 0">
-          <i class="ph-duotone ph-check-circle"></i> Nothing needs attention right now.
-        </div>
-        <div class="attention-loading" *ngIf="!allDataLoaded">Loading…</div>
-
-        <div class="attention-list" *ngIf="allDataLoaded">
-          <div class="attention-row" [ngClass]="'tier-' + item.tier" *ngFor="let item of attentionItems" (click)="openAttentionItem(item)">
-            <i class="ph-duotone attention-icon" [ngClass]="item.icon"></i>
-            <div class="attention-body">
-              <p class="attention-title">{{ item.title }}</p>
-              <p class="attention-subtitle">{{ item.subtitle }}</p>
-            </div>
-            <span class="attention-time" *ngIf="item.timeLabel">{{ item.timeLabel }}</span>
-          </div>
-        </div>
-
-        <a class="attention-view-all" *ngIf="attentionItemsTotal > attentionItems.length" routerLink="/admin/documents">
-          View all in Document Management →
-        </a>
-      </div>
-
-      <div class="supporting-col">
-        <div class="supporting-card">
-          <p class="supporting-title">Role Distribution</p>
-          <div class="role-bar-row" *ngFor="let r of roleBars">
-            <span class="role-bar-label">{{ r.label }}</span>
-            <div class="role-bar-track">
-              <div class="role-bar-fill" [style.width.%]="r.widthPct" [style.background]="'var(' + r.colorVar + ')'"></div>
-            </div>
-            <span class="role-bar-value">{{ r.value }}</span>
-          </div>
-        </div>
-
-        <div class="supporting-card">
-          <p class="supporting-title">Monthly Uploads</p>
-          <div class="sparkline-body">
-            <canvas #trendChart></canvas>
-            <p class="chart-empty-note" *ngIf="!stats.monthly_uploads?.length">No documents uploaded yet</p>
-          </div>
-        </div>
-      </div>
-
-    </div>
-
-    <!-- Document Status Breakdown (supporting, compact strip) -->
-    <div class="status-strip-card">
-      <p class="supporting-title">Document Status Breakdown</p>
-      <div class="status-strip">
-        <div class="status-seg" *ngFor="let s of statusSegments" [style.width.%]="(s.value / statusSegmentsTotal) * 100" [style.background]="'var(' + s.colorVar + ')'" [title]="s.label + ': ' + s.value"></div>
-      </div>
-      <div class="status-strip-legend">
-        <span class="status-strip-item" *ngFor="let s of statusSegments">
-          <span class="status-dot" [style.background]="'var(' + s.colorVar + ')'"></span>{{ s.label }} <strong>{{ s.value }}</strong>
-        </span>
+    <div class="stat-card" style="--card-color:var(--danger);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-warning-circle" style="font-size:20px;"></i></div>
+      <div class="stat-info">
+        <p class="stat-label">Exceptions</p>
+        <p class="stat-value" style="color:var(--danger)">{{ stats.exceptions.total_exceptions }}</p>
+        <p class="stat-sub">{{ stats.exceptions.unresolved }} unresolved</p>
       </div>
     </div>
 
-    <!-- Recent Activity: compact combined timeline -->
-    <div class="activity-card">
-      <p class="supporting-title">Recent Activity</p>
-      <div class="activity-empty" *ngIf="activityFeed.length === 0">No recent activity</div>
-      <div class="activity-feed">
-        <div class="activity-row" *ngFor="let a of activityFeed">
-          <i class="ph-duotone activity-icon" [ngClass]="a.icon"></i>
-          <span class="activity-text">{{ a.text }}</span>
-          <span class="activity-time">{{ relativeTime(a.timestamp) }}</span>
+    <div class="stat-card" style="--card-color:var(--success);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-user-check" style="font-size:20px;"></i></div>
+      <div class="stat-info">
+        <p class="stat-label">Active Users</p>
+        <p class="stat-value" style="color:var(--success)">{{ stats.users.active_users }}</p>
+        <p class="stat-sub">of {{ stats.users.total_users }} total</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="charts-row" *ngIf="!isLoading && stats">
+    <div class="chart-card">
+      <div class="chart-header">
+        <div>
+          <h2 class="section-title">User Role Distribution</h2>
+          <p class="section-subtitle">Finance Executive / Auditor / Admin</p>
+        </div>
+      </div>
+      <div class="chart-body donut-body">
+        <canvas #roleChart></canvas>
+        <div class="donut-center">
+          <p class="donut-total">{{ stats.users.total_users }}</p>
+          <p class="donut-label">Users</p>
         </div>
       </div>
     </div>
 
-  </ng-container>
+    <div class="chart-card">
+      <div class="chart-header">
+        <div>
+          <h2 class="section-title">Document Status Breakdown</h2>
+          <p class="section-subtitle">Under Review / Approved / Returned / Resubmitted</p>
+        </div>
+      </div>
+      <div class="chart-body donut-body">
+        <canvas #statusChart></canvas>
+        <div class="donut-center">
+          <p class="donut-total">{{ stats.documents.total_documents }}</p>
+          <p class="donut-label">Documents</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-header">
+        <div>
+          <h2 class="section-title">Monthly Upload Trend</h2>
+          <p class="section-subtitle">Documents uploaded per month</p>
+        </div>
+      </div>
+      <div class="chart-body">
+        <canvas #trendChart></canvas>
+        <p class="chart-empty-note" *ngIf="!stats.monthly_uploads?.length">No documents uploaded yet</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent Activity -->
+  <div class="recent-row" *ngIf="!isLoading && stats">
+    <div class="table-card">
+      <div class="table-header">
+        <div>
+          <h2 class="section-title">Recent Users</h2>
+          <p class="section-subtitle">Latest 5 registered accounts</p>
+        </div>
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr><th>Name</th><th>Role</th><th>Status</th><th>Created</th></tr>
+          </thead>
+          <tbody>
+            <tr *ngIf="recentUsers.length === 0"><td colspan="4" class="empty-row">No users yet</td></tr>
+            <tr *ngFor="let u of recentUsers">
+              <td class="cell-primary">{{ u.full_name }}</td>
+              <td><span class="badge badge-pending">{{ roleLabel(u.role) }}</span></td>
+              <td><span class="badge" [ngClass]="u.is_active ? 'badge-approved' : 'badge-pending'">{{ u.is_active ? 'Active' : 'Disabled' }}</span></td>
+              <td>{{ u.created_at | date:'mediumDate' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="table-card">
+      <div class="table-header">
+        <div>
+          <h2 class="section-title">Recent Documents</h2>
+          <p class="section-subtitle">Latest 5 uploaded documents</p>
+        </div>
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr><th>Document</th><th>Vendor</th><th>Status</th><th>Uploaded</th></tr>
+          </thead>
+          <tbody>
+            <tr *ngIf="recentDocuments.length === 0"><td colspan="4" class="empty-row">No documents yet</td></tr>
+            <tr *ngFor="let d of recentDocuments">
+              <td class="cell-primary">{{ d.document_number }}</td>
+              <td>{{ d.vendor_name || 'Unknown' }}</td>
+              <td><span class="badge" [ngClass]="statusBadgeClass(d.status)">{{ statusLabel(d.status) }}</span></td>
+              <td>{{ d.uploaded_at | date:'mediumDate' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 
 </div>
