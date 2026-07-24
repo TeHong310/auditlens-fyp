@@ -11778,3 +11778,151 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous frontend build - no data or schema changes
   were made this phase.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-24
+What was changed:
+  Phase 28: redesigned Finance Home into a "Finance Processing Command
+  Centre" matching Auditor Home's enterprise dashboard style. UI only
+  — 3 frontend files touched, no backend/API/database/OCR/AI/matching/
+  workflow logic changed.
+
+  Frontend (auditlens-frontend/src/app/finance/home/):
+    - finance-home.component.css: rewritten to mirror auditor-
+      dashboard.component.css's exact card language — stat-card icon-
+      wrap + uppercase label + badge, two-tier chart grid (charts-row-
+      primary 1.8fr/1fr, charts-row-secondary repeat(4,1fr)), the same
+      radial-ring conic-gradient rules, and the same table-card/
+      priority-card/data-table/badge classes as Auditor Home's queue
+      and priority panel. Finance-specific header/search-bar/quick-
+      actions-row (not present on Auditor Home) were kept as-is.
+    - finance-home.component.html: 6 KPI cards restyled (same metrics
+      as before — Total Uploaded, OCR Processed, Under Review,
+      Approved, Correction Required, Pending Finance Action — with
+      badges added to the 4 non-neutral cards, mirroring Auditor
+      Home's pattern); the old 3-chart row (bar+line, donut, line)
+      replaced with the requested 6-chart grid; "Recent Uploads"
+      replaced with "Document Processing Queue" (added OCR Confidence
+      + Age columns, dropped the redundant Audit Status column);
+      added a new "Priority Finance Action" panel on the right,
+      mirroring Auditor Home's Priority Review Queue.
+    - finance-home.component.ts: added CHART_PALETTE (copied from
+      Auditor Home, for visual consistency across both dashboards);
+      kept the existing GET /documents/ load and every existing
+      method (getStatusClass, requiredActionLabel, onAction,
+      isActionClickable, etc.) unchanged; added one new parallel call,
+      loadPoGrLists(), reusing the EXISTING GET /documents/po/list and
+      GET /documents/gr/list endpoints (already finance-scoped, no new
+      backend route) to feed Document Type Distribution and Correction
+      Analysis; added compute*()/render*() methods for the 6 new
+      charts, all pure client-side derivations of already-fetched
+      data — no new business logic.
+
+  The 6 charts:
+    1. Upload Processing Trend — mixed bar+line (Uploaded vs OCR
+       Processed by month), replaces the old "Uploaded vs Approved"
+       bar+line with the same all-time-by-month data source.
+    2. OCR Processing Performance — line chart, same OCR-confidence-
+       per-recent-document data the old "OCR Confidence Trend" chart
+       already used, restyled.
+    3. Document Status Overview — 3 mini radial progress rings
+       (Processed/Pending/Returned), same CSS conic-gradient technique
+       as Auditor Home's Status Breakdown, replacing the old donut.
+    4. Document Type Distribution — horizontal bar (Invoice/PO/GR),
+       counts from allDocuments + the newly-loaded poList/grList.
+    5. OCR Confidence Distribution — histogram (5 confidence-range
+       buckets: 90-100/80-89/70-79/60-69/<60), bucketed client-side
+       from the existing ocr_confidence field.
+    6. Correction Analysis — horizontal bar (Missing PO / Missing GR /
+       Low OCR / Invalid Amount / Duplicate) across this month's
+       returned invoices. Missing PO/GR are measured directly (does
+       this invoice's document_id appear in poList/grList — each PO/
+       GR row's document_id already points back at its parent
+       invoice, confirmed against the existing /ocr-review/invoice/
+       <id>/related-docs endpoint's own query shape); Low OCR is
+       ocr_confidence < 75; Invalid Amount / Duplicate come from the
+       auditor's actual return_reason_category on each invoice's
+       latest send-back cycle (already fetched via the existing
+       send-back-cycles endpoint). No new backend logic — the backend
+       has no single field that already separates "missing PO" from
+       "missing GR", so this was derived client-side from data the
+       page already had to fetch anyway.
+
+Why:
+  Requested redesign to bring Finance Home to visual and structural
+  parity with the Auditor Home dashboard — same enterprise dark
+  theme, same compact 2-tier chart grid, same queue+priority layout —
+  while keeping every existing Finance KPI, chart data source, and
+  workflow function intact.
+
+Confirmed unchanged:
+  - No backend files touched (git diff --stat before committing shows
+    only the 3 frontend files above).
+  - No new backend endpoint — loadPoGrLists() calls two EXISTING
+    finance-scoped endpoints (GET /documents/po/list, GET /documents/
+    gr/list) already used elsewhere in this app (e.g. transaction
+    creation), just not previously called from this page.
+  - No OCR/AI/extraction, matching, transaction-package, or send-back
+    workflow logic changed — every existing method this page already
+    had (getStatusClass, getStatusLabel, requiredActionLabel,
+    actionLabel, isActionClickable, onAction, formatDate,
+    loadCyclesForActionStats's core logic) is functionally identical;
+    only actionLabel()'s two waiting-state STRINGS were shortened
+    ("Waiting Auditor" -> "Waiting") to fit the new compact Action
+    column without truncation — same status, same click behavior.
+  - All 6 KPI metrics and every existing Quick Navigation button
+    (Correction Center / Upload Document / OCR Review) preserved.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - Live-verified in a real browser (Playwright, 1440x900 viewport,
+    throwaway finance_executive account, cleaned up afterward)
+    against deliberately-inserted, fully-disposable fixture data (6
+    documents spanning every status, 3 with POs, 3 with GRs, 3 send-
+    back cycles with distinct reason categories/priorities) to
+    actually exercise every chart and the Correction Analysis logic
+    with real numbers:
+    - Zero console errors, zero page errors throughout.
+    - Zero horizontal overflow; vertical overflow ~20px in a 900px
+      viewport — the redesigned dashboard fits in essentially one
+      screen, per the "fit in one screen" requirement.
+    - Directly inspected the live component's computed values (via
+      Angular's dev debug API) against hand-calculated expectations
+      for all 6 fixture documents — correctionAnalysis, document
+      TypeDistribution, and docStatusOverview all matched exactly
+      (e.g. Missing PO=2, Missing GR=2, Low OCR=1, Invalid Amount=1,
+      Duplicate=1), confirming the chart data is accurate, not just
+      visually plausible.
+    - Found and fixed two real layout bugs during verification: KPI
+      labels were ellipsis-truncating mid-word on the narrower
+      6-column cards (fixed by letting labels wrap to 2 lines instead
+      of truncating); table header cells had no overflow clipping
+      (unlike the existing data cells), causing "OCR Confidence" to
+      visually run into "Required Action" - fixed by adding the same
+      overflow/ellipsis rule to `th` as `td`, plus a column-width
+      rebalance so the Status and Action columns no longer clip.
+    - All fixture rows (6 documents, 3 purchase_orders, 3
+      goods_receipts, 3 send_back_cycles, 2 throwaway users) deleted
+      afterward and verified gone from the dev DB.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser check clean
+  (0 console/page errors, 0 horizontal overflow, dashboard fits in one
+  screen, chart data verified numerically accurate). No backend
+  changes this phase, so the backend test suite was not re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the redesigned Finance Home takes
+     effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data or schema changes
+  were made this phase (all fixture rows used for visual verification
+  were inserted and deleted entirely within this phase's own testing).

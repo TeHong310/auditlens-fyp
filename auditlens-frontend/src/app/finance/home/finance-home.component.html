@@ -4,7 +4,7 @@
   <div class="header">
     <div class="header-left">
       <h1 class="page-title">Finance Home</h1>
-      <p class="page-subtitle">Document upload and OCR processing overview</p>
+      <p class="page-subtitle">Document upload and OCR processing command centre</p>
     </div>
     <div class="header-right">
       <div class="search-bar">
@@ -19,23 +19,19 @@
     </div>
   </div>
 
-  <!-- Stats Cards -->
+  <!-- KPI Cards -->
   <div class="stats-row">
     <div class="stat-card" style="--card-color:var(--accent);">
-      <div class="stat-icon-wrap">
-        <i class="ph-duotone ph-tray-arrow-up" style="font-size:20px;"></i>
-      </div>
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-tray-arrow-up" style="font-size:17px;"></i></div>
       <div class="stat-info">
         <p class="stat-label">Total Uploaded</p>
         <p class="stat-value" style="color:var(--accent)">{{ totalUploaded }}</p>
-        <p class="stat-sub">All documents</p>
+        <p class="stat-sub">All documents this month</p>
       </div>
     </div>
 
     <div class="stat-card" style="--card-color:var(--success);">
-      <div class="stat-icon-wrap">
-        <i class="ph-duotone ph-check-circle" style="font-size:20px;"></i>
-      </div>
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-check-circle" style="font-size:17px;"></i></div>
       <div class="stat-info">
         <p class="stat-label">OCR Processed</p>
         <p class="stat-value" style="color:var(--success)">{{ totalOcrProcessed }}</p>
@@ -44,46 +40,50 @@
     </div>
 
     <div class="stat-card" style="--card-color:var(--warning);">
-      <div class="stat-icon-wrap">
-        <i class="ph-duotone ph-list-bullets" style="font-size:20px;"></i>
-      </div>
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-list-bullets" style="font-size:17px;"></i></div>
       <div class="stat-info">
-        <p class="stat-label">Under Review</p>
+        <div class="stat-label-row">
+          <p class="stat-label">Under Review</p>
+          <span class="stat-badge badge-action">Action</span>
+        </div>
         <p class="stat-value" style="color:var(--warning)">{{ totalUnderReview }}</p>
         <p class="stat-sub">Pending auditor</p>
       </div>
     </div>
 
     <div class="stat-card" style="--card-color:var(--accent-soft);">
-      <div class="stat-icon-wrap">
-        <i class="ph-duotone ph-seal-check" style="font-size:20px;"></i>
-      </div>
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-seal-check" style="font-size:17px;"></i></div>
       <div class="stat-info">
-        <p class="stat-label">Approved</p>
+        <div class="stat-label-row">
+          <p class="stat-label">Approved</p>
+          <span class="stat-badge badge-safe">Safe</span>
+        </div>
         <p class="stat-value" style="color:var(--accent-soft)">{{ totalApproved }}</p>
         <p class="stat-sub">Matched & verified</p>
       </div>
     </div>
 
     <div class="stat-card" style="--card-color:var(--danger);">
-      <div class="stat-icon-wrap">
-        <i class="ph-duotone ph-warning-circle" style="font-size:20px;"></i>
-      </div>
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-warning-circle" style="font-size:17px;"></i></div>
       <div class="stat-info">
-        <p class="stat-label">Correction Required</p>
+        <div class="stat-label-row">
+          <p class="stat-label">Correction Required</p>
+          <span class="stat-badge" [ngClass]="totalReturned > 0 ? 'badge-risk' : 'badge-safe'">{{ totalReturned > 0 ? 'Risk' : 'Safe' }}</span>
+        </div>
         <p class="stat-value" style="color:var(--danger)">{{ totalReturned }}</p>
-        <p class="stat-sub">{{ totalReturned === 1 ? 'Invoice' : 'Invoices' }} returned for Finance correction</p>
+        <p class="stat-sub">Returned for correction</p>
       </div>
     </div>
 
     <div class="stat-card" style="--card-color:var(--warning);">
-      <div class="stat-icon-wrap">
-        <i class="ph-duotone ph-hourglass-medium" style="font-size:20px;"></i>
-      </div>
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-hourglass-medium" style="font-size:17px;"></i></div>
       <div class="stat-info">
-        <p class="stat-label">Pending Finance Action</p>
+        <div class="stat-label-row">
+          <p class="stat-label">Pending Finance Action</p>
+          <span class="stat-badge badge-action">Action</span>
+        </div>
         <p class="stat-value" style="color:var(--warning)">{{ missingDocsCount }}</p>
-        <p class="stat-sub">Missing PO/GR &middot; {{ totalReturned }} unresolved correction {{ totalReturned === 1 ? 'case' : 'cases' }}</p>
+        <p class="stat-sub">Missing PO/GR cases</p>
       </div>
     </div>
   </div>
@@ -101,109 +101,169 @@
     </button>
   </div>
 
-  <!-- Charts Row -->
-  <div class="charts-row">
-
-    <!-- Bar+Line Chart -->
+  <!-- Primary analytics: trend charts, given the most visual weight -->
+  <div class="charts-row-primary">
     <div class="chart-card">
-      <div class="chart-header">
-        <div>
-          <h2 class="section-title">Monthly Upload Trend</h2>
-          <p class="section-subtitle">Uploaded vs Approved per month</p>
-        </div>
-      </div>
+      <p class="chart-title">Upload Processing Trend</p>
+      <p class="chart-subtitle">Uploaded vs OCR Processed — by month</p>
       <div class="chart-body">
-        <canvas #barChart></canvas>
+        <canvas #uploadTrendChart></canvas>
       </div>
     </div>
 
-    <!-- Donut Chart -->
     <div class="chart-card">
-      <div class="chart-header">
+      <div class="chart-header-row">
         <div>
-          <h2 class="section-title">Status Breakdown</h2>
-          <p class="section-subtitle">Document status overview</p>
-        </div>
-      </div>
-      <div class="chart-body donut-body">
-        <canvas #donutChart></canvas>
-        <div class="donut-center">
-          <p class="donut-total">{{ totalUploaded }}</p>
-          <p class="donut-label">Total</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- Line Chart -->
-    <div class="chart-card">
-      <div class="chart-header">
-        <div>
-          <h2 class="section-title">OCR Confidence Trend</h2>
-          <p class="section-subtitle">Score per document (last 10)</p>
+          <p class="chart-title">OCR Processing Performance</p>
+          <p class="chart-subtitle">Confidence per document (recent)</p>
         </div>
         <div class="avg-badge">Avg: {{ avgConfidence }}%</div>
       </div>
       <div class="chart-body">
-        <canvas #lineChart></canvas>
+        <canvas #ocrPerfChart></canvas>
       </div>
     </div>
-
   </div>
 
-  <!-- Recent Uploads Table -->
-  <div class="table-card">
-    <div class="table-header">
-      <div>
-        <h2 class="section-title">Recent Uploads</h2>
-        <p class="section-subtitle">Latest 5 documents and their processing status</p>
-      </div>
-      <div class="table-actions">
-        <button class="btn-filter">Filter</button>
-        <button class="btn-export">Export</button>
+  <!-- Secondary analytics: compact 4-chart breakdown row -->
+  <div class="charts-row-secondary">
+    <div class="chart-card">
+      <p class="chart-title">Document Status Overview</p>
+      <p class="chart-subtitle">Processed / Pending / Returned</p>
+      <div class="chart-body chart-body-small">
+        <p class="chart-loading-note" *ngIf="isLoading">Loading…</p>
+        <div class="radial-row" *ngIf="!isLoading">
+          <div class="radial-item">
+            <div class="radial-ring" [style.background]="ringGradient(docStatusOverview.processed, totalUploaded, '#34D399')">
+              <div class="radial-ring-hole"><span class="radial-pct">{{ pct(docStatusOverview.processed) }}%</span></div>
+            </div>
+            <p class="radial-caption"><span class="radial-label">Processed</span><span class="radial-count">{{ docStatusOverview.processed }}</span></p>
+          </div>
+          <div class="radial-item">
+            <div class="radial-ring" [style.background]="ringGradient(docStatusOverview.pendingReview, totalUploaded, '#FBBF24')">
+              <div class="radial-ring-hole"><span class="radial-pct">{{ pct(docStatusOverview.pendingReview) }}%</span></div>
+            </div>
+            <p class="radial-caption"><span class="radial-label">Pending</span><span class="radial-count">{{ docStatusOverview.pendingReview }}</span></p>
+          </div>
+          <div class="radial-item">
+            <div class="radial-ring" [style.background]="ringGradient(docStatusOverview.returned, totalUploaded, '#F43F5E')">
+              <div class="radial-ring-hole"><span class="radial-pct">{{ pct(docStatusOverview.returned) }}%</span></div>
+            </div>
+            <p class="radial-caption"><span class="radial-label">Returned</span><span class="radial-count">{{ docStatusOverview.returned }}</span></p>
+          </div>
+        </div>
       </div>
     </div>
 
-    <div class="table-wrapper">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Document</th>
-            <th>Vendor</th>
-            <th>Status</th>
-            <th>Audit Status</th>
-            <th>Required Action</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr *ngIf="isLoading">
-            <td colspan="6" class="loading-row">Loading...</td>
-          </tr>
-          <tr *ngIf="!isLoading && documents.length === 0">
-            <td colspan="6" class="empty-row">No documents uploaded yet</td>
-          </tr>
-          <tr *ngFor="let doc of documents">
-            <td class="doc-name">{{ doc.invoice_number || doc.file_name }}</td>
-            <td>{{ doc.vendor_name || 'Unknown vendor' }}</td>
-            <td>
-              <span class="badge" [ngClass]="getStatusClass(doc.status)">
-                {{ getStatusLabel(doc.status) }}
-              </span>
-            </td>
-            <td>
-              <span class="badge" [ngClass]="auditStatusClass(doc)">
-                {{ auditStatusLabel(doc) }}
-              </span>
-            </td>
-            <td>{{ requiredActionLabel(doc) }}</td>
-            <td>
-              <button class="btn-open" *ngIf="isActionClickable(doc)" (click)="onAction(doc)">{{ actionLabel(doc) }}</button>
-              <span class="action-label-static" *ngIf="!isActionClickable(doc)">{{ actionLabel(doc) }}</span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <div class="chart-card">
+      <p class="chart-title">Document Type Distribution</p>
+      <p class="chart-subtitle">Invoice / PO / GR</p>
+      <div class="chart-body chart-body-small">
+        <canvas #docTypeChart></canvas>
+        <p class="chart-loading-note" *ngIf="!poGrLoaded">Loading…</p>
+      </div>
     </div>
+
+    <div class="chart-card">
+      <p class="chart-title">OCR Confidence Distribution</p>
+      <p class="chart-subtitle">Documents by confidence range</p>
+      <div class="chart-body chart-body-small">
+        <canvas #ocrConfidenceChart></canvas>
+        <p class="chart-loading-note" *ngIf="isLoading">Loading…</p>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <p class="chart-title">Correction Analysis</p>
+      <p class="chart-subtitle">Correction factors this month</p>
+      <div class="chart-body chart-body-small">
+        <canvas #correctionChart></canvas>
+        <p class="chart-loading-note" *ngIf="!poGrLoaded || !cyclesLoaded">Loading…</p>
+        <p class="chart-empty-note" *ngIf="poGrLoaded && cyclesLoaded && totalReturned === 0">No corrections this month</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Queue + Priority -->
+  <div class="main-row">
+
+    <div class="table-card">
+      <div class="table-header">
+        <div>
+          <h2 class="section-title">Document Processing Queue</h2>
+          <p class="section-subtitle">Latest {{ documents.length }} documents this month</p>
+        </div>
+        <div class="table-actions">
+          <button class="btn-filter">Filter</button>
+          <button class="btn-export">Export</button>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Document</th>
+              <th>Vendor</th>
+              <th>Status</th>
+              <th>OCR Confidence</th>
+              <th>Required Action</th>
+              <th>Age</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngIf="isLoading"><td colspan="7" class="loading-row">Loading...</td></tr>
+            <tr *ngIf="!isLoading && documents.length === 0">
+              <td colspan="7" class="empty-row">No documents uploaded yet</td>
+            </tr>
+            <tr *ngFor="let doc of documents">
+              <td class="doc-name">{{ doc.invoice_number || doc.file_name }}</td>
+              <td>{{ doc.vendor_name || 'Unknown vendor' }}</td>
+              <td>
+                <span class="badge" [ngClass]="getStatusClass(doc.status)">
+                  {{ getStatusLabel(doc.status) }}
+                </span>
+              </td>
+              <td>{{ ocrConfidenceLabel(doc) }}</td>
+              <td>{{ requiredActionLabel(doc) }}</td>
+              <td>{{ ageDays(doc.uploaded_at) }}d</td>
+              <td>
+                <button class="btn-open" *ngIf="isActionClickable(doc)" (click)="onAction(doc)">{{ actionLabel(doc) }}</button>
+                <span class="action-label-static" *ngIf="!isActionClickable(doc)">{{ actionLabel(doc) }}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="priority-card">
+      <div class="panel-header">
+        <span class="panel-title">Priority Finance Action</span>
+        <span class="panel-count" *ngIf="priorityFinanceItems.length">{{ priorityFinanceItems.length }}</span>
+      </div>
+      <p class="section-subtitle">Most urgent corrections right now</p>
+
+      <div class="priority-empty" *ngIf="!isLoading && priorityFinanceItems.length === 0">
+        <i class="ph-duotone ph-check-circle"></i> Nothing urgent right now.
+      </div>
+
+      <div class="priority-list">
+        <div class="priority-item" *ngFor="let doc of priorityFinanceItems" (click)="onAction(doc)">
+          <div class="priority-item-top">
+            <p class="priority-inv">{{ doc.invoice_number || doc.file_name }}</p>
+            <span class="priority-age">{{ ageDays(doc.uploaded_at) }}d ago</span>
+          </div>
+          <p class="priority-vendor">{{ doc.vendor_name || 'Unknown vendor' }}</p>
+          <div class="priority-item-bottom">
+            <span class="badge" [ngClass]="priorityBadgeClass(doc)">{{ priorityLabel(doc) }}</span>
+            <span class="priority-issue">{{ requiredActionLabel(doc) }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
 
 </div>
