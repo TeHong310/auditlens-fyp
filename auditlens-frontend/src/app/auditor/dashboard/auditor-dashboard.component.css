@@ -6,7 +6,7 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   font-family: 'Segoe UI', sans-serif;
   font-variant-numeric: tabular-nums;
   max-width: 100%;
@@ -128,22 +128,24 @@
 .charts-row-primary {
   display: grid;
   grid-template-columns: 1.8fr 1fr;
-  gap: 12px;
+  gap: 10px;
 }
 
 .charts-row-secondary {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  gap: 10px;
 }
 
 .chart-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
   min-width: 0;
 }
 
@@ -157,16 +159,16 @@
   font-size: 10px;
   color: var(--text-muted);
   margin-top: 1px;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .chart-body {
   position: relative;
-  height: 130px;
-  flex: 1;
+  height: 100px;
+  flex: 0 0 auto;
 }
 
-.chart-body-small { height: 100px; }
+.chart-body-small { height: 80px; }
 
 .donut-body { display: flex; align-items: center; justify-content: center; }
 

@@ -11399,3 +11399,91 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous frontend build - no data or schema changes
   were made this phase.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-24
+What was changed:
+  Phase 24: pure sizing/spacing refinement of Auditor Home's chart
+  section - no structural, functional, or data changes. HTML file was
+  not touched at all; only CSS values and Chart.js style options
+  (legend padding/font sizes, point sizes) in the 2 files below.
+
+  Root cause found and fixed: the previous phase's chart-height
+  reductions (.chart-body/.chart-body-small) had little visible
+  effect, because .chart-body used flex: 1 inside .chart-card's flex
+  column. CSS Grid's default align-items: stretch made every card in
+  a chart row match the row's tallest card, and flex: 1 then made the
+  canvas area GROW to consume all of that stretched extra space -
+  silently overriding the explicit height value. Fixed by changing
+  .chart-body to flex: 0 0 auto (fixed size, no grow/shrink) and
+  giving .chart-card explicit align-items: stretch; justify-content:
+  flex-start, so leftover space (if any) collects visibly at the
+  bottom of a card instead of invisibly inflating the chart canvas.
+
+  Frontend (auditlens-frontend/src/app/auditor/dashboard/):
+    - .chart-body (Audit Trend, Review Volume): 130px -> 100px, and
+      no longer flex-grows past that.
+    - .chart-body-small (the 4 secondary charts): 100px -> 80px, same
+      fix.
+    - .chart-card padding: 12px 14px -> 10px 12px; .chart-subtitle
+      margin-bottom: 6px -> 4px.
+    - .charts-row-primary / .charts-row-secondary gap: 12px -> 10px;
+      .page-wrapper's overall vertical gap: 12px -> 10px (tightens
+      spacing between chart rows and the sections around them).
+    - Chart.js legend padding/box size trimmed (8px/8px -> 4px/7px)
+      and label font sizes trimmed by ~0.5-1px across the line,
+      doughnut, bar, and radar configs so text still fits cleanly at
+      the smaller sizes - purely cosmetic style values inside the
+      SAME render methods, same chart types, same data.
+
+Why:
+  Requested compactness refinement: charts were still too large/heavy
+  even after the previous phase's layout restructuring, and the page
+  needed less vertical scrolling.
+
+Confirmed unchanged:
+  - No backend files touched (verified via git status/git diff --stat
+    before committing).
+  - No HTML file touched - the DOM structure, bindings, and every
+    (click) handler are byte-for-byte the same as before this phase.
+  - No TypeScript logic changed - only literal style option values
+    inside the existing renderXChart() methods (legend padding, font
+    size, point radius); no data fetching, computation, or navigation
+    method was touched.
+  - "Open Review Queue" navigation re-verified working after the
+    change.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - Live-verified in a real browser (Playwright, 1440x900 viewport,
+    throwaway auditor account, cleaned up afterward): zero horizontal
+    overflow (unchanged from before); vertical overflow reduced
+    further and the actual rendered content now ends with substantial
+    empty space remaining below it in the viewport - the dashboard
+    genuinely fits "above the fold" now, confirmed both by the
+    scrollHeight/clientHeight measurement and by the screenshot itself.
+    Zero console errors, zero page errors, confirming the new radar/
+    doughnut style options are valid Chart.js configuration.
+  - git diff --stat confirms only 2 files changed (CSS + TS style
+    values) - the HTML file and every backend file are untouched.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser check clean
+  (0 console/page errors, 0 horizontal overflow, page now fits within
+  one screen with room to spare). No backend changes this phase, so
+  the backend test suite was not re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the more compact chart section
+     takes effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data or schema changes
+  were made this phase.

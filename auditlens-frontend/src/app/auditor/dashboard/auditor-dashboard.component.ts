@@ -371,7 +371,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { display: true, position: 'top' as const, labels: { boxWidth: 8, font: { size: 10 }, padding: 8 } }
+          legend: { display: true, position: 'top' as const, labels: { boxWidth: 7, font: { size: 9.5 }, padding: 4 } }
         },
         scales: {
           y: { display: false, beginAtZero: true },
@@ -432,7 +432,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         cutout: '70%',
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { position: 'bottom' as const, labels: { boxWidth: 8, padding: 8, font: { size: 10 } } } }
+        plugins: { legend: { position: 'bottom' as const, labels: { boxWidth: 7, padding: 4, font: { size: 9.5 } } } }
       }
     });
   }
@@ -460,7 +460,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         cutout: '65%',
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { position: 'bottom' as const, labels: { boxWidth: 8, padding: 8, font: { size: 10 } } } }
+        plugins: { legend: { position: 'bottom' as const, labels: { boxWidth: 7, padding: 4, font: { size: 9.5 } } } }
       }
     });
   }
@@ -488,7 +488,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         plugins: { legend: { display: false } },
         scales: {
           x: { display: false, beginAtZero: true },
-          y: { ticks: { font: { size: 10.5 }, color: '#E6E7EE' }, grid: { display: false } }
+          y: { ticks: { font: { size: 9.5 }, color: '#E6E7EE' }, grid: { display: false } }
         }
       }
     });
@@ -510,7 +510,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
           borderColor: '#8B72FF',
           borderWidth: 2,
           pointBackgroundColor: '#8B72FF',
-          pointRadius: 3,
+          pointRadius: 2,
         }]
       },
       options: {
@@ -523,7 +523,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
             ticks: { display: false, backdropColor: 'transparent' },
             grid: { color: 'rgba(255,255,255,0.08)' },
             angleLines: { color: 'rgba(255,255,255,0.08)' },
-            pointLabels: { font: { size: 9.5 }, color: '#8B8FA3' },
+            pointLabels: { font: { size: 9 }, color: '#8B8FA3' },
           }
         }
       }
