@@ -1,6 +1,4 @@
 .page-wrapper {
-  --mx: 0;
-  --my: 0;
   --login-blue: #3B82F6;
   display: flex;
   min-height: 100vh;
@@ -8,306 +6,267 @@
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
-/* ══════════════════ LEFT PANEL ══════════════════ */
+.page-wrapper, .page-wrapper * {
+  box-sizing: border-box;
+}
+
+/* ══════════════════ LEFT PANEL (~55%) ══════════════════ */
 
 .left-panel {
-  flex: 1;
+  flex: 0 0 55%;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  padding: 48px 56px;
+  justify-content: center;
+  gap: 26px;
+  padding: 36px 56px;
   position: relative;
   overflow: hidden;
 }
 
-/* ── Ambient background — restrained: 2 slow blobs, 2 faint data
-   streams, ~10 small drifting particles. Everything here is
-   decorative, GPU-composited (transform/opacity only), and disabled
-   under prefers-reduced-motion below. ── */
+/* ── Static premium background: navy wash + faint grid + two soft
+   blue/purple blobs + a couple of thin technology lines. Nothing here
+   moves. ── */
 .ambient-bg {
   position: absolute;
   inset: 0;
   overflow: hidden;
   pointer-events: none;
   z-index: 0;
-  transform: translate(calc(var(--mx) * 6px), calc(var(--my) * 6px));
-  transition: transform 0.4s ease-out;
+}
+
+.bg-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--accent-soft) 10%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 10%, transparent) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 32% 38%, #000 0%, transparent 72%);
+  mask-image: radial-gradient(ellipse 70% 60% at 32% 38%, #000 0%, transparent 72%);
+  opacity: 0.6;
 }
 
 .glow-blob {
   position: absolute;
   border-radius: 50%;
-  filter: blur(60px);
-  opacity: 0.5;
-  animation: blobDrift 22s ease-in-out infinite;
+  filter: blur(70px);
 }
 
 .blob-a {
-  top: -100px;
+  top: -120px;
   right: -100px;
-  width: 340px;
-  height: 340px;
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  width: 360px;
+  height: 360px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .blob-b {
-  bottom: -80px;
-  left: -80px;
-  width: 260px;
-  height: 260px;
-  background: color-mix(in srgb, var(--login-blue) 16%, transparent);
-  animation-duration: 26s;
-  animation-delay: -8s;
+  bottom: -90px;
+  left: -90px;
+  width: 280px;
+  height: 280px;
+  background: color-mix(in srgb, var(--login-blue) 12%, transparent);
 }
 
-@keyframes blobDrift {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  50%      { transform: translate(18px, -14px) scale(1.06); }
-}
-
-.data-stream {
+.tech-line {
   position: absolute;
-  width: 160%;
+  width: 130%;
   height: 1px;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--login-blue) 35%, transparent), transparent);
-  opacity: 0.35;
-  animation: streamMove 12s linear infinite;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--login-blue) 22%, transparent), transparent);
 }
 
-.stream-a { top: 28%; left: -60%; transform: rotate(-18deg); }
-.stream-b { top: 68%; left: -60%; transform: rotate(-18deg); animation-duration: 16s; animation-delay: -6s; }
-
-@keyframes streamMove {
-  0%   { transform: rotate(-18deg) translateX(-8%); opacity: 0; }
-  10%  { opacity: 0.35; }
-  90%  { opacity: 0.35; }
-  100% { transform: rotate(-18deg) translateX(8%); opacity: 0; }
-}
-
-.particle {
-  position: absolute;
-  border-radius: 50%;
-  background: var(--accent-soft);
-  opacity: 0;
-  animation-name: particleDrift;
-  animation-timing-function: ease-in-out;
-  animation-iteration-count: infinite;
-}
-
-@keyframes particleDrift {
-  0%   { transform: translateY(0); opacity: 0; }
-  15%  { opacity: 0.4; }
-  85%  { opacity: 0.4; }
-  100% { transform: translateY(-36px); opacity: 0; }
-}
+.line-a { top: 22%; left: -50%; transform: rotate(-16deg); }
+.line-b { top: 74%; left: -50%; transform: rotate(-16deg); }
 
 .brand-header {
   position: relative;
   z-index: 1;
-  animation: fadeSlideIn 0.7s ease-out both;
 }
 
 .brand-title {
-  font-size: 32px;
-  font-weight: 700;
-  color: var(--accent);
+  font-size: 36px;
+  font-weight: 800;
+  color: var(--text-primary);
   margin: 0 0 6px 0;
   letter-spacing: -0.5px;
 }
 
+.lens-accent {
+  background: linear-gradient(135deg, var(--login-blue), var(--accent-soft));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
 .brand-subtitle {
-  font-size: 14px;
+  font-size: 14.5px;
   color: var(--text-secondary);
   margin: 0;
 }
 
-/* ── Logo presentation ── */
+/* ── Logo presentation — reduced slightly, static glow + tech ring,
+   transparent background preserved. ── */
 .logo-container {
   position: relative;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  flex: 1;
   z-index: 1;
-  animation: fadeSlideIn 0.7s ease-out 0.12s both;
+  height: 250px;
 }
 
 .logo-glow {
   position: absolute;
-  width: 380px;
-  height: 380px;
+  width: 300px;
+  height: 300px;
   border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 22%, transparent) 0%, transparent 70%);
-  animation: breathe 5s ease-in-out infinite;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 20%, transparent) 0%, transparent 68%);
   pointer-events: none;
 }
 
-@keyframes breathe {
-  0%, 100% { opacity: 0.55; transform: scale(1); }
-  50%      { opacity: 0.85; transform: scale(1.07); }
-}
-
-.logo-scan-ring {
+.logo-ring {
   position: absolute;
-  width: 310px;
-  height: 310px;
+  width: 240px;
+  height: 240px;
   border-radius: 50%;
-  border: 1px solid transparent;
-  border-top-color: color-mix(in srgb, var(--login-blue) 45%, transparent);
-  border-right-color: color-mix(in srgb, var(--accent-soft) 25%, transparent);
-  animation: scanRotate 14s linear infinite;
+  border: 1px solid color-mix(in srgb, var(--login-blue) 22%, transparent);
+  background: color-mix(in srgb, var(--bg-card) 25%, transparent);
   pointer-events: none;
-}
-
-@keyframes scanRotate {
-  to { transform: rotate(360deg); }
 }
 
 .logo-icon {
   position: relative;
   z-index: 1;
-  animation: logoFloat 6s ease-in-out infinite;
-  overflow: hidden;
-  border-radius: 24px;
-}
-
-@keyframes logoFloat {
-  0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-9px); }
 }
 
 .real-logo {
   display: block;
-  width: 280px;
-  height: 280px;
+  width: 190px;
+  height: 190px;
   object-fit: contain;
 }
 
-/* Slim diagonal light sweep passing across the logo, suggesting an
-   AI scan pass — brief, low-opacity, and spaced out by the long
-   animation duration rather than sweeping continuously. */
-.logo-sweep {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(115deg,
-    transparent 40%,
-    color-mix(in srgb, var(--text-primary) 22%, transparent) 48%,
-    color-mix(in srgb, var(--login-blue) 30%, transparent) 52%,
-    transparent 60%);
-  transform: translateX(-120%);
-  animation: sweep 6s ease-in-out infinite;
-}
-
-@keyframes sweep {
-  0%, 55%   { transform: translateX(-120%); }
-  75%       { transform: translateX(120%); }
-  100%      { transform: translateX(120%); }
-}
-
-.features-list {
+/* ── Feature cards ── */
+.features-grid {
   position: relative;
   z-index: 1;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  animation: fadeSlideIn 0.7s ease-out 0.24s both;
+  gap: 10px;
 }
 
-.feature-item {
+.feature-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
-  font-size: 13.5px;
-  color: var(--text-secondary);
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--bg-card) 55%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
 }
 
 .feature-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
   background: var(--accent-bg);
   color: var(--accent-soft);
   flex-shrink: 0;
-  font-size: 14px;
+  font-size: 16px;
 }
 
-@keyframes fadeSlideIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: translateY(0); }
+.feature-text { min-width: 0; }
+
+.feature-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 2px 0;
 }
 
-/* ══════════════════ RIGHT PANEL ══════════════════ */
+.feature-desc {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* ══════════════════ RIGHT PANEL (~45%) ══════════════════ */
 
 .right-panel {
+  flex: 0 0 45%;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 48px 56px;
-  flex: 1;
+  padding: 36px 48px;
   position: relative;
   z-index: 1;
 }
 
 .login-card {
   position: relative;
-  background: color-mix(in srgb, var(--bg-card) 78%, transparent);
+  background: color-mix(in srgb, var(--bg-card) 80%, transparent);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   border: 1px solid var(--border);
-  border-radius: 22px;
-  padding: 44px 40px;
+  border-radius: 26px;
+  padding: 36px 36px;
   width: 100%;
   max-width: 400px;
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.35), 0 2px 20px color-mix(in srgb, var(--accent) 10%, transparent);
-  animation: cardEnter 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.35), 0 2px 20px color-mix(in srgb, var(--accent) 9%, transparent);
 }
 
-@keyframes cardEnter {
-  from { opacity: 0; transform: translateY(20px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-/* Slow, low-opacity gradient border glow — a thin ring only (masked to
-   exclude the card's own fill), not a bright rotating rainbow. */
+/* Thin static blue-purple gradient border (masked to a ring only) —
+   fixed, not animated. */
 .login-card::before {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: inherit;
   padding: 1px;
-  background: linear-gradient(120deg, var(--accent), var(--login-blue), var(--accent-soft), var(--accent));
-  background-size: 220% 220%;
+  background: linear-gradient(135deg, var(--login-blue), var(--accent-soft), var(--accent));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  opacity: 0.45;
-  animation: borderGlow 10s ease infinite;
+  opacity: 0.5;
   pointer-events: none;
 }
 
-@keyframes borderGlow {
-  0%, 100% { background-position: 0% 50%; }
-  50%      { background-position: 100% 50%; }
+.workspace-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: fit-content;
+  margin: 0 auto 16px;
+  padding: 5px 14px;
+  border-radius: 20px;
+  background: var(--accent-bg);
+  border: 1px solid color-mix(in srgb, var(--accent-soft) 35%, transparent);
+  color: var(--accent-soft);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .card-header {
-  margin-bottom: 28px;
+  margin-bottom: 22px;
   text-align: center;
 }
 
 .card-title {
-  font-size: 24px;
+  font-size: 23px;
   font-weight: 700;
   color: var(--text-primary);
-  margin: 0 0 6px 0;
+  margin: 0 0 5px 0;
 }
 
 .card-subtitle {
-  font-size: 13.5px;
+  font-size: 13px;
   color: var(--text-secondary);
   margin: 0;
 }
@@ -322,10 +281,10 @@
   padding: 10px 14px;
   font-size: 13px;
   color: var(--danger);
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
 
-.form-group { margin-bottom: 20px; }
+.form-group { margin-bottom: 18px; }
 
 .form-label {
   display: block;
@@ -373,7 +332,7 @@
   color: var(--text-primary);
   background: color-mix(in srgb, var(--bg-hover) 85%, transparent);
   outline: none;
-  transition: border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
   box-sizing: border-box;
 }
 
@@ -381,11 +340,10 @@
 
 .form-input:focus {
   border-color: var(--accent-soft);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent), 0 0 16px color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
   background: var(--bg-card);
 }
 
-.form-input:focus + .eye-btn i,
 .input-wrapper:focus-within .input-icon {
   color: var(--accent-soft) !important;
 }
@@ -399,10 +357,7 @@
   padding: 4px;
   display: flex;
   align-items: center;
-  transition: transform 0.15s ease;
 }
-
-.eye-btn:hover { transform: scale(1.08); }
 
 /* ── Buttons ── */
 .btn-signin {
@@ -412,22 +367,23 @@
   color: var(--text-primary);
   border: none;
   border-radius: 10px;
-  font-size: 15px;
+  font-size: 14.5px;
   font-weight: 600;
   cursor: pointer;
   margin-bottom: 12px;
-  transition: box-shadow 0.25s ease, transform 0.15s ease, filter 0.25s ease;
+  transition: box-shadow 0.2s ease, transform 0.15s ease, filter 0.2s ease;
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   min-height: 46px;
-  box-shadow: 0 4px 18px color-mix(in srgb, var(--accent) 28%, transparent);
+  box-shadow: 0 4px 18px color-mix(in srgb, var(--accent) 26%, transparent);
 }
 
 .btn-signin:hover:not(:disabled) {
-  filter: brightness(1.08);
-  transform: translateY(-2px);
-  box-shadow: 0 8px 26px color-mix(in srgb, var(--accent) 38%, transparent);
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 22px color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
 .btn-signin:active:not(:disabled) {
@@ -442,17 +398,17 @@
 .btn-register {
   width: 100%;
   padding: 12px;
-  background: color-mix(in srgb, var(--bg-card) 60%, transparent);
+  background: transparent;
   color: var(--accent-soft);
   border: 1.5px solid transparent;
   background-clip: padding-box;
   border-radius: 10px;
-  font-size: 15px;
+  font-size: 14.5px;
   font-weight: 600;
   cursor: pointer;
   margin-bottom: 20px;
   position: relative;
-  transition: background 0.2s ease, box-shadow 0.2s ease;
+  transition: background 0.2s ease;
 }
 
 .btn-register::before {
@@ -470,18 +426,25 @@
 
 .btn-register:hover {
   background: var(--accent-bg);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
-.secure-note {
+/* ── Security section ── */
+.security-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.security-item {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
+  gap: 7px;
   font-size: 12px;
   color: var(--text-secondary);
-  margin-bottom: 14px;
 }
+
+.security-item i { color: var(--success); font-size: 14px; flex-shrink: 0; }
 
 .signin-link {
   text-align: center;
@@ -509,40 +472,18 @@
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ══════════════════ ACCESSIBILITY ══════════════════ */
-@media (prefers-reduced-motion: reduce) {
-  .ambient-bg,
-  .glow-blob,
-  .data-stream,
-  .particle,
-  .logo-scan-ring,
-  .logo-sweep,
-  .logo-icon,
-  .logo-glow,
-  .brand-header,
-  .logo-container,
-  .features-list,
-  .login-card,
-  .login-card::before {
-    animation: none !important;
-    transition: none !important;
-  }
-  .ambient-bg { transform: none !important; }
-  .particle { opacity: 0.3; }
-  /* The sweep's resting position relies on the animation to hold it
-     off-canvas (transform: translateX(-120%)) — with the animation
-     disabled above, hide it outright instead of trusting that static
-     fallback, so no stray bright band is left sitting on the logo. */
-  .logo-sweep { display: none !important; }
+/* ══════════════════ RESPONSIVE ══════════════════ */
+@media (max-width: 900px) {
+  .left-panel, .right-panel { flex-basis: auto; }
 }
 
-/* ══════════════════ RESPONSIVE ══════════════════ */
 @media (max-width: 768px) {
   .page-wrapper { flex-direction: column; }
-  .left-panel { padding: 32px 24px; min-height: auto; }
+  .left-panel { padding: 32px 24px; gap: 20px; }
   .right-panel { padding: 24px 20px 48px; }
   .login-card { padding: 32px 24px; }
-  .real-logo { width: 150px; height: 150px; }
-  .logo-glow { width: 220px; height: 220px; }
-  .logo-scan-ring { width: 180px; height: 180px; }
+  .logo-container { height: 170px; }
+  .real-logo { width: 130px; height: 130px; }
+  .logo-glow { width: 210px; height: 210px; }
+  .logo-ring { width: 170px; height: 170px; }
 }

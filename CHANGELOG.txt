@@ -12204,3 +12204,132 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous frontend build - no data, schema, or auth
   logic changes were made this phase.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-24
+What was changed:
+  Phase 31: replaced the previous phase's animated login redesign with
+  a fully static "enterprise AI audit platform entrance" per explicit
+  follow-up direction (no continuous animation, no particles, no
+  moving effects — static premium visuals only). UI only — no auth
+  logic/API/routing/register-flow changes.
+
+  Frontend (auditlens-frontend/src/app/login/):
+    - login.component.ts: reverted to the same minimal shape as the
+      original (pre-animation-phase) component — removed the
+      `particles` array, `generateParticles()`, and the Renderer2-
+      based mousemove/parallax handlers added in the previous phase,
+      since the redesigned page no longer has anything for them to
+      drive. email/password/showPassword/isLoading/errorMessage,
+      onLogin(), togglePassword(), and goToRegister() are byte-for-
+      byte unchanged from before.
+    - login.component.html: two-column layout rebalanced to ~55%/45%
+      (was an even split). Left panel: logo reduced and given a
+      static soft blue/purple glow + a static circular "tech ring"
+      behind it (no float/pulse/scan-sweep this time); brand title
+      split into "Audit" + a gradient-accented "Lens"; the old 3 plain
+      bullets replaced with 3 glass feature cards (icon + title +
+      description) using the requested copy - AI OCR & Document
+      Analysis, Three-way Matching, Risk & Exception Detection. Right
+      panel: added a "Secure Audit Workspace" badge above the card
+      header, changed the Sign In button label to "Sign In to
+      Workspace →", and replaced the single "Secure access for..."
+      sentence with a 3-line security list (Role-based access control
+      / Enterprise document security / AI-assisted verification).
+      Every existing form element - email input, password input with
+      its show/hide toggle, Forgot password link, Sign In button,
+      Register button, "Create an account" link - kept its exact
+      ngModel binding and click handler.
+    - login.component.css: full rewrite, this time with ZERO
+      decorative @keyframes - no particle drift, no blob drift, no
+      logo float/breathe/sweep/rotate, no card entrance animation, no
+      animated border glow. The only animation left anywhere on the
+      page is the pre-existing loading spinner (a real async-state
+      indicator while isLoading is true, not decorative) and ordinary
+      one-shot :hover/:focus transitions (button lift, input focus
+      ring) - both were explicitly still allowed ("hover transition
+      only" for the Register button). Background is a static navy
+      wash + a very low-opacity CSS grid pattern + two static soft
+      blue/purple blurred blobs + two static thin diagonal lines - all
+      fixed in place, confirmed pixel-identical across a 4-second
+      screenshot diff (see Test results). The login card keeps the
+      glass/blur/gradient-border/rounded-corner treatment from the
+      previous phase, just with the border now a fixed gradient
+      instead of an animated one.
+
+  Bug found and fixed during verification: `.left-panel`/`.right-panel`
+  use `flex: 0 0 55%`/`flex: 0 0 45%` with padding, and this component
+  had no box-sizing reset (unlike most other pages in this app, which
+  start their CSS with `* { box-sizing: border-box; }`) - under the
+  default content-box, each panel's padding was added ON TOP OF its
+  55%/45% flex-basis, pushing total width ~200px past the viewport and
+  causing horizontal scroll. Fixed by adding `box-sizing: border-box`
+  scoped to `.page-wrapper` and its descendants.
+
+Why:
+  Follow-up direction after the previous phase: keep the same overall
+  premium enterprise direction and color identity, but remove all
+  continuous motion (particles, floating/pulsing/sweeping logo,
+  animated borders) in favor of a calmer, more explicitly "financial
+  audit software" static presentation, plus new specific content
+  (feature cards, workspace badge, security list, button copy) and a
+  55/45 layout split.
+
+Confirmed unchanged:
+  - No backend files touched (git diff --stat before committing shows
+    only the 3 frontend files above).
+  - No changes to authentication logic, the login/register API
+    contracts, password handling, roles, or routing - onLogin() still
+    posts the same {email, password} to the same POST /auth/login,
+    stores the same access_token/user in localStorage, and routes by
+    role exactly as before.
+  - Email field, password field with show/hide, Forgot password link,
+    Sign In button, Register button, and "Create an account" link are
+    all still present and functionally identical.
+  - Logo asset (public/logo.png) itself not modified/replaced.
+  - No global styles.css token changes.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - Live-verified in a real browser (Playwright, throwaway account,
+    cleaned up afterward):
+    - Full end-to-end login flow tested - filled email/password,
+      clicked "Sign In to Workspace", confirmed a real POST /auth/
+      login round-trip and correct role-based navigation to /auditor/
+      home.
+    - Zero console errors, zero page errors.
+    - Took two full-page screenshots 4 seconds apart and diffed them
+      pixel-by-pixel (Pillow ImageChops) - bounding box of differences
+      was None, i.e. completely pixel-identical, positively confirming
+      no continuous animation/motion is occurring anywhere on the page.
+    - Found and fixed a real horizontal-overflow bug (200px, from a
+      missing box-sizing reset interacting with the new 55%/45%
+      flex-basis layout - see above); re-verified 0px horizontal
+      overflow afterward at both a 900px- and 800px-tall viewport, with
+      the full layout (badge, all 3 feature cards, security list)
+      visible without scrolling at both heights, satisfying the "fit
+      within one screen" requirement.
+    - Verified input focus glow and button hover states via
+      screenshot.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser checks clean
+  (0 console/page errors, login flow works end-to-end, page confirmed
+  pixel-static over time, 0 horizontal overflow, fits one screen at
+  800-900px viewport heights). No backend changes this phase, so the
+  backend test suite was not re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the static redesigned login page
+     takes effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data, schema, or auth
+  logic changes were made this phase.

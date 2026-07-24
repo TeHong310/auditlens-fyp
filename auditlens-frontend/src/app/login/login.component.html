@@ -1,59 +1,63 @@
-<div class="page-wrapper" #pageWrapper (mousemove)="onMouseMove($event)" (mouseleave)="onMouseLeave()">
+<div class="page-wrapper">
 
   <div class="left-panel">
 
-    <!-- Ambient background — restrained: 2 slow blobs, 2 faint data
-         streams, a handful of small drifting particles. Decorative
-         only, hidden from assistive tech. -->
+    <!-- Static decorative background — grid pattern + soft light
+         wash + minimal technology lines. No motion, aria-hidden. -->
     <div class="ambient-bg" aria-hidden="true">
+      <div class="bg-grid"></div>
       <div class="glow-blob blob-a"></div>
       <div class="glow-blob blob-b"></div>
-      <div class="data-stream stream-a"></div>
-      <div class="data-stream stream-b"></div>
-      <span
-        class="particle"
-        *ngFor="let p of particles"
-        [style.left.%]="p.left"
-        [style.top.%]="p.top"
-        [style.width.px]="p.size"
-        [style.height.px]="p.size"
-        [style.animation-duration.s]="p.duration"
-        [style.animation-delay.s]="p.delay"
-      ></span>
+      <div class="tech-line line-a"></div>
+      <div class="tech-line line-b"></div>
     </div>
 
     <div class="brand-header">
-      <h1 class="brand-title">AuditLens</h1>
+      <h1 class="brand-title">Audit<span class="lens-accent">Lens</span></h1>
       <p class="brand-subtitle">Intelligent Audit Verification</p>
     </div>
 
     <div class="logo-container">
-      <div class="logo-glow"></div>
-      <div class="logo-scan-ring" aria-hidden="true"></div>
+      <div class="logo-ring" aria-hidden="true"></div>
+      <div class="logo-glow" aria-hidden="true"></div>
       <div class="logo-icon">
         <img src="logo.png" alt="AuditLens Logo" class="real-logo" />
-        <span class="logo-sweep" aria-hidden="true"></span>
       </div>
     </div>
 
-    <div class="features-list">
-      <div class="feature-item">
+    <div class="features-grid">
+      <div class="feature-card">
         <span class="feature-icon"><i class="ph-duotone ph-magnifying-glass"></i></span>
-        <span>AI-Powered OCR &amp; Document Analysis</span>
+        <div class="feature-text">
+          <p class="feature-title">AI OCR &amp; Document Analysis</p>
+          <p class="feature-desc">Extract, understand, and verify documents with intelligent AI.</p>
+        </div>
       </div>
-      <div class="feature-item">
-        <span class="feature-icon"><i class="ph-duotone ph-chart-line-up"></i></span>
-        <span>Real-Time Financial Verification</span>
+      <div class="feature-card">
+        <span class="feature-icon"><i class="ph-duotone ph-arrows-left-right"></i></span>
+        <div class="feature-text">
+          <p class="feature-title">Three-way Matching</p>
+          <p class="feature-desc">Automatically match invoices, purchase orders, and goods receipts.</p>
+        </div>
       </div>
-      <div class="feature-item">
-        <span class="feature-icon"><i class="ph-duotone ph-shield-check"></i></span>
-        <span>Enterprise-Grade Security</span>
+      <div class="feature-card">
+        <span class="feature-icon"><i class="ph-duotone ph-shield-warning"></i></span>
+        <div class="feature-text">
+          <p class="feature-title">Risk &amp; Exception Detection</p>
+          <p class="feature-desc">Identify anomalies and potential audit risks.</p>
+        </div>
       </div>
     </div>
   </div>
 
   <div class="right-panel">
     <div class="login-card">
+
+      <div class="workspace-badge">
+        <i class="ph-duotone ph-shield-check"></i>
+        <span>Secure Audit Workspace</span>
+      </div>
+
       <div class="card-header">
         <h2 class="card-title">Welcome back</h2>
         <p class="card-subtitle">Sign in to continue your audit workflow</p>
@@ -99,7 +103,7 @@
       </div>
 
       <button class="btn-signin" (click)="onLogin()" [disabled]="isLoading">
-        <span *ngIf="!isLoading">Sign In</span>
+        <span *ngIf="!isLoading">Sign In to Workspace <i class="ph-duotone ph-arrow-right"></i></span>
         <span *ngIf="isLoading" class="loading-spinner"></span>
       </button>
 
@@ -107,9 +111,10 @@
         Register
       </button>
 
-      <div class="secure-note">
-        <i class="ph-duotone ph-shield-check" style="font-size:14px;"></i>
-        <span>Secure access for Admin, Auditor, and Finance users</span>
+      <div class="security-list">
+        <div class="security-item"><i class="ph-duotone ph-check-circle"></i> Role-based access control</div>
+        <div class="security-item"><i class="ph-duotone ph-check-circle"></i> Enterprise document security</div>
+        <div class="security-item"><i class="ph-duotone ph-check-circle"></i> AI-assisted verification</div>
       </div>
 
       <p class="signin-link">
