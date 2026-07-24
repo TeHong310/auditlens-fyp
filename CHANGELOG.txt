@@ -11181,3 +11181,117 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous backend/frontend build - no data or schema
   changes were made this phase.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-24
+What was changed:
+  Phase 22: redesigned Auditor Home into an "Audit Command Centre"
+  matching the visual/analytical direction of the Admin Dashboard
+  redesign, using a reference UI image as a style/layout target
+  (values only, never data). UI only - no backend files touched.
+
+  Inspected before writing anything: the existing page made exactly
+  ONE API call (GET /auditor/transactions) for everything - 4 KPI
+  cards, a basic risk donut, an arbitrary "first 3 rows" priority
+  list, and the queue table. Found 4 additional existing, unused-by-
+  this-page, already auditor-authorized endpoints to reuse instead of
+  inventing new backend work: GET /auditor/report/summary (real daily
+  30-day timeline), GET /auditor/exceptions (per-document exception
+  types), GET /authenticity (per-document authenticity status/risk),
+  GET /anomalies/stats (severity breakdown). A 6th candidate, GET
+  /reviews/auditor-dashboard, was deliberately dropped after review -
+  its high_priority_cases overlapped with data already available from
+  /auditor/transactions, so Priority Review Queue is derived from the
+  already-loaded transactions array instead of a duplicate request.
+
+  Frontend (auditlens-frontend/src/app/auditor/dashboard/):
+    - loadQueue() (the original, only-ever-existing call) is
+      byte-for-byte the same fetch/gate/stat-computation as before -
+      only new derived computations (status breakdown, priority items)
+      were added after it, from the same response, with no new request.
+    - 4 new secondary loads (report/summary, exceptions, authenticity,
+      anomalies/stats) fire in parallel with the primary call in
+      ngOnInit, each exactly once, none chained behind another, none
+      blocking the primary KPI/table render. Each secondary chart
+      renders independently the moment its own call resolves (its own
+      "Loading..." state), guarded by a viewReady flag set in
+      ngAfterViewInit + a per-section loaded flag, so it draws whether
+      the view or the data arrives first - matches the existing
+      Finance Home / Admin Dashboard chart-render pattern.
+    - No polling, no interval, no auto-refresh, no existing manual
+      refresh control (none existed to preserve).
+    - New sections, all built from data described above: Audit Trend
+      (line) + Review Volume (bar) from the 30-day timeline; Status
+      Breakdown (donut, derived from transactions - PASS/REVIEW/
+      Missing Document, mutually exclusive); Authenticity Outcomes
+      (donut - Pass/Warning/Fail, Fail = risk_level HIGH); Exception
+      Categories (bar, grouped by real exception_type); Risk
+      Distribution (bar, anomaly severity - replaces a radar chart,
+      since no meaningful independent multi-axis fields exist for one).
+    - KPI cards keep the exact same 4 metrics/numbers; added a derived
+      Safe/Action/Risk status badge to each (Full Match=Safe, Need
+      Review=Action, Missing Documents=Risk if >0) - no fabricated
+      trend percentages, since no historical snapshot of these
+      specific counts exists to compare against honestly.
+    - Transaction Review Queue table restyled with client-side search
+      + status filter (over the already-loaded array, no new request);
+      "Amount"/"Invoice Date" columns from the reference image were
+      dropped (not present in this endpoint, and fetching them would
+      mean one request per row); "Risk Level" and "Issues" are
+      presentation-derived from matching_status/po_count/gr_count
+      (already-loaded fields), not new data.
+    - Priority Review Queue switched from an arbitrary "first 3 rows"
+      to a real severity-sorted filter (missing docs + review status)
+      over the same transactions array.
+    - Export button kept exactly as before (present, unwired - it had
+      no click handler before this phase either).
+    - Visual language matches the Admin Dashboard's flat/hairline
+      "instrument panel" style (existing dark-theme tokens only, no
+      new colors, compact spacing, minimal hover animation).
+
+Why:
+  Requested redesign of Auditor Home into a distinctive enterprise
+  audit analytics dashboard, explicitly required to (1) use only
+  already-available data - no fabricated values, no backend changes -
+  and (2) optimize loading so secondary analytics never slow down or
+  duplicate the page's existing primary content, with no polling of
+  any kind.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - Live-verified in a real browser (Playwright, logged in as a
+    throwaway auditor account, cleaned up afterward): primary content
+    (KPIs + table) rendered 50ms after navigation; exactly 6 backend
+    calls for the whole page load (1 login + the 5 dashboard calls
+    above), each fired exactly once; zero additional calls during a
+    4-second idle wait (confirms no polling/auto-refresh); zero
+    console errors, zero page errors. Screenshot confirms every
+    section renders its correct empty state against the current dev
+    DB (which has no real transactions/exceptions/anomalies/
+    authenticity data right now, same as observed throughout this
+    session) - no fabricated placeholder values shown anywhere.
+  - git diff --stat / git status confirm only the 3 Auditor Home
+    component files were touched - zero backend files, zero other
+    frontend files (including the Admin Dashboard, User/Document
+    Management, Finance workflow, and every matching/authenticity/
+    anomaly/OCR module).
+
+Build result:
+  Frontend: clean production build, exit 0; live browser check clean
+  (0 console/page errors, 0 duplicate/polling requests). No backend
+  changes this phase, so the backend test suite was not re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the redesigned Auditor Home takes
+     effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data or schema changes
+  were made this phase.
