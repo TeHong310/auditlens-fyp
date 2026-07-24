@@ -11073,3 +11073,111 @@ Rollback instructions:
   changes were made this phase (only rows explicitly deleted through
   the new admin action itself, which is the intended, disclosed
   behavior of the feature).
+
+----------------------------------------------------------------------
+
+Date: 2026-07-24
+What was changed:
+  Phase 20: visual/UX upgrade of the existing Admin Dashboard. No
+  business logic changed anywhere - purely presentation plus one small,
+  read-only aggregate field.
+
+  Inspected before writing anything (per the task's own instruction):
+  the dashboard already read GET /admin/statistics (users/documents/
+  matching/exceptions counts, all already correct) and rendered 4 plain
+  stat cards plus a placeholder note - no charts, no activity feed.
+  GET /admin/statistics had every number PART 2's first two charts
+  needed already (total_finance/total_auditors/total_admins for User
+  Role Distribution; under_review/approved/returned/resubmitted for
+  Document Status Breakdown) - only Monthly Upload Trend had no backend
+  data to read.
+
+  Backend (auditlens-backend/routes/admin.py):
+    - GET /admin/statistics - added ONE small, read-only aggregate:
+      monthly_uploads (documents grouped by upload month, via a single
+      GROUP BY TO_CHAR(uploaded_at, 'YYYY-MM') query - nothing else in
+      this app currently computes this, so it's not a duplicated
+      calculation). Every existing field in the response (users/
+      documents/matching/exceptions) is completely unchanged - this is
+      a pure addition to the JSON, not a modification of any existing
+      calculation. No other function in this file was touched.
+
+  Frontend (auditlens-frontend/src/app/admin/dashboard/):
+    - Removed the "This is an initial Admin dashboard..." placeholder
+      note entirely.
+    - Summary cards (Total Users, Total Documents, Exceptions, Active
+      Users - all 4 kept, same underlying numbers) redesigned with a
+      colored icon, a --card-color accent border, and tighter
+      hierarchy - the exact stat-card pattern already established on
+      Finance Home (auditlens-frontend/src/app/finance/home/), reused
+      for visual consistency rather than inventing a new card style.
+    - Added 3 charts using Chart.js (already a project dependency,
+      already used identically on Finance Home and the Auditor Report
+      page - no new library added): User Role Distribution (doughnut:
+      Finance Executive/Auditor/Admin, from stats.users), Document
+      Status Breakdown (doughnut: Under Review/Approved/Returned/
+      Resubmitted, from stats.documents), Monthly Upload Trend (bar,
+      from the new stats.monthly_uploads field). Every number comes
+      directly from the API response - nothing is invented or
+      recalculated client-side beyond simple chart formatting.
+    - Added a Recent Activity section: Recent Users (latest 5, from the
+      EXISTING, unmodified GET /admin/users, sorted by created_at and
+      sliced client-side) and Recent Documents (latest 5, from the
+      EXISTING, unmodified GET /admin/documents, sorted by uploaded_at
+      and sliced client-side) - no new backend endpoint, no new
+      activity-log table. audit_logs already exists and is exposed via
+      GET /admin/audit-logs, but the task's own recommended layout
+      (Part 4: "Recent Users" / "Recent Documents" as two bottom
+      panels) points at this simpler, already-fetchable-elsewhere data
+      instead, so that was followed literally rather than building a
+      third, differently-shaped activity view.
+    - Layout follows the task's own Part 4 recommendation: 4 summary
+      cards on top, 3 charts in the middle, Recent Users / Recent
+      Documents at the bottom. Responsive breakpoints added (charts
+      collapse 3 -> 2 -> 1 columns, recent panels stack) matching the
+      breakpoint conventions already used elsewhere in the app.
+
+Why:
+  Requested visualization upgrade for the Admin Dashboard - clearer
+  cards, real charts instead of raw numbers only, and a lightweight
+  activity view - using only data the backend already computes (plus
+  one small aggregate explicitly permitted by the task for the one
+  chart that needed it), with zero change to any workflow, matching
+  engine, or the existing User/Document Management actions.
+
+Test results:
+  - python tests/extraction/run_all.py - all 25 suites pass (run
+    because the statistics response was extended, per the task's own
+    instruction; every existing field in that response is untouched).
+  - Verified the new monthly_uploads aggregate directly: inserted 3
+    throwaway documents spanning 2 months, confirmed the query grouped
+    them correctly (2026-06: 1, 2026-07: 2), then removed them - the
+    dev DB is back to its prior state.
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - git diff --stat confirms only the 4 admin-dashboard component files
+    plus routes/admin.py were touched, and that routes/admin.py's diff
+    is EXACTLY the disclosed monthly_uploads addition - every existing
+    admin user/document management function, and every other module
+    (OCR, Claude/Gemini, transaction packages, Enterprise Matching V2,
+    relationship_builder.py, authenticity engine, anomaly detection,
+    Finance/Auditor workflow) is completely untouched.
+
+Build result:
+  Backend: all 25 test suites pass. Frontend: clean production build,
+  exit 0.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - the new monthly_uploads field on GET
+     /admin/statistics takes effect immediately. No schema/migration
+     changes.
+  2. Redeploy the Render FRONTEND - the redesigned dashboard, charts,
+     and Recent Activity panels take effect immediately.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend/frontend build - no data or schema
+  changes were made this phase.

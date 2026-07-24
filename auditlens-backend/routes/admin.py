@@ -786,13 +786,26 @@ def get_statistics():
         )
         exception_stats = cursor.fetchone()
 
+        # Monthly upload trend (Admin Dashboard chart) — a small,
+        # read-only aggregate added for this chart only; no workflow
+        # logic touched, no calculation duplicated elsewhere (nothing
+        # else in this app currently groups documents by month).
+        cursor.execute(
+            '''SELECT TO_CHAR(uploaded_at, 'YYYY-MM') AS month, COUNT(*) AS count
+               FROM documents
+               GROUP BY month
+               ORDER BY month'''
+        )
+        monthly_uploads = [dict(r) for r in cursor.fetchall()]
+
         conn.close()
 
         return jsonify({
-            'users':      dict(user_stats),
-            'documents':  dict(doc_stats),
-            'matching':   dict(match_stats),
-            'exceptions': dict(exception_stats)
+            'users':           dict(user_stats),
+            'documents':       dict(doc_stats),
+            'matching':        dict(match_stats),
+            'exceptions':      dict(exception_stats),
+            'monthly_uploads': monthly_uploads
         }), 200
 
     except Exception as e:
