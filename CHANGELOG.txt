@@ -11591,3 +11591,102 @@ Rollback instructions:
   Redeploy the previous frontend build - no data or schema changes
   were made this phase (all fixture rows used for visual verification
   were inserted and deleted entirely within this phase's own testing).
+
+----------------------------------------------------------------------
+
+Date: 2026-07-24
+What was changed:
+  Phase 26: replaced Auditor Home's "Status Breakdown" donut chart with
+  3 mini radial progress rings (Pass / Review / Missing Document).
+  Scoped to this one card only - the other 5 charts (Audit Trend,
+  Review Volume, Authenticity Outcomes, Exception Categories, Risk
+  Distribution) were not touched.
+
+  Frontend (auditlens-frontend/src/app/auditor/dashboard/):
+    - auditor-dashboard.component.ts: removed the Status Breakdown
+      Chart.js machinery entirely (its @ViewChild canvas ref, its
+      chart-instance field, its renderStatusChart() method, and both
+      of that method's call sites in ngAfterViewInit()/loadQueue()) -
+      replaced with a small ringGradient(value, color) helper that
+      returns a CSS conic-gradient string from the SAME existing
+      statusBreakdown/totalRecords fields already computed by
+      computeStatusBreakdown() (unchanged). No new data or API calls.
+    - auditor-dashboard.component.html: Status Breakdown's single
+      <canvas> replaced with 3 small radial-item blocks (Pass/Review/
+      Missing Doc), each a conic-gradient ring showing its percentage
+      in the center, with the label and count as a caption below -
+      bound directly to statusBreakdown.{pass,review,missingDoc} and
+      the existing pct() helper, so it updates reactively like any
+      other template expression.
+    - auditor-dashboard.component.css: added .radial-row/.radial-item/
+      .radial-ring/.radial-ring-hole/.radial-pct/.radial-caption/
+      .radial-label/.radial-count rules, sized to fit inside the
+      existing .chart-card / .chart-body-small (80px) footprint
+      unchanged - card size and the 4-column secondary chart row
+      layout are untouched.
+
+  Why a pure-CSS approach instead of 3 more Chart.js instances: these
+  are simple 2-segment progress indicators with no tooltip/legend
+  interactivity, so a native conic-gradient ring is simpler and lower
+  risk than managing 3 additional canvas/Chart.js create-destroy
+  lifecycles for the same visual result.
+
+  Colors: Pass = green (#34D399), Review = amber (#FBBF24), Missing
+  Document = red (#F43F5E), per the requested color direction - using
+  the same hex values as the CHART_PALETTE constant already
+  established for this page's other charts.
+
+Why:
+  Requested refinement of the Status Breakdown card only: replace its
+  donut chart with 3 mini radial progress rings, one per status,
+  each showing label/count/percentage, more visually distinctive
+  while staying in the same dark enterprise theme and card footprint.
+
+Confirmed unchanged:
+  - No backend files touched (git diff --stat before committing shows
+    only the 3 frontend files below).
+  - No other chart's render method, data fetching, computation, or
+    navigation logic changed - computeStatusBreakdown(), pct(), and
+    every other renderXChart() method are byte-for-byte the same.
+  - Card size and the .charts-row-secondary 4-column layout unchanged.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - Live-verified in a real browser (Playwright, 1440x900 viewport,
+    throwaway auditor account, cleaned up afterward):
+    - Zero console errors, zero page errors.
+    - The other 5 charts still render as 5 canvases, confirming they
+      were unaffected.
+    - Zero horizontal overflow.
+    - Injected realistic values (pass=12, review=5, missingDoc=3,
+      total=20) directly into the live component via Angular's
+      dev-mode debug API to verify the conic-gradient math precisely:
+      rendered rings showed exactly 60.0%/25.0%/15.0% with the correct
+      colors, labels, and counts - confirmed visually via screenshot.
+    - Also briefly verified against real inserted-then-fully-deleted
+      fixture transaction packages/documents to see the card render
+      inside the full dashboard layout alongside the other charts
+      (screenshot confirmed no layout/overflow regressions); all
+      fixture packages/documents and the throwaway test user were
+      deleted afterward and verified gone from the dev DB.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser check clean
+  (0 console/page errors, 0 horizontal overflow, correct ring math).
+  No backend changes this phase, so the backend test suite was not
+  re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the new Status Breakdown radial
+     rings take effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data or schema changes
+  were made this phase (all fixture rows used for visual verification
+  were inserted and deleted entirely within this phase's own testing).

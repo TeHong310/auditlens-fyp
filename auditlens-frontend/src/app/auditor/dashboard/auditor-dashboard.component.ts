@@ -70,7 +70,6 @@ const CHART_PALETTE = {
 export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   @ViewChild('trendChart') trendChartRef!: ElementRef;
   @ViewChild('volumeChart') volumeChartRef!: ElementRef;
-  @ViewChild('statusChart') statusChartRef!: ElementRef;
   @ViewChild('authChart') authChartRef!: ElementRef;
   @ViewChild('exceptionChart') exceptionChartRef!: ElementRef;
   @ViewChild('riskChart') riskChartRef!: ElementRef;
@@ -106,7 +105,6 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   private viewReady = false;
   private trendChartInstance: any = null;
   private volumeChartInstance: any = null;
-  private statusChartInstance: any = null;
   private authChartInstance: any = null;
   private exceptionChartInstance: any = null;
   private riskChartInstance: any = null;
@@ -139,7 +137,6 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     // own chart later, from their own subscribe callback below.
     this.renderTrendChart();
     this.renderVolumeChart();
-    this.renderStatusChart();
     this.renderAuthChart();
     this.renderExceptionChart();
     this.renderRiskChart();
@@ -166,7 +163,6 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         this.computeStatusBreakdown();
         this.computePriorityItems();
         this.cdr.detectChanges();
-        this.renderStatusChart();
       },
       error: () => { this.isLoading = false; }
     });
@@ -450,30 +446,13 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     });
   }
 
-  renderStatusChart() {
-    if (!this.viewReady || !this.statusChartRef || this.isLoading) return;
-    if (this.statusChartInstance) this.statusChartInstance.destroy();
-
-    const s = this.statusBreakdown;
-    const ctx = this.statusChartRef.nativeElement.getContext('2d');
-    this.statusChartInstance = new Chart(ctx, {
-      type: 'doughnut',
-      data: {
-        labels: ['Pass', 'Review', 'Missing Document'],
-        datasets: [{
-          data: [s.pass, s.review, s.missingDoc],
-          backgroundColor: [CHART_PALETTE.green, CHART_PALETTE.amber, CHART_PALETTE.coral],
-          borderColor: '#14151E',
-          borderWidth: 2, hoverOffset: 6,
-        }]
-      },
-      options: {
-        cutout: '68%',
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { position: 'bottom' as const, labels: { boxWidth: 7, padding: 4, font: { size: 9.5 } } } }
-      }
-    });
+  // Status Breakdown's 3 mini radial rings are pure CSS (conic-gradient),
+  // bound directly to statusBreakdown/totalRecords in the template — no
+  // canvas/Chart.js instance needed, so they update reactively with
+  // change detection like any other template expression.
+  ringGradient(value: number, color: string): string {
+    const percent = this.totalRecords > 0 ? (value / this.totalRecords) * 100 : 0;
+    return `conic-gradient(${color} 0% ${percent}%, var(--bg-hover) ${percent}% 100%)`;
   }
 
   renderAuthChart() {

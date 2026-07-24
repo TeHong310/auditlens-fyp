@@ -89,9 +89,28 @@
     <div class="chart-card">
       <p class="chart-title">Status Breakdown</p>
       <p class="chart-subtitle">Pass / Review / Missing Doc</p>
-      <div class="chart-body chart-body-small donut-body">
-        <canvas #statusChart></canvas>
+      <div class="chart-body chart-body-small">
         <p class="chart-loading-note" *ngIf="isLoading">Loading…</p>
+        <div class="radial-row" *ngIf="!isLoading">
+          <div class="radial-item">
+            <div class="radial-ring" [style.background]="ringGradient(statusBreakdown.pass, '#34D399')">
+              <div class="radial-ring-hole"><span class="radial-pct">{{ pct(statusBreakdown.pass) }}%</span></div>
+            </div>
+            <p class="radial-caption"><span class="radial-label">Pass</span><span class="radial-count">{{ statusBreakdown.pass }}</span></p>
+          </div>
+          <div class="radial-item">
+            <div class="radial-ring" [style.background]="ringGradient(statusBreakdown.review, '#FBBF24')">
+              <div class="radial-ring-hole"><span class="radial-pct">{{ pct(statusBreakdown.review) }}%</span></div>
+            </div>
+            <p class="radial-caption"><span class="radial-label">Review</span><span class="radial-count">{{ statusBreakdown.review }}</span></p>
+          </div>
+          <div class="radial-item">
+            <div class="radial-ring" [style.background]="ringGradient(statusBreakdown.missingDoc, '#F43F5E')">
+              <div class="radial-ring-hole"><span class="radial-pct">{{ pct(statusBreakdown.missingDoc) }}%</span></div>
+            </div>
+            <p class="radial-caption"><span class="radial-label">Missing Doc</span><span class="radial-count">{{ statusBreakdown.missingDoc }}</span></p>
+          </div>
+        </div>
       </div>
     </div>
 
