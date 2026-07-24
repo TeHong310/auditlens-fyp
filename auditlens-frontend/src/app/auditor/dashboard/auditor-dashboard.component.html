@@ -14,47 +14,57 @@
     </div>
   </div>
 
-  <!-- KPI Cards -->
+  <!-- KPI Cards — Finance Home card language: icon-wrap + card-color accent -->
   <div class="stats-row">
-    <div class="stat-card">
-      <div class="stat-top">
-        <span class="stat-label">Records Checked</span>
+    <div class="stat-card" style="--card-color:var(--accent);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-list-checks" style="font-size:19px;"></i></div>
+      <div class="stat-info">
+        <p class="stat-label">Records Checked</p>
+        <p class="stat-value" style="color:var(--accent)">{{ totalRecords }}</p>
+        <p class="stat-sub">Total in queue</p>
       </div>
-      <p class="stat-value">{{ totalRecords }}</p>
-      <p class="stat-sub">Total in queue</p>
     </div>
 
-    <div class="stat-card">
-      <div class="stat-top">
-        <span class="stat-label">Full Match</span>
-        <span class="stat-badge badge-safe">Safe</span>
+    <div class="stat-card" style="--card-color:var(--success);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-check-circle" style="font-size:19px;"></i></div>
+      <div class="stat-info">
+        <div class="stat-label-row">
+          <p class="stat-label">Full Match</p>
+          <span class="stat-badge badge-safe">Safe</span>
+        </div>
+        <p class="stat-value" style="color:var(--success)">{{ fullMatch }}</p>
+        <p class="stat-sub">{{ pct(fullMatch) }}% of checks</p>
       </div>
-      <p class="stat-value">{{ fullMatch }}</p>
-      <p class="stat-sub">{{ pct(fullMatch) }}% of checks</p>
     </div>
 
-    <div class="stat-card">
-      <div class="stat-top">
-        <span class="stat-label">Need Review</span>
-        <span class="stat-badge badge-action">Action</span>
+    <div class="stat-card" style="--card-color:var(--warning);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-eye" style="font-size:19px;"></i></div>
+      <div class="stat-info">
+        <div class="stat-label-row">
+          <p class="stat-label">Need Review</p>
+          <span class="stat-badge badge-action">Action</span>
+        </div>
+        <p class="stat-value" style="color:var(--warning)">{{ needReview }}</p>
+        <p class="stat-sub">{{ pct(needReview) }}% of checks</p>
       </div>
-      <p class="stat-value">{{ needReview }}</p>
-      <p class="stat-sub">{{ pct(needReview) }}% of checks</p>
     </div>
 
-    <div class="stat-card">
-      <div class="stat-top">
-        <span class="stat-label">Missing Documents</span>
-        <span class="stat-badge" [ngClass]="missingDocuments > 0 ? 'badge-risk' : 'badge-safe'">{{ missingDocuments > 0 ? 'Risk' : 'Safe' }}</span>
+    <div class="stat-card" style="--card-color:var(--danger);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-file-x" style="font-size:19px;"></i></div>
+      <div class="stat-info">
+        <div class="stat-label-row">
+          <p class="stat-label">Missing Documents</p>
+          <span class="stat-badge" [ngClass]="missingDocuments > 0 ? 'badge-risk' : 'badge-safe'">{{ missingDocuments > 0 ? 'Risk' : 'Safe' }}</span>
+        </div>
+        <p class="stat-value" style="color:var(--danger)">{{ missingDocuments }}</p>
+        <p class="stat-sub">{{ pct(missingDocuments) }}% missing PO/GR</p>
       </div>
-      <p class="stat-value">{{ missingDocuments }}</p>
-      <p class="stat-sub">{{ pct(missingDocuments) }}% missing PO/GR</p>
     </div>
   </div>
 
-  <!-- Analytics Chart Grid -->
-  <div class="charts-row">
-    <div class="chart-card chart-card-wide">
+  <!-- Primary analytics: the two time-series charts, given the most visual weight -->
+  <div class="charts-row-primary">
+    <div class="chart-card">
       <p class="chart-title">Audit Trend</p>
       <p class="chart-subtitle">Approved / sent back — last 14 days</p>
       <div class="chart-body">
@@ -67,12 +77,15 @@
     <div class="chart-card">
       <p class="chart-title">Review Volume</p>
       <p class="chart-subtitle">Items added, last 14 days</p>
-      <div class="chart-body chart-body-small">
+      <div class="chart-body">
         <canvas #volumeChart></canvas>
         <p class="chart-loading-note" *ngIf="!reportSummaryLoaded">Loading…</p>
       </div>
     </div>
+  </div>
 
+  <!-- Secondary analytics: compact breakdown row -->
+  <div class="charts-row-secondary">
     <div class="chart-card">
       <p class="chart-title">Status Breakdown</p>
       <p class="chart-subtitle">Pass / Review / Missing Doc</p>
@@ -91,14 +104,11 @@
         <p class="chart-empty-note" *ngIf="authenticityLoaded && !(authenticityOutcomes.pass || authenticityOutcomes.warning || authenticityOutcomes.fail)">No checks yet</p>
       </div>
     </div>
-  </div>
 
-  <!-- Risk Intelligence -->
-  <div class="risk-row">
     <div class="chart-card">
       <p class="chart-title">Exception Categories</p>
-      <p class="chart-subtitle">Breakdown of active exception types</p>
-      <div class="chart-body chart-body-bar">
+      <p class="chart-subtitle">Active exception types</p>
+      <div class="chart-body chart-body-small">
         <canvas #exceptionChart></canvas>
         <p class="chart-loading-note" *ngIf="!exceptionsLoaded">Loading…</p>
         <p class="chart-empty-note" *ngIf="exceptionsLoaded && exceptionCategories.length === 0">No active exceptions</p>
@@ -107,8 +117,8 @@
 
     <div class="chart-card">
       <p class="chart-title">Risk Distribution</p>
-      <p class="chart-subtitle">Anomaly severity</p>
-      <div class="chart-body chart-body-bar">
+      <p class="chart-subtitle">Anomaly type signature</p>
+      <div class="chart-body chart-body-small donut-body">
         <canvas #riskChart></canvas>
         <p class="chart-loading-note" *ngIf="!anomalyStatsLoaded">Loading…</p>
       </div>
@@ -122,22 +132,9 @@
       <div class="table-header">
         <div>
           <h2 class="section-title">Transaction Review Queue</h2>
-          <p class="section-subtitle">{{ filteredTransactions.length }} of {{ totalRecords }} transaction{{ totalRecords === 1 ? '' : 's' }}</p>
+          <p class="section-subtitle">Showing {{ recentTransactions.length }} most recent of {{ totalRecords }}</p>
         </div>
-      </div>
-
-      <div class="table-controls">
-        <div class="search-bar">
-          <i class="ph-duotone ph-magnifying-glass" style="font-size:14px; color:var(--text-muted);"></i>
-          <input type="text" placeholder="Search invoice or supplier..." class="search-input" [(ngModel)]="searchText" />
-        </div>
-        <select class="filter-select" [(ngModel)]="statusFilter">
-          <option value="all">All Status</option>
-          <option value="PASS">Pass</option>
-          <option value="REVIEW">Review</option>
-          <option value="PARTIAL">Partial</option>
-          <option value="PENDING">Pending</option>
-        </select>
+        <button class="btn-view-all" (click)="openReviewQueue()">Open Review Queue →</button>
       </div>
 
       <div class="table-wrapper">
@@ -146,23 +143,20 @@
             <tr>
               <th>Invoice / Package</th>
               <th>Supplier</th>
-              <th>Date</th>
               <th>Match Status</th>
-              <th>Risk Level</th>
-              <th>Issues</th>
+              <th>Risk</th>
               <th>Age</th>
               <th>Action</th>
             </tr>
           </thead>
           <tbody>
-            <tr *ngIf="isLoading"><td colspan="8" class="loading-row">Loading...</td></tr>
-            <tr *ngIf="!isLoading && filteredTransactions.length === 0">
-              <td colspan="8" class="empty-row">No transactions match this filter.</td>
+            <tr *ngIf="isLoading"><td colspan="6" class="loading-row">Loading...</td></tr>
+            <tr *ngIf="!isLoading && recentTransactions.length === 0">
+              <td colspan="6" class="empty-row">No transactions yet.</td>
             </tr>
-            <tr *ngFor="let txn of filteredTransactions" (click)="goToRecord(txn)">
+            <tr *ngFor="let txn of recentTransactions" (click)="goToRecord(txn)">
               <td class="inv-id">{{ txn.package_name || '-' }}</td>
               <td>{{ txn.supplier || '-' }}</td>
-              <td>{{ formatDate(txn.created_at) }}</td>
               <td>
                 <span class="badge" [ngClass]="matchingStatusClass(txn.matching_status)">
                   {{ matchingStatusLabel(txn.matching_status) }}
@@ -171,7 +165,6 @@
               <td>
                 <span class="badge" [ngClass]="riskBadgeClass(riskLevelFor(txn))">{{ riskLevelFor(txn) }}</span>
               </td>
-              <td class="issues-cell">{{ issuesFor(txn) }}</td>
               <td>{{ ageDays(txn.created_at) }}d</td>
               <td>
                 <button class="btn-open" (click)="goToRecord(txn); $event.stopPropagation()">Open</button>
@@ -187,7 +180,7 @@
         <span class="panel-title">Priority Review Queue</span>
         <span class="panel-count" *ngIf="priorityItems.length">{{ priorityItems.length }}</span>
       </div>
-      <p class="section-subtitle">High-risk items needing immediate attention</p>
+      <p class="section-subtitle">Most urgent items right now</p>
 
       <div class="priority-empty" *ngIf="!isLoading && priorityItems.length === 0">
         <i class="ph-duotone ph-check-circle"></i> Nothing urgent right now.

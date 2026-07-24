@@ -1,6 +1,5 @@
 import { Component, OnInit, AfterViewInit, ElementRef, ViewChild, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Chart, registerables } from 'chart.js';
@@ -45,7 +44,7 @@ const EXCEPTION_TYPE_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-auditor-dashboard',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule],
   templateUrl: './auditor-dashboard.component.html',
   styleUrls: ['./auditor-dashboard.component.css']
 })
@@ -70,10 +69,6 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   statusBreakdown = { pass: 0, review: 0, missingDoc: 0 };
   priorityItems: any[] = [];
 
-  // Table search/filter (client-side only, over already-loaded data)
-  searchText: string = '';
-  statusFilter: string = 'all';
-
   // ── Secondary sections: independent load state, each fetched
   // exactly once in ngOnInit, none blocking the primary render ──
   reportSummaryLoaded = false;
@@ -83,7 +78,11 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
 
   exceptionCategories: { label: string; value: number }[] = [];
   authenticityOutcomes = { pass: 0, warning: 0, fail: 0 };
-  riskDistribution = { high: 0, medium: 0, low: 0 };
+  // Anomaly TYPE breakdown (not severity) — powers the Risk
+  // Distribution radar chart. Read from the SAME /anomalies/stats
+  // response already fetched below (its by_type field was simply
+  // unused before this redesign) — no new request.
+  anomalyTypeDistribution = { amount: 0, round: 0, weekend: 0, duplicate: 0 };
 
   private viewReady = false;
   private trendChartInstance: any = null;
@@ -171,7 +170,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
       if (rankDiff !== 0) return rankDiff;
       return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
     });
-    this.priorityItems = flagged.slice(0, 5);
+    this.priorityItems = flagged.slice(0, 4);
   }
 
   riskLevelFor(t: any): 'HIGH' | 'MEDIUM' | 'LOW' {
@@ -204,19 +203,13 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     return this.totalRecords > 0 ? ((n / this.totalRecords) * 100).toFixed(1) : '0';
   }
 
-  get filteredTransactions(): any[] {
-    let list = this.transactions;
-    if (this.statusFilter !== 'all') {
-      list = list.filter(t => t.matching_status === this.statusFilter);
-    }
-    const q = this.searchText.trim().toLowerCase();
-    if (q) {
-      list = list.filter(t =>
-        (t.package_name || '').toLowerCase().includes(q) ||
-        (t.supplier || '').toLowerCase().includes(q)
-      );
-    }
-    return list;
+  // Compact "at a glance" slice for Auditor Home only (most recent 5) —
+  // full search/filter/browse already lives on the dedicated Review
+  // Queue page (/auditor/review-queue, unchanged), which this links to.
+  get recentTransactions(): any[] {
+    return [...this.transactions]
+      .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+      .slice(0, 5);
   }
 
   // ── Secondary: Audit Trend + Review Volume (report/summary) ──
@@ -275,12 +268,17 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     });
   }
 
-  // ── Secondary: Risk Distribution (anomaly severity) ──
+  // ── Secondary: Risk Distribution (anomaly type — radar) ──
   loadAnomalyStats() {
     this.http.get<any>(`${this.apiUrl}/anomalies/stats`, { headers: this.getHeaders() }).subscribe({
       next: (res) => {
-        const sev = res?.by_severity || {};
-        this.riskDistribution = { high: sev.high || 0, medium: sev.medium || 0, low: sev.low || 0 };
+        const byType = res?.by_type || {};
+        this.anomalyTypeDistribution = {
+          amount: byType.amount || 0,
+          round: byType.round || 0,
+          weekend: byType.weekend || 0,
+          duplicate: byType.duplicate || 0,
+        };
         this.anomalyStatsLoaded = true;
         this.cdr.detectChanges();
         this.renderRiskChart();
@@ -291,6 +289,10 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
 
   goToReviewQueue() {
     this.router.navigate(['/auditor/home']);
+  }
+
+  openReviewQueue() {
+    this.router.navigate(['/auditor/review-queue']);
   }
 
   goToRecord(txn: any) {
@@ -327,13 +329,6 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     if (level === 'HIGH') return 'badge-returned';
     if (level === 'MEDIUM') return 'badge-review';
     return 'badge-approved';
-  }
-
-  formatDate(dateStr: string): string {
-    if (!dateStr) return '-';
-    return new Date(dateStr).toLocaleDateString('en-MY', {
-      day: '2-digit', month: 'short', year: 'numeric'
-    });
   }
 
   // ── Chart rendering — each guarded independently: only draws once
@@ -446,6 +441,9 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     if (!this.viewReady || !this.authChartRef || !this.authenticityLoaded) return;
     if (this.authChartInstance) this.authChartInstance.destroy();
 
+    // Segmented ring — same doughnut engine as Status Breakdown, but
+    // with spacing + rounded segment caps, so the two donuts on the
+    // page read as visually distinct chart types rather than repeats.
     const a = this.authenticityOutcomes;
     const ctx = this.authChartRef.nativeElement.getContext('2d');
     this.authChartInstance = new Chart(ctx, {
@@ -455,11 +453,11 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         datasets: [{
           data: [a.pass, a.warning, a.fail],
           backgroundColor: ['#5DCAA5', '#F0A93B', '#E5605E'],
-          borderWidth: 0, hoverOffset: 4,
+          borderWidth: 0, borderRadius: 6, spacing: 3, hoverOffset: 4,
         }]
       },
       options: {
-        cutout: '70%',
+        cutout: '65%',
         responsive: true,
         maintainAspectRatio: false,
         plugins: { legend: { position: 'bottom' as const, labels: { boxWidth: 8, padding: 8, font: { size: 10 } } } }
@@ -500,26 +498,33 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     if (!this.viewReady || !this.riskChartRef || !this.anomalyStatsLoaded) return;
     if (this.riskChartInstance) this.riskChartInstance.destroy();
 
-    const r = this.riskDistribution;
+    const t = this.anomalyTypeDistribution;
     const ctx = this.riskChartRef.nativeElement.getContext('2d');
     this.riskChartInstance = new Chart(ctx, {
-      type: 'bar',
+      type: 'radar',
       data: {
-        labels: ['High', 'Medium', 'Low'],
+        labels: ['Amount', 'Round Number', 'Weekend', 'Duplicate'],
         datasets: [{
-          data: [r.high, r.medium, r.low],
-          backgroundColor: ['#E5605E', '#F0A93B', '#5DCAA5'],
-          borderRadius: 3, borderSkipped: false,
+          data: [t.amount, t.round, t.weekend, t.duplicate],
+          backgroundColor: 'rgba(139, 114, 255, 0.25)',
+          borderColor: '#8B72FF',
+          borderWidth: 2,
+          pointBackgroundColor: '#8B72FF',
+          pointRadius: 3,
         }]
       },
       options: {
-        indexAxis: 'y' as const,
         responsive: true,
         maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: {
-          x: { display: false, beginAtZero: true },
-          y: { ticks: { font: { size: 10.5 }, color: '#E6E7EE' }, grid: { display: false } }
+          r: {
+            beginAtZero: true,
+            ticks: { display: false, backdropColor: 'transparent' },
+            grid: { color: 'rgba(255,255,255,0.08)' },
+            angleLines: { color: 'rgba(255,255,255,0.08)' },
+            pointLabels: { font: { size: 9.5 }, color: '#8B8FA3' },
+          }
         }
       }
     });

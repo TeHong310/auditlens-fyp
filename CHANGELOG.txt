@@ -11295,3 +11295,107 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous frontend build - no data or schema changes
   were made this phase.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-24
+What was changed:
+  Phase 23: refined Auditor Home for compactness, scan-ability, and
+  visual polish - no new sections, no new data sources, no backend
+  changes. Same 3 files as the last phase.
+
+  Inspected before coding: the current page (5 stacked sections: KPI
+  row, 4-chart row, 2-chart row, table+priority row), Finance Home's
+  card CSS (icon-wrap + border-left: 4px solid var(--card-color) +
+  colored value - the exact pattern Auditor Home's KPI cards were
+  missing), and the existing /auditor/review-queue page (already has
+  full search/filter/9-column browsing - confirmed the right target
+  for "View All" rather than duplicating that UI on Home).
+
+  Frontend (auditlens-frontend/src/app/auditor/dashboard/):
+    - KPI cards rebuilt in Finance Home's exact card language (icon +
+      color-mixed icon-wrap + border-left accent + colored value) -
+      same 4 metrics/numbers, same Safe/Action/Risk badges, now
+      visually matching Finance Home's quality.
+    - Chart hierarchy split into two visual tiers: a primary row
+      (Audit Trend area line + Review Volume bar, given more height/
+      width) and a compact secondary row (Status Breakdown donut,
+      Authenticity Outcomes, Exception Categories, Risk Distribution),
+      instead of one loosely-mixed-width row plus a second row.
+    - Authenticity Outcomes restyled as a "segmented ring" (same
+      doughnut chart type, Chart.js's real spacing + borderRadius
+      segment options) so it reads as visually distinct from Status
+      Breakdown's plain donut rather than a second identical chart.
+    - Risk Distribution changed from a plain 3-bar severity chart to a
+      radar chart over anomaly TYPE (Amount / Round Number / Weekend /
+      Duplicate) - genuinely multi-axis and more "enterprise-style" as
+      requested, built from the by_type field of the SAME /anomalies/
+      stats response already being fetched (that field was simply
+      unread before) - zero new API calls.
+    - Transaction Review Queue on Home cut from 8 columns/all rows to
+      6 columns (Invoice/Package, Supplier, Match Status, Risk, Age,
+      Action) showing only the 5 most recent transactions, with an
+      "Open Review Queue ->" button routing to the existing, unmodified
+      /auditor/review-queue page for full search/filter/browsing.
+      Dropped Date (redundant with Age) and Issues text (redundant
+      with the Risk badge, one click from Record Detail); dropped the
+      Home-only search box/status filter entirely, since that
+      functionality already exists properly on the Review Queue page.
+    - table-layout: fixed with explicit column-width percentages
+      (instead of overflow-x: auto) - eliminates horizontal scroll at
+      normal laptop widths rather than just hiding it behind a
+      scrollbar.
+    - Priority Review Queue capped at 4 items (was 5) and given
+      tighter padding - stays visible, more compact.
+    - Removed FormsModule/ngModel, the filteredTransactions getter,
+      and formatDate() - all orphaned by dropping the search/filter/
+      Date column above; nothing else in this component used them.
+
+Why:
+  Requested UI/UX refinement of the redesign from the previous phase:
+  too much scrolling, horizontal overflow in the table, KPI cards not
+  matching Finance Home's polish, weak chart hierarchy, and a request
+  for richer (non-donut-only) chart types - while reusing existing
+  data and adding zero new network requests.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors) - confirms the
+    new radar chart type and doughnut segment options compile cleanly.
+  - Live-verified in a real browser (Playwright, 1440x900 viewport -
+    a normal laptop screen - logged in as a throwaway auditor account,
+    cleaned up afterward):
+      - document.documentElement.scrollWidth === clientWidth (1440 ==
+        1440) -> hasHorizontalOverflow: false, confirmed
+        programmatically, not just visually.
+      - scrollHeight 941 vs clientHeight 900 - only 41px of vertical
+        overflow, effectively fitting one screen (down from several
+        screens' worth of scrolling before this phase).
+      - Same 6 total network calls as the previous phase (1 login + 5
+        dashboard calls), each fired exactly once - no new requests
+        introduced by this visual refinement.
+      - Zero console errors, zero page errors.
+      - "Open Review Queue" button verified to actually navigate to
+        /auditor/review-queue.
+  - git diff --stat / git status confirm only the 3 Auditor Home
+    component files were touched - zero backend files, zero other
+    frontend files.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser check clean
+  (0 console/page errors, 0 horizontal overflow, ~41px vertical
+  overflow, 0 new/duplicate requests). No backend changes this phase,
+  so the backend test suite was not re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the refined Auditor Home takes
+     effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data or schema changes
+  were made this phase.
