@@ -10928,3 +10928,148 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous backend/frontend build - no data or schema
   changes were made this phase.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-24
+What was changed:
+  Phase 19: added a Delete action to the existing Admin Document
+  Management page.
+
+  Existing deletion logic found (inspected before writing anything new,
+  per the task's own instruction):
+    - routes/documents.py::delete_document() (DELETE /documents/<id>,
+      Finance-only) - a basic, pre-transaction-package-era delete. Left
+      completely untouched: it's Finance's own existing feature, and
+      it's also incomplete against the CURRENT schema (predates
+      document_relationships, transaction_package_documents,
+      authenticity_checks, document_line_items, the extraction/
+      authenticity caches - it doesn't clean any of those up), so it
+      was not reused as-is.
+    - helpers/transaction_packages.py::delete_package() (Phase 15,
+      transaction package force-delete) - THIS is the safe-deletion
+      pattern that was actually reused: FK-safe explicit deletion order
+      for the NO ACTION children, explicit document_relationships
+      cleanup (polymorphic, no real FK), reliance on documents' own ON
+      DELETE CASCADE for ai_assistant_cache/anomalies/authenticity_
+      checks/document_line_items/send_back_cycles, one DB transaction
+      with rollback on any failure, and the "never delete a document
+      shared with another package" check via the existing
+      _is_linked_to_other_package() helper.
+
+  Backend:
+    - helpers/transaction_packages.py - new delete_single_document()
+      (+ DocumentProtectedError), added directly below delete_package()
+      and reusing its private helpers (_is_linked_to_other_package,
+      _recompute_and_persist_status, _rebuild_relationships_for_
+      package) unmodified. Deletes ONE invoice-role document
+      (documents.document_id) and its exclusively-owned children:
+      extracted_fields, exceptions, record_matches, three_way_matches,
+      review_records (NO ACTION children, deleted explicitly);
+      document_relationships (polymorphic, deleted explicitly); this
+      document's own transaction_package_documents membership link
+      only (the package and every OTHER document in it are untouched);
+      a co-located Purchase Order/Goods Receipt (purchase_orders.
+      document_id / goods_receipts.document_id, uploaded alongside this
+      invoice) if it isn't linked to any transaction package itself.
+      ai_assistant_cache/anomalies/authenticity_checks/document_line_
+      items/send_back_cycles are removed automatically via documents'
+      existing ON DELETE CASCADE - not touched explicitly.
+      claude_extraction_cache/gemini_extraction_cache/authenticity_
+      result_cache are content-hash-keyed (not document-specific,
+      shared across any file with identical bytes) and are correctly
+      never touched. One DB transaction throughout: commits only after
+      every delete succeeds, rolls back on any failure.
+
+      Safety rule for a co-located PO/GR that IS linked to a
+      transaction package: purchase_orders.document_id/goods_receipts.
+      document_id turned out to be nullable at the schema level (not
+      NOT NULL, as initially assumed - checked directly against
+      pg_constraint before writing this), so a "detach" (set document_
+      id = NULL) would have been schema-legal. Deliberately not done:
+      that would leave a real PO/GR row in a document_id=NULL state
+      neither Enterprise Matching V2 nor relationship_builder.py has
+      ever been written or tested against, and both are explicitly out
+      of scope to risk here. The whole deletion is rejected instead,
+      with a clear message naming the specific PO/GR and pointing at
+      the package - every row is left exactly as it was, satisfying
+      the "reject deletion with a clear message" option the task itself
+      offered as an alternative to detaching.
+    - routes/admin.py - new DELETE /admin/documents/<id> (admin-only,
+      403 for every other role) calling delete_single_document():
+      ValueError -> 404, DocumentProtectedError -> 409, success -> 200
+      with counts of any co-deleted PO/GR. No binary file data (file_
+      bytes) is read or returned anywhere in the response.
+
+  Frontend (auditlens-frontend/src/app/admin/documents/):
+    - Red-outline Delete button added beside the existing View button.
+    - Confirmation modal: "Delete Document?" / the exact required
+      message / document number, vendor, document type / Cancel +
+      Delete Document buttons.
+    - On success: modal closes, a "Document deleted successfully."
+      toast appears (auto-dismisses after 3s), and the document is
+      removed from the already-fetched local array - the table and the
+      filter-chip summary counts (both computed from that same array
+      via getters) update immediately with no page reload and no extra
+      network round-trip.
+    - On failure: the backend's error message (e.g. the 409 protected-
+      document message) is shown inside the still-open modal.
+
+Why:
+  Requested addition of a Delete action to the Admin Document
+  Management page, reusing the existing transaction-package-aware
+  safe-deletion pattern (delete_package(), Phase 15) rather than
+  writing a new, unrelated deletion mechanism, and explicitly
+  protecting documents that other transaction packages still need.
+
+Test results:
+  - python tests/extraction/run_all.py - all 25 suites pass, including
+    test_transaction_packages.py (confirms delete_package() and its
+    private helpers, now also reused by delete_single_document(), are
+    unaffected).
+  - Live smoke test against the real local Postgres dev DB (23/23
+    checks passed), covering every scenario from the task:
+      1. Standalone invoice - deletes cleanly; an unrelated document is
+         untouched.
+      2. One invoice deleted from a constructed 5-document package
+         (2 invoices + 1 PO + 2 GRs, all explicit package members) -
+         only that invoice disappears; the PO, the sibling invoice, both
+         GRs, and the package itself all remain; the package's other 4
+         membership links are untouched.
+      3. Deleting the OTHER invoice in that same package - the one
+         hosting the package-linked PO/GRs - is correctly rejected
+         (409) with a specific, readable message; every row (invoice,
+         PO, both GRs, package) is verified still present afterward -
+         the other package's data was not damaged.
+      4. Finance and Auditor tokens both receive 403 on the same
+         endpoint; a nonexistent document_id returns 404.
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - git diff --stat confirms the change touches only helpers/
+    transaction_packages.py (a pure append - 0 existing lines removed
+    or altered), routes/admin.py, and the three admin-documents
+    component files - zero changes to documents.py, OCR, Claude/
+    Gemini, Enterprise Matching V2, relationship_builder.py, the
+    authenticity engine, anomaly detection, or the Finance/Auditor
+    workflows (including routes/documents.py's own Finance-only
+    delete_document(), left completely untouched).
+
+Build result:
+  Backend: all 25 test suites pass, 23/23 live smoke checks pass.
+  Frontend: clean production build, exit 0.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - the new DELETE /admin/documents/<id>
+     route takes effect immediately. No schema/migration changes.
+  2. Redeploy the Render FRONTEND - the new Delete button, confirmation
+     modal, and toast take effect immediately.
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend/frontend build - no data or schema
+  changes were made this phase (only rows explicitly deleted through
+  the new admin action itself, which is the intended, disclosed
+  behavior of the feature).

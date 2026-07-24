@@ -20,6 +20,11 @@ export class AdminDocumentsComponent implements OnInit {
   searchText: string = '';
   activeStatus: string = 'all';
 
+  documentPendingDelete: any = null;
+  isDeleting: boolean = false;
+  deleteError: string = '';
+  toastMessage: string = '';
+
   private apiUrl = environment.apiUrl;
 
   constructor(private http: HttpClient, private router: Router, private cdr: ChangeDetectorRef) {}
@@ -91,5 +96,44 @@ export class AdminDocumentsComponent implements OnInit {
 
   openRecord(doc: any) {
     this.router.navigate(['/admin/record-detail'], { queryParams: { document_id: doc.document_id } });
+  }
+
+  openDeleteModal(doc: any) {
+    this.documentPendingDelete = doc;
+    this.deleteError = '';
+  }
+
+  cancelDelete() {
+    if (this.isDeleting) return;
+    this.documentPendingDelete = null;
+    this.deleteError = '';
+  }
+
+  confirmDelete() {
+    if (!this.documentPendingDelete || this.isDeleting) return;
+    this.isDeleting = true;
+    this.deleteError = '';
+    const id = this.documentPendingDelete.document_id;
+    this.http.delete<any>(`${this.apiUrl}/admin/documents/${id}`, { headers: this.getHeaders() }).subscribe({
+      next: () => {
+        this.isDeleting = false;
+        this.documentPendingDelete = null;
+        // Refresh the list + summary counts from the already-fetched
+        // array (both are derived from `documents` via getters) without
+        // a full page reload or an extra round-trip.
+        this.documents = this.documents.filter(d => d.document_id !== id);
+        this.toastMessage = 'Document deleted successfully.';
+        this.cdr.detectChanges();
+        setTimeout(() => {
+          this.toastMessage = '';
+          this.cdr.detectChanges();
+        }, 3000);
+      },
+      error: (err) => {
+        this.isDeleting = false;
+        this.deleteError = err.error?.error || 'Failed to delete document.';
+        this.cdr.detectChanges();
+      }
+    });
   }
 }

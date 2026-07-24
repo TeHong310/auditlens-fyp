@@ -7,6 +7,7 @@ import bcrypt
 from db import get_db_connection, get_user_by_id
 from helpers.audit_log import log_audit
 from helpers.anomaly_detector import run_anomaly_detection
+from helpers.transaction_packages import delete_single_document, DocumentProtectedError
 from config import Config
 
 admin_bp = Blueprint('admin', __name__)
@@ -582,6 +583,49 @@ def admin_send_back_document(document_id):
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# ADMIN DELETE DOCUMENT
+# DELETE /admin/documents/<document_id>
+# Admin only
+#
+# Deletes ONE document (and its exclusively-owned child records) via
+# helpers/transaction_packages.py::delete_single_document() — the
+# existing, package-aware safe-deletion helper introduced alongside
+# delete_package() (the transaction-package force-delete feature).
+# Never deletes another document, never deletes a whole package: see
+# that function's own docstring for the full FK-safe deletion order
+# and the transaction-package protection rules.
+# ------------------------------------------------------------
+@admin_bp.route('/documents/<int:document_id>', methods=['DELETE'])
+@jwt_required()
+def admin_delete_document(document_id):
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    if user['role'] != 'admin':
+        return jsonify({'error': 'Access denied. Admin only.'}), 403
+
+    try:
+        result = delete_single_document(document_id)
+    except ValueError:
+        return jsonify({'error': 'Document not found'}), 404
+    except DocumentProtectedError as e:
+        return jsonify({'error': str(e)}), 409
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    log_audit(user['user_id'], 'ADMIN_DELETE_DOCUMENT', 'documents', document_id,
+              f'Admin deleted document {document_id} '
+              f'(purchase_orders: {result["deleted_purchase_orders"]}, '
+              f'goods_receipts: {result["deleted_goods_receipts"]})')
+
+    return jsonify({
+        'message': 'Document deleted successfully',
+        'document_id': document_id,
+        **result
+    }), 200
 
 
 # ------------------------------------------------------------

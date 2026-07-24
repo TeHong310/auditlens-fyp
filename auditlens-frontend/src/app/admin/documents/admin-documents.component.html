@@ -51,8 +51,9 @@
             <td>{{ d.uploaded_by }}</td>
             <td><span class="badge" [ngClass]="statusBadgeClass(d.status)">{{ statusLabel(d.status) }}</span></td>
             <td>{{ d.uploaded_at | date:'mediumDate' }}</td>
-            <td>
+            <td class="actions-cell">
               <button class="btn-open" (click)="openRecord(d); $event.stopPropagation()">View →</button>
+              <button class="btn-delete" (click)="openDeleteModal(d); $event.stopPropagation()">Delete</button>
             </td>
           </tr>
         </tbody>
@@ -62,3 +63,28 @@
   </div>
 
 </div>
+
+<!-- Delete confirmation modal -->
+<div class="modal-backdrop" *ngIf="documentPendingDelete" (click)="cancelDelete()">
+  <div class="modal-box" (click)="$event.stopPropagation()">
+    <h3 class="modal-title"><i class="ph-duotone ph-warning"></i> Delete Document?</h3>
+    <p class="modal-text">
+      Delete this document and all data exclusively related to it? This action cannot be undone.
+    </p>
+    <div class="modal-doc-info">
+      <p><span class="modal-doc-label">Document number:</span> {{ documentPendingDelete.document_number }}</p>
+      <p><span class="modal-doc-label">Vendor:</span> {{ documentPendingDelete.vendor_name || 'Unknown' }}</p>
+      <p><span class="modal-doc-label">Document type:</span> {{ documentPendingDelete.document_type | titlecase }}</p>
+    </div>
+    <div class="error-box" *ngIf="deleteError"><i class="ph-duotone ph-x-circle"></i> {{ deleteError }}</div>
+    <div class="modal-actions">
+      <button class="btn-modal-cancel" (click)="cancelDelete()" [disabled]="isDeleting">Cancel</button>
+      <button class="btn-modal-delete" (click)="confirmDelete()" [disabled]="isDeleting">
+        {{ isDeleting ? 'Deleting…' : 'Delete Document' }}
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Success toast -->
+<div class="toast" *ngIf="toastMessage"><i class="ph-duotone ph-check-circle"></i> {{ toastMessage }}</div>

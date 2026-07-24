@@ -796,3 +796,155 @@ def delete_package(package_id):
         'deleted_goods_receipts': len(gr_ids),
         'kept_shared_documents': shared_count,
     }
+
+
+# ------------------------------------------------------------
+# Admin module — Delete a SINGLE document (Document Management "Delete"
+# action). Companion to delete_package() above, for removing just one
+# invoice-role document rather than an entire transaction package.
+#
+# child-table cleanup mirrors delete_package() exactly: documents' own
+# ON DELETE CASCADE already removes ai_assistant_cache/anomalies/
+# authenticity_checks/document_line_items/send_back_cycles for this
+# document_id; only the NO ACTION children (exceptions, record_matches,
+# three_way_matches, review_records, extracted_fields) and the
+# polymorphic document_relationships table (no real FK) are deleted
+# explicitly. claude_extraction_cache/gemini_extraction_cache/
+# authenticity_result_cache are content-hash-keyed, shared across any
+# document with identical file bytes, and are never document-specific
+# — correctly left untouched.
+# ------------------------------------------------------------
+
+class DocumentProtectedError(Exception):
+    """Raised by delete_single_document() when the document cannot be
+    safely deleted without risking another transaction package's data."""
+    pass
+
+
+def delete_single_document(document_id):
+    """Deletes ONE invoice-role document (documents.document_id) and
+    every child record exclusively belonging to it. Never deletes
+    another document, and never deletes the transaction package(s) it
+    may belong to — only this document's own membership link is
+    removed, exactly like link_document_to_package() only adds one.
+
+    Raises ValueError if the document doesn't exist.
+
+    Raises DocumentProtectedError if this document has a co-located
+    Purchase Order or Goods Receipt (purchase_orders.document_id /
+    goods_receipts.document_id — uploaded alongside it via /documents/
+    upload-po|gr/<id>) that is itself linked to ANY transaction
+    package. That column IS nullable at the schema level, so setting it
+    to NULL to "detach" the PO/GR instead of rejecting would be
+    possible — deliberately not done: that would leave a real PO/GR
+    row in a document_id=NULL state the Enterprise Matching V2 /
+    relationship_builder.py code was never written or tested against,
+    and both are explicitly out of scope to touch or risk here. Instead
+    the whole deletion is rejected with a clear reason, leaving every
+    row exactly as it was. A co-located PO/GR that isn't linked to any
+    package at all (a standalone legacy 3-way match, never grouped) is
+    deleted alongside the invoice, same as delete_package()'s own
+    handling of an exclusive co-located PO/GR.
+
+    On success, returns {'deleted_purchase_orders', 'deleted_goods_
+    receipts', 'unlinked_package_ids'} and refreshes the status/
+    relationships of every package this document was linked to (via
+    the same _recompute_and_persist_status/_rebuild_relationships_for_
+    package already used by link_document_to_package() above)."""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cursor.execute('SELECT document_id FROM documents WHERE document_id = %s', (document_id,))
+        if not cursor.fetchone():
+            raise ValueError(f'document {document_id} does not exist')
+
+        cursor.execute(
+            "SELECT package_id FROM transaction_package_documents "
+            "WHERE document_role = 'invoice' AND document_id = %s",
+            (document_id,)
+        )
+        own_package_ids = [r['package_id'] for r in cursor.fetchall()]
+
+        cursor.execute('SELECT po_id FROM purchase_orders WHERE document_id = %s', (document_id,))
+        co_po_ids = [r['po_id'] for r in cursor.fetchall()]
+        cursor.execute('SELECT gr_id FROM goods_receipts WHERE document_id = %s', (document_id,))
+        co_gr_ids = [r['gr_id'] for r in cursor.fetchall()]
+
+        for po_id in co_po_ids:
+            if _is_linked_to_other_package(cursor, 'purchase_order', po_id, -1):
+                raise DocumentProtectedError(
+                    f'This document has a linked Purchase Order (po_id {po_id}) that is part of a '
+                    'transaction package other documents may rely on. Remove it from the package '
+                    'first, or delete the whole package instead.'
+                )
+        for gr_id in co_gr_ids:
+            if _is_linked_to_other_package(cursor, 'goods_receipt', gr_id, -1):
+                raise DocumentProtectedError(
+                    f'This document has a linked Goods Receipt (gr_id {gr_id}) that is part of a '
+                    'transaction package other documents may rely on. Remove it from the package '
+                    'first, or delete the whole package instead.'
+                )
+
+        # ── FK-safe deletion order (children before parents), all on
+        # this one transaction ──
+        cursor.execute('DELETE FROM exceptions WHERE document_id = %s', (document_id,))
+        cursor.execute('DELETE FROM record_matches WHERE document_id = %s', (document_id,))
+        cursor.execute('DELETE FROM three_way_matches WHERE document_id = %s', (document_id,))
+        if co_po_ids:
+            cursor.execute('DELETE FROM three_way_matches WHERE po_id = ANY(%s)', (co_po_ids,))
+        if co_gr_ids:
+            cursor.execute('DELETE FROM three_way_matches WHERE gr_id = ANY(%s)', (co_gr_ids,))
+        cursor.execute('DELETE FROM review_records WHERE document_id = %s', (document_id,))
+        cursor.execute('DELETE FROM extracted_fields WHERE document_id = %s', (document_id,))
+
+        for etype, ids in (('invoice', [document_id]), ('po', co_po_ids), ('gr', co_gr_ids)):
+            if ids:
+                cursor.execute(
+                    "DELETE FROM document_relationships WHERE "
+                    "(parent_type = %s AND parent_id = ANY(%s)) OR (child_type = %s AND child_id = ANY(%s))",
+                    (etype, ids, etype, ids)
+                )
+
+        # This document's own package membership link(s) only — the
+        # package itself and every OTHER document in it are untouched.
+        cursor.execute(
+            "DELETE FROM transaction_package_documents WHERE document_role = 'invoice' AND document_id = %s",
+            (document_id,)
+        )
+        if co_po_ids:
+            cursor.execute(
+                "DELETE FROM transaction_package_documents WHERE document_role = 'purchase_order' AND document_id = ANY(%s)",
+                (co_po_ids,)
+            )
+        if co_gr_ids:
+            cursor.execute(
+                "DELETE FROM transaction_package_documents WHERE document_role = 'goods_receipt' AND document_id = ANY(%s)",
+                (co_gr_ids,)
+            )
+
+        if co_po_ids:
+            cursor.execute('DELETE FROM purchase_orders WHERE po_id = ANY(%s)', (co_po_ids,))
+        if co_gr_ids:
+            cursor.execute('DELETE FROM goods_receipts WHERE gr_id = ANY(%s)', (co_gr_ids,))
+
+        # documents' own ON DELETE CASCADE removes ai_assistant_cache/
+        # anomalies/authenticity_checks/document_line_items/send_back_
+        # cycles for this document_id automatically.
+        cursor.execute('DELETE FROM documents WHERE document_id = %s', (document_id,))
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    for package_id in own_package_ids:
+        _recompute_and_persist_status(package_id)
+        _rebuild_relationships_for_package(package_id)
+
+    return {
+        'deleted_purchase_orders': len(co_po_ids),
+        'deleted_goods_receipts': len(co_gr_ids),
+        'unlinked_package_ids': own_package_ids,
+    }
