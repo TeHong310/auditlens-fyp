@@ -11487,3 +11487,107 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous frontend build - no data or schema changes
   were made this phase.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-24
+What was changed:
+  Phase 25: made Auditor Home's 6 charts visually richer, more
+  colorful, and more "premium dashboard"-looking. Chart TYPES and
+  STYLING only - zero changes to data fetching, HTML structure, CSS
+  layout/sizing, or any backend file. Single file touched:
+  auditor-dashboard.component.ts, and only inside its existing
+  renderXChart() methods.
+
+  - Added a shared CHART_PALETTE constant (violet, blue, cyan, teal,
+    green, amber, orange, coral, red, pink) used only for chart
+    decoration - family-grouped so status meaning stays intact
+    (green/teal=success, amber/orange=warning, coral/red=danger,
+    violet/blue/cyan=neutral analytics) while giving different
+    datasets across the page clearly different hues, per the
+    requested color direction.
+  - Audit Trend -> now a genuine MIXED chart: "Approved" renders as
+    teal-to-cyan gradient bars, "Sent Back" as a smooth coral line
+    overlay with a soft fill - both in the same canvas, same 2
+    existing timeline fields as before (report/summary, already
+    fetched, no new call).
+  - Review Volume -> the same single pending-count series, now a
+    violet-to-blue gradient bar fill (was a flat single color) with a
+    cyan hover state.
+  - Status Breakdown (donut) -> green/amber/coral segments with a
+    thin card-colored border between slices for a cleaner, more
+    "separated" premium look (cutout tightened slightly, 70% -> 68%).
+  - Authenticity Outcomes (segmented ring) -> switched to a teal/
+    orange/pink shade set, deliberately different from Status
+    Breakdown's green/amber/coral so the two donuts read as visually
+    distinct across the page despite the same semantic families.
+  - Exception Categories (horizontal bar) -> switched from one flat
+    purple color to a categorical multi-color palette (violet, cyan,
+    blue, amber, pink), one hue per exception type, since these are
+    different TYPES rather than a severity ranking.
+  - Risk Distribution: radar -> polarArea. Same anomaly by_type data
+    (Amount/Round Number/Weekend/Duplicate) as before, but a polar
+    area chart is both more colorful/premium AND clearer to read at a
+    glance than a 4-axis radar, per the task's explicit invitation to
+    replace it if the radar felt "too decorative or unclear."
+
+Why:
+  Requested visual richness upgrade for the Auditor Home charts - more
+  color variety, a genuine mixed bar+line chart, and an overall more
+  "premium enterprise dashboard" feel - while keeping the page compact
+  and reusing existing data exactly as before.
+
+Confirmed unchanged:
+  - No backend files touched (verified via git status/git diff --stat
+    before committing - only the one .ts file appears).
+  - No HTML file touched - same DOM, same bindings, same (click)
+    handlers, same *ngIf guards.
+  - No CSS file touched - card sizing/spacing from the previous
+    compactness phase is untouched.
+  - No data-fetching, computation, or navigation logic changed - the
+    5 network calls, their loading-state flags, computeStatusBreakdown
+    /computePriorityItems, and goToRecord()/openReviewQueue() are all
+    byte-for-byte the same; only the visual options passed into
+    `new Chart(...)` inside the existing renderXChart() methods changed.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors) - confirms the
+    mixed bar+line dataset typing and the polarArea/gradient
+    configurations are valid Chart.js/TypeScript.
+  - Live-verified in a real browser (Playwright, 1440x900 viewport,
+    throwaway auditor account): first against the empty dev DB (zero
+    console/page errors, all 6 charts render their correct empty
+    states); then against deliberately-inserted, fully-disposable
+    fixture data (documents/review_records/anomalies/
+    authenticity_checks) to actually SEE each new chart type/color
+    render with real values - confirmed the Audit Trend mixed chart
+    shows genuine teal bars + a coral line together, Review Volume
+    shows the violet-to-blue gradient, Risk Distribution's polarArea
+    shows 4 distinct colorful wedges, Exception Categories shows its
+    multi-color bars, and both donuts show their new richer palettes -
+    all with zero console/page errors throughout. Every fixture row
+    (6 documents, 42 review_records, 14 anomalies, 6 authenticity_
+    checks, 1 throwaway user) was deleted afterward and verified gone
+    - the dev DB is back to exactly its prior state.
+  - git diff --stat confirms only auditor-dashboard.component.ts was
+    touched.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser check clean
+  (0 console/page errors) against both empty and populated data. No
+  backend changes this phase, so the backend test suite was not re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the richer, more colorful charts
+     take effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data or schema changes
+  were made this phase (all fixture rows used for visual verification
+  were inserted and deleted entirely within this phase's own testing).

@@ -22,6 +22,25 @@ const EXCEPTION_TYPE_LABELS: Record<string, string> = {
   low_confidence: 'Low OCR Confidence',
 };
 
+// Shared chart palette — richer/more varied than the app's 4 flat
+// semantic tokens, used only for chart decoration (display only, no
+// data/logic implication). Family grouping keeps status meaning
+// intact: green/teal = success, amber/orange = warning, coral/red =
+// danger, violet/blue/cyan = neutral analytics — while giving
+// different datasets across the page clearly different hues.
+const CHART_PALETTE = {
+  violet: '#8B5CF6',
+  blue: '#3B82F6',
+  cyan: '#22D3EE',
+  teal: '#2DD4BF',
+  green: '#34D399',
+  amber: '#FBBF24',
+  orange: '#FB923C',
+  coral: '#FB7185',
+  red: '#F43F5E',
+  pink: '#F472B6',
+};
+
 // Enterprise V3 Phase 6 (STEP 3) — Transaction-Centric Auditor
 // Workflow. Reads GET /auditor/transactions instead of the legacy
 // GET /matching/queue — a merged queue of real transaction packages
@@ -346,30 +365,44 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     const labels = recent.map(t => this.formatShortDate(t.date));
 
     const ctx = this.trendChartRef.nativeElement.getContext('2d');
+    // Mixed bar + line: Approved as teal/cyan gradient bars (volume of
+    // completed work), Sent Back as a smooth coral line overlay (the
+    // trend to watch) — same 2 existing timeline fields as before,
+    // just rendered as two different chart types in one canvas.
+    const barGradient = ctx.createLinearGradient(0, 0, 0, 100);
+    barGradient.addColorStop(0, CHART_PALETTE.teal);
+    barGradient.addColorStop(1, CHART_PALETTE.cyan);
+
     this.trendChartInstance = new Chart(ctx, {
-      type: 'line',
+      type: 'bar',
       data: {
         labels,
         datasets: [
           {
+            type: 'bar',
             label: 'Approved',
             data: recent.map(t => t.approved),
-            borderColor: '#5DCAA5',
-            backgroundColor: 'rgba(93, 202, 165, 0.12)',
-            borderWidth: 2, pointRadius: 0, tension: 0.35, fill: true,
+            backgroundColor: barGradient,
+            borderRadius: 4,
+            borderSkipped: false,
+            order: 2,
           },
           {
+            type: 'line',
             label: 'Sent Back',
             data: recent.map(t => t.sent_back),
-            borderColor: '#E5605E',
-            backgroundColor: 'rgba(229, 96, 94, 0.08)',
-            borderWidth: 2, pointRadius: 0, tension: 0.35, fill: true,
+            borderColor: CHART_PALETTE.coral,
+            backgroundColor: 'rgba(251, 113, 133, 0.15)',
+            borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 4,
+            pointBackgroundColor: CHART_PALETTE.coral,
+            tension: 0.4, fill: true, order: 1,
           },
         ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        interaction: { mode: 'index' as const, intersect: false },
         plugins: {
           legend: { display: true, position: 'top' as const, labels: { boxWidth: 7, font: { size: 9.5 }, padding: 4 } }
         },
@@ -390,14 +423,19 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     const labels = recent.map(t => this.formatShortDate(t.date));
 
     const ctx = this.volumeChartRef.nativeElement.getContext('2d');
+    const barGradient = ctx.createLinearGradient(0, 0, 0, 100);
+    barGradient.addColorStop(0, CHART_PALETTE.violet);
+    barGradient.addColorStop(1, CHART_PALETTE.blue);
+
     this.volumeChartInstance = new Chart(ctx, {
       type: 'bar',
       data: {
         labels,
         datasets: [{
           data: recent.map(t => t.pending),
-          backgroundColor: 'rgba(108, 79, 255, 0.7)',
-          borderRadius: 3, borderSkipped: false,
+          backgroundColor: barGradient,
+          hoverBackgroundColor: CHART_PALETTE.cyan,
+          borderRadius: 5, borderSkipped: false,
         }]
       },
       options: {
@@ -424,12 +462,13 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         labels: ['Pass', 'Review', 'Missing Document'],
         datasets: [{
           data: [s.pass, s.review, s.missingDoc],
-          backgroundColor: ['#5DCAA5', '#F0A93B', '#E5605E'],
-          borderWidth: 0, hoverOffset: 4,
+          backgroundColor: [CHART_PALETTE.green, CHART_PALETTE.amber, CHART_PALETTE.coral],
+          borderColor: '#14151E',
+          borderWidth: 2, hoverOffset: 6,
         }]
       },
       options: {
-        cutout: '70%',
+        cutout: '68%',
         responsive: true,
         maintainAspectRatio: false,
         plugins: { legend: { position: 'bottom' as const, labels: { boxWidth: 7, padding: 4, font: { size: 9.5 } } } }
@@ -444,6 +483,9 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     // Segmented ring — same doughnut engine as Status Breakdown, but
     // with spacing + rounded segment caps, so the two donuts on the
     // page read as visually distinct chart types rather than repeats.
+    // Deliberately a different shade set from Status Breakdown (teal/
+    // orange/pink-red vs its green/amber/coral) — same semantic family
+    // per color, but visually distinct dataset-to-dataset across the page.
     const a = this.authenticityOutcomes;
     const ctx = this.authChartRef.nativeElement.getContext('2d');
     this.authChartInstance = new Chart(ctx, {
@@ -452,8 +494,8 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         labels: ['Pass', 'Warning', 'Fail'],
         datasets: [{
           data: [a.pass, a.warning, a.fail],
-          backgroundColor: ['#5DCAA5', '#F0A93B', '#E5605E'],
-          borderWidth: 0, borderRadius: 6, spacing: 3, hoverOffset: 4,
+          backgroundColor: [CHART_PALETTE.teal, CHART_PALETTE.orange, CHART_PALETTE.pink],
+          borderWidth: 0, borderRadius: 6, spacing: 3, hoverOffset: 6,
         }]
       },
       options: {
@@ -469,6 +511,10 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     if (!this.viewReady || !this.exceptionChartRef || !this.exceptionsLoaded) return;
     if (this.exceptionChartInstance) this.exceptionChartInstance.destroy();
 
+    // Categorical palette — these are different exception TYPES, not a
+    // severity ranking, so a varied hue per bar (rather than one flat
+    // color) reads more clearly and matches the richer dashboard style.
+    const categoryColors = [CHART_PALETTE.violet, CHART_PALETTE.cyan, CHART_PALETTE.blue, CHART_PALETTE.amber, CHART_PALETTE.pink];
     const cats = this.exceptionCategories;
     const ctx = this.exceptionChartRef.nativeElement.getContext('2d');
     this.exceptionChartInstance = new Chart(ctx, {
@@ -477,8 +523,8 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         labels: cats.map(c => c.label),
         datasets: [{
           data: cats.map(c => c.value),
-          backgroundColor: '#8B72FF',
-          borderRadius: 3, borderSkipped: false,
+          backgroundColor: cats.map((_, i) => categoryColors[i % categoryColors.length]),
+          borderRadius: 4, borderSkipped: false,
         }]
       },
       options: {
@@ -498,32 +544,38 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     if (!this.viewReady || !this.riskChartRef || !this.anomalyStatsLoaded) return;
     if (this.riskChartInstance) this.riskChartInstance.destroy();
 
+    // Polar area — a colorful, clearly-readable alternative to a radar
+    // for 4 categorical values (each anomaly TYPE gets its own hue and
+    // slice size shows its count), same by_type data as before.
     const t = this.anomalyTypeDistribution;
     const ctx = this.riskChartRef.nativeElement.getContext('2d');
     this.riskChartInstance = new Chart(ctx, {
-      type: 'radar',
+      type: 'polarArea',
       data: {
         labels: ['Amount', 'Round Number', 'Weekend', 'Duplicate'],
         datasets: [{
           data: [t.amount, t.round, t.weekend, t.duplicate],
-          backgroundColor: 'rgba(139, 114, 255, 0.25)',
-          borderColor: '#8B72FF',
+          backgroundColor: [
+            'rgba(139, 92, 246, 0.75)',
+            'rgba(34, 211, 238, 0.75)',
+            'rgba(251, 191, 36, 0.75)',
+            'rgba(244, 114, 182, 0.75)',
+          ],
+          borderColor: '#14151E',
           borderWidth: 2,
-          pointBackgroundColor: '#8B72FF',
-          pointRadius: 2,
         }]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
+        plugins: {
+          legend: { display: true, position: 'bottom' as const, labels: { boxWidth: 7, padding: 4, font: { size: 9 } } }
+        },
         scales: {
           r: {
             beginAtZero: true,
             ticks: { display: false, backdropColor: 'transparent' },
             grid: { color: 'rgba(255,255,255,0.08)' },
-            angleLines: { color: 'rgba(255,255,255,0.08)' },
-            pointLabels: { font: { size: 9 }, color: '#8B8FA3' },
           }
         }
       }
