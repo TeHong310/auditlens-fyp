@@ -6,6 +6,7 @@ import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { forkJoin, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
+import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
 
 // Same machine-key -> label lookups as finance-ocr-review.component.ts
 // and auditor-record-detail.component.ts — mirrors helpers/send_back.py
@@ -36,7 +37,7 @@ const REQUIRED_ACTION_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-finance-corrections',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, FinanceNotificationBellComponent],
   templateUrl: './finance-corrections.component.html',
   styleUrls: ['./finance-corrections.component.css']
 })

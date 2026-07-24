@@ -5,13 +5,14 @@ import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Chart, registerables } from 'chart.js';
 import { FormsModule } from '@angular/forms';
 import { environment } from '../../../environments/environment';
+import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
 
 Chart.register(...registerables);
 
 @Component({
   selector: 'app-finance-report',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, FinanceNotificationBellComponent],
   templateUrl: './finance-report.component.html',
   styleUrls: ['./finance-report.component.css']
 })

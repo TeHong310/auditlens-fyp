@@ -1,0 +1,16 @@
+<div class="notif-bell-wrap">
+  <button class="notif-bell-btn" (click)="toggle($event)" aria-label="Notifications" type="button">
+    <i class="ph-duotone ph-bell"></i>
+    <span class="notif-badge" *ngIf="notifications.length > 0">{{ notifications.length }}</span>
+  </button>
+
+  <div class="notif-dropdown" *ngIf="isOpen">
+    <div class="notif-dropdown-header">Notifications</div>
+    <div class="notif-list">
+      <div class="notif-item" *ngFor="let n of notifications">
+        <span class="notif-icon" [ngClass]="n.colorClass"><i class="ph-duotone" [ngClass]="n.icon"></i></span>
+        <span class="notif-title">{{ n.title }}</span>
+      </div>
+    </div>
+  </div>
+</div>

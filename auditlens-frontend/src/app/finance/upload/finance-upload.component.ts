@@ -3,11 +3,12 @@ import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
+import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
 
 @Component({
   selector: 'app-finance-upload',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, FinanceNotificationBellComponent],
   templateUrl: './finance-upload.component.html',
   styleUrls: ['./finance-upload.component.css']
 })

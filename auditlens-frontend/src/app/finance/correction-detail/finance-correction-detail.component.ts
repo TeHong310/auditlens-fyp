@@ -5,6 +5,7 @@ import { Router, ActivatedRoute } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 import { WorkflowTimelineComponent } from '../../workflow-timeline/workflow-timeline.component';
+import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
 
 // Same lookups as finance-corrections.component.ts / finance-ocr-
 // review.component.ts / auditor-record-detail.component.ts.
@@ -33,7 +34,7 @@ const REQUIRED_ACTION_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-finance-correction-detail',
   standalone: true,
-  imports: [CommonModule, FormsModule, WorkflowTimelineComponent],
+  imports: [CommonModule, FormsModule, WorkflowTimelineComponent, FinanceNotificationBellComponent],
   templateUrl: './finance-correction-detail.component.html',
   styleUrls: ['./finance-correction-detail.component.css']
 })

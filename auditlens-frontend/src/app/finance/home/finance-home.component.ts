@@ -6,6 +6,7 @@ import { forkJoin, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { Chart, registerables } from 'chart.js';
 import { environment } from '../../../environments/environment';
+import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
 
 Chart.register(...registerables);
 
@@ -37,7 +38,7 @@ const CHART_PALETTE = {
 @Component({
   selector: 'app-finance-home',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, FinanceNotificationBellComponent],
   templateUrl: './finance-home.component.html',
   styleUrls: ['./finance-home.component.css']
 })

@@ -12,6 +12,10 @@
         <p class="page-subtitle" *ngIf="document">{{ document.invoice_number || document.file_name }}</p>
       </div>
     </div>
+    <div class="header-right">
+      <app-finance-notification-bell></app-finance-notification-bell>
+      <div class="avatar-btn">F</div>
+    </div>
   </div>
 
   <!-- Loading -->

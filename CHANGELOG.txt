@@ -12333,3 +12333,149 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous frontend build - no data, schema, or auth
   logic changes were made this phase.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-25
+What was changed:
+  Phase 32: updated the Finance side's global header UI across all 7
+  Finance pages — removed unused search bars, added a notification
+  bell (with a mock-data dropdown) before the user avatar. UI only —
+  no backend, routing, API, or business logic changes.
+
+  Key finding during inspection: there is no single shared Finance
+  header/layout component that renders the top bar once — each of the
+  7 Finance page components (Home, Upload, OCR Review, Corrections,
+  Correction Detail, Report, Transactions) defines its own `.header`
+  markup independently (finance-layout.component only wraps the left
+  sidebar + <router-outlet>, confirmed by inspection). "Global header"
+  was therefore treated as "apply the same header pattern consistently
+  to every Finance page," not a single file to edit.
+
+  Also found during inspection: only Finance Home and Finance Upload
+  had a search bar that was genuinely unused (plain <input>, no
+  ngModel, no filter logic — typing into it did nothing). Finance
+  Report's header search bar IS wired to a real filter (`[(ngModel)]
+  ="searchText"`, consumed by `filteredDocuments` in finance-report.
+  component.ts to filter the document table) — since removing it would
+  change actual behavior, it was explicitly left in place, per this
+  task's "do not change business logic" constraint. Corrections/OCR
+  Review/Transactions have their own working search/filter inputs
+  too, but those live inside each page's list-card body, not the
+  header, so they were never in scope and were not touched.
+
+  New shared component:
+    - auditlens-frontend/src/app/finance/shared/finance-notification-
+      bell.component.ts/.html/.css — a small standalone Angular
+      component: a bell button with a danger-colored unread-count
+      badge, and a click-toggled dropdown panel (closes on outside
+      click via a document-level HostListener) listing 3 static mock
+      notifications (frontend-only, no backend notification system
+      exists — exactly as scoped: "Invoice returned for correction",
+      "OCR review required", "Document approved", each with a
+      color-coded icon). Built as ONE shared component (imported by
+      all 7 pages) rather than duplicated per page — unlike this
+      codebase's usual per-component-copy convention for small label
+      lookups, this is a genuinely stateful, identical interactive
+      widget used in 7 places, where a shared component avoids
+      duplicating real behavior (open/close state, outside-click
+      detection) 7 times over.
+
+  Per-page changes (all frontend-only, in auditlens-frontend/src/app/
+  finance/):
+    - home/finance-home.component.*: removed the dead search bar
+      (input + its now-unused CSS), inserted <app-finance-
+      notification-bell> before the existing avatar; the existing
+      "+Upload" button (the one page where upload action is genuinely
+      relevant, being the dashboard entry point) is untouched.
+    - upload/finance-upload.component.*: same — removed the dead
+      search bar, added the bell before the avatar. This page never
+      had an upload button in its header (the real upload action is
+      the dropzone/Browse Files button in the page body), so nothing
+      was added there.
+    - report/finance-report.component.*: KEPT the working search bar
+      exactly as-is; added the bell + a new avatar (this page didn't
+      have one before) alongside it.
+    - corrections/finance-corrections.component.*, ocr-review/
+      finance-ocr-review.component.*, transactions/finance-
+      transactions.component.*: none of these had a search bar or
+      avatar in their header before (only a page-specific action
+      button - Refresh/Refresh/New Transaction Package) - added the
+      bell + a new avatar before that existing button, added the
+      corresponding `.header-right`/`.avatar-btn` CSS (none existed
+      in these 3 files previously).
+    - correction-detail/finance-correction-detail.component.*: this
+      page's header previously had only a Back button + title, no
+      right-hand side at all - added a new `.header-right` with the
+      bell + avatar, plus its CSS.
+    - Every page's `imports: [...]` array gained
+      `FinanceNotificationBellComponent`; no other import changed.
+
+Why:
+  Requested consistency: give every Finance page the same enterprise-
+  style global header (notification bell + user avatar, matching
+  Auditor Home's dark navy / violet accent / thin border / compact
+  language) and remove header search bars that never did anything,
+  without touching the one that actually works or any backend logic.
+
+Confirmed unchanged:
+  - No backend files touched (git diff --stat before committing shows
+    only the 7 page components + the 3 new shared-component files).
+  - No routing changes - app.routes.ts untouched, every existing route
+    path is identical.
+  - No API calls added or changed - the notification bell is 100%
+    static mock data, no HTTP request of any kind.
+  - No business logic changed - every existing (click) handler
+    (goToUpload, loadCorrections, loadDocuments/loadPOList/loadGRList,
+    exportReport, createNewPackage, goBack) and every existing
+    ngModel-bound field (Finance Report's searchText) is untouched.
+  - Every existing action button (Upload, Refresh x2, Export CSV, New
+    Transaction Package, Back) still present and unchanged.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors) - confirms all 7
+    components compile cleanly against the new shared standalone
+    component.
+  - Live-verified in a real browser (Playwright, throwaway
+    finance_executive account, cleaned up afterward) across all 7
+    Finance routes:
+    - Bell + avatar present on every page (bellCount=1, avatarCount=1
+      on all 7); dropdown opens showing exactly 3 mock notification
+      items with badge text "3"; dropdown correctly closes on an
+      outside click (dropdownVisibleAfterOutsideClick=0 on all 7,
+      confirming the HostListener works).
+    - Confirmed the header search bar is gone (searchBarCount=0) on
+      Home, Upload, and Correction Detail (the pages that never had
+      one or had the dead one removed), while still present
+      (searchBarCount=1) on Corrections/OCR Review/Report/Transactions
+      - correctly distinguishing "removed dead header search" from
+      "left working body/report search alone."
+    - Explicitly re-confirmed Finance Report's search input is still
+      present in the DOM with its original placeholder/binding after
+      the change (not just visually, but as a functional element).
+    - Zero console errors, zero page errors across all 7 pages.
+    - Screenshot-verified the dropdown's visual style (dark glass
+      panel, thin border, color-coded icons - red for the returned-
+      invoice item, amber for OCR review, green for approved) matches
+      the requested dark enterprise theme.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser checks clean
+  across all 7 Finance pages (0 console/page errors, bell/dropdown/
+  badge verified functionally on every page, working report search
+  confirmed intact). No backend changes this phase, so the backend
+  test suite was not re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the updated Finance headers take
+     effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data, schema, or backend
+  logic changes were made this phase.

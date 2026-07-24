@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
+import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Draft',
@@ -19,7 +20,7 @@ const STATUS_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-finance-transactions',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, FinanceNotificationBellComponent],
   templateUrl: './finance-transactions.component.html',
   styleUrls: ['./finance-transactions.component.css']
 })
