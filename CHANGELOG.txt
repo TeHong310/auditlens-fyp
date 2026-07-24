@@ -12084,3 +12084,123 @@ Rollback instructions:
   Redeploy the previous frontend build - no data or schema changes
   were made this phase (all fixture rows used for visual verification
   were inserted and deleted entirely within this phase's own testing).
+
+----------------------------------------------------------------------
+
+Date: 2026-07-24
+What was changed:
+  Phase 30: redesigned the Login page into a premium "enterprise AI
+  audit platform" entrance experience. UI only — 3 frontend files
+  touched, no auth logic/API/password handling/roles/routing/backend/
+  database changes.
+
+  Design direction (per explicit feedback after the initial proposal):
+  restrained and enterprise-focused — fewer/smaller particles, lower-
+  intensity glow, no neon/cyberpunk styling. Logo identity (logo.png)
+  itself untouched — only its presentation/animation wrapper changed.
+
+  Frontend (auditlens-frontend/src/app/login/):
+    - login.component.html: added a decorative ambient-background
+      layer (2 slow blobs, 2 faint data-stream lines, 10 small
+      drifting particles rendered via *ngFor, all aria-hidden), wrapped
+      the existing logo <img> with a breathing glow, a slow rotating
+      scan-ring, and a periodic light-sweep overlay; upgraded the
+      feature-list dots to small duotone icons. Every existing form
+      element (email/password inputs, show-password toggle, Forgot
+      password link, Sign In button, Register button, secure-access
+      note, "Create an account" link) kept its exact markup, ngModel
+      bindings, and click handlers unchanged.
+    - login.component.css: full visual rewrite — glassmorphism login
+      card (translucent bg-card + backdrop-filter blur, thin slow-
+      shifting gradient border via a masked pseudo-element, layered
+      shadow, fade+slide-up entrance on mount), a genuine blue-to-
+      purple Sign In button gradient (previously both gradient stops
+      were the same color, so it rendered flat), a gradient-bordered
+      glass Register button, animated input focus glow, and all the
+      left-panel ambient/logo keyframes. Every color reuses existing
+      global tokens from styles.css (--bg-app/--bg-card/--accent/
+      --accent-soft/--accent-glow/etc.) plus one new component-scoped
+      variable (--login-blue: #3B82F6, the same blue already used in
+      this app's chart palettes) for the gradient's second stop - no
+      global stylesheet changes.
+    - login.component.ts: two small, additive-only pieces - a
+      `particles` array (10 items, generated once in ngOnInit, position/
+      size/timing only, purely for the *ngFor - the actual drift motion
+      is CSS @keyframes) and a throttled (one update per animation
+      frame via requestAnimationFrame, written directly through
+      Renderer2 to bypass change detection) mousemove handler that
+      sets two CSS custom properties consumed by the background
+      layer's parallax transform. Both are skipped entirely when
+      prefers-reduced-motion is set. onLogin(), togglePassword(), and
+      goToRegister() are byte-for-byte unchanged.
+
+  All animation is plain CSS (@keyframes/transition) - no animation
+  library was added (none exists in package.json and none was
+  installed). Every continuous-loop animation uses only transform/
+  opacity/background-position (GPU-composited) for smooth 60fps.
+
+Why:
+  Requested transformation of the login page from "a normal SaaS
+  form" into a page that reads as "Secure. Intelligent. Automated.
+  Enterprise-grade." - matching the existing AuditLens dashboard's
+  dark/violet identity - while keeping every existing auth function
+  intact and avoiding a gaming/crypto/neon aesthetic per explicit
+  follow-up feedback.
+
+Confirmed unchanged:
+  - No backend files touched (git diff --stat before committing shows
+    only the 3 frontend files above).
+  - No changes to authentication logic, the login/register API
+    contracts, password handling, roles, or routing - onLogin() still
+    posts the same {email, password} to the same POST /auth/login,
+    stores the same access_token/user in localStorage, and routes by
+    role exactly as before; togglePassword()/goToRegister() unchanged.
+  - Email field, password field, Forgot password link, Sign In button,
+    Register button, secure-access note, and "Create an account" link
+    are all still present and functionally identical.
+  - Logo asset (public/logo.png) itself not modified/replaced - only
+    its size, glow, and animation wrapper changed.
+  - No global styles.css token changes.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - Live-verified in a real browser (Playwright, throwaway account,
+    cleaned up afterward):
+    - Full end-to-end login flow tested (not just visual) - filled
+      email/password, clicked the redesigned Sign In button, confirmed
+      a real POST /auth/login round-trip and correct role-based
+      navigation to /auditor/home, exactly as before.
+    - Zero console errors, zero page errors, zero horizontal overflow.
+    - Verified interaction states via screenshot: input focus glow,
+      button hover elevation/gradient shift.
+    - Verified prefers-reduced-motion: reduce (Playwright's
+      reducedMotion context emulation) - found and fixed a real bug
+      where the logo's light-sweep overlay was left visibly frozen
+      mid-sweep instead of hidden, because its static "off-canvas"
+      transform fallback didn't take effect once its animation was
+      disabled; fixed by hiding the sweep element outright under
+      reduced motion instead of relying on that fallback. Re-verified
+      clean afterward - logo now sits calm with no stray artifact.
+    - Verified a 390px mobile viewport - existing responsive
+      breakpoint still stacks the layout correctly, no overflow, all
+      text legible, card and features list scale down cleanly.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser checks clean
+  (0 console/page errors, login flow works end-to-end, reduced-motion
+  and mobile both verified). No backend changes this phase, so the
+  backend test suite was not re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the redesigned login page takes
+     effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data, schema, or auth
+  logic changes were made this phase.
