@@ -11926,3 +11926,161 @@ Rollback instructions:
   Redeploy the previous frontend build - no data or schema changes
   were made this phase (all fixture rows used for visual verification
   were inserted and deleted entirely within this phase's own testing).
+
+----------------------------------------------------------------------
+
+Date: 2026-07-24
+What was changed:
+  Phase 29: redesigned the Auditor Authenticity page (list page — not
+  the detail page) into an "Authenticity Review Workspace" matching
+  Auditor Home's enterprise dashboard style. UI only — 3 frontend files
+  touched, no backend/API/database/OCR/AI/authenticity-engine/anomaly/
+  auth logic changed.
+
+  Key finding during inspection: GET /authenticity already returns,
+  on every row, a richer authentication_status ('PASS'/'REVIEW'/
+  'FAIL'), authentication_score (0-100), authentication_summary (a
+  short one-line sentence), and risk_level ('LOW'/'MEDIUM'/'HIGH') —
+  all computed server-side by helpers/auth_rules.py's
+  compute_authentication() (an existing, already-wired-up module) —
+  but the frontend list page had never consumed any of these fields,
+  still reading only the older binary authenticity_status DB column
+  ('passed'/'warning'). This redesign surfaces those existing-but-
+  unused fields instead of adding anything new server-side.
+
+  Frontend (auditlens-frontend/src/app/auditor/authenticity/):
+    - auditor-authenticity.component.css: rewritten to mirror Auditor
+      Home's card language — stat-card icon-wrap + badge KPI cards,
+      chart-card + radial-ring conic-gradient rings (same technique as
+      Auditor Home's Status Breakdown), and a new compact check-card
+      style (single-row header + one flex row for evidence checklist/
+      risk badge/AI summary/actions) replacing the old long report-
+      style card.
+    - auditor-authenticity.component.html:
+      1. Added 4 KPI cards (Documents Checked, Passed, Review
+         Required, Risk Detected) with icon/count/status
+         color/percentage, styled like Auditor Home's stats-row.
+      2. Added 2 compact overview charts: "Authenticity Outcome" (3
+         mini radial rings — Passed/Review Required/Failed, reusing
+         the exact conic-gradient technique already established on
+         Auditor Home/Finance Home) and "Missing Evidence Analysis"
+         (horizontal bar — Missing Signature/Logo/Company Chop/
+         Company Name, counted from the existing has_signature/
+         has_company_logo/has_company_chop/has_company_name booleans
+         every row already had).
+      3. Redesigned each document card into a compact review-queue
+         row: header (document number, vendor, type chip, time,
+         status badge) + one body row containing the Evidence
+         Checklist, a Risk Indicator badge (Low/Medium/High, from the
+         existing risk_level field), a short AI Assessment line (the
+         new authentication_summary field, replacing the old raw
+         ai_notes paragraph), and 2 action buttons.
+      4. Status filter chips upgraded from the old 2-way passed/
+         warning split to the richer 3-way PASS/REVIEW/FAIL split, so
+         "Risk Detected" is filterable as its own category — the
+         document-type filter (Invoice/PO/GR) is unchanged.
+    - auditor-authenticity.component.ts: added pct()/ringGradient()
+      helpers (same pattern as Auditor Home/Finance Home), a
+      missingEvidenceCounts()/renderEvidenceChart() pair for the new
+      bar chart, statusBadgeClass()/statusLabel()/riskBadgeClass()/
+      riskLabel() for the new 3-way status and risk badges, and
+      viewRawDocument() — an "View Document" action that opens the
+      original uploaded file directly, reusing the EXACT authenticated
+      blob-fetch pattern already used by auditor-record-detail.
+      component.ts's openTransactionDocument() (GET /documents/<id>/
+      file, GET /documents/po/<po_id>/file, GET /documents/gr/<gr_id>/
+      file — all existing endpoints, no new route). The existing
+      evidenceRows()/getAuthenticityEvidenceRows() shared util (used
+      identically by the Authenticity Detail page) still powers the
+      Evidence Checklist — deliberately NOT collapsed into one fixed
+      4-item list, since the shared util is document-type-aware (a
+      PO/GR's signature is correctly shown as "not applicable" rather
+      than a false-negative failure) and doing so would have
+      reintroduced the exact bug that shared util was built to fix.
+      Removed warningReason()/uploadSourceIcon()/uploadSourceLabel()/
+      rowIconClass() — each was only used by the old template sections
+      (the raw ai_notes paragraph box, the upload-source meta row, the
+      old badge-pill evidence display) this redesign replaced; the
+      underlying data these read is untouched and still in every API
+      response, just no longer surfaced as a page-cluttering display
+      row on the now-compact card.
+
+Why:
+  Requested transformation of the authenticity list from an "AI text
+  report" layout into a compact, decision-focused enterprise review
+  workspace matching Auditor Home's dashboard style — KPI cards, an
+  outcome/evidence overview, and much shorter per-document cards so an
+  auditor can see many more documents per screen.
+
+Confirmed unchanged:
+  - No backend files touched (git diff --stat before committing shows
+    only the 3 frontend files above).
+  - No new backend endpoint, no changes to routes/authenticity.py,
+    helpers/authenticity_check.py, helpers/auth_rules.py, the Claude/
+    Gemini authenticity engine, or the authenticity_checks schema —
+    every field this redesign surfaces (authentication_status/_score/
+    _summary, risk_level, has_company_*/has_signature) was already
+    being computed and returned by the existing GET /authenticity
+    response; this phase only started reading fields the frontend had
+    never used before.
+  - Authenticity Detail page (auditor-authenticity-detail.component.*)
+    untouched — "View Evidence" still navigates to it exactly as the
+    old "View Document" action already did.
+  - The shared authenticity-evidence.util.ts (evidence interpretation
+    logic used by both the list and detail pages) is untouched.
+  - Filters, document viewing, and evidence details are all still
+    present — the status filter now offers a 3rd, more accurate option
+    (Risk Detected) instead of folding FAIL into "Review Required".
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - Live-verified in a real browser (Playwright, 1440x900 viewport,
+    throwaway auditor account, cleaned up afterward) against 5
+    deliberately-inserted, fully-disposable fixture authenticity
+    checks spanning all 3 outcomes and all 3 document types:
+    - Zero console errors, zero page errors throughout.
+    - Directly inspected the live component's computed values (via
+      Angular's dev debug API) against hand-calculated expectations —
+      passedCount=2, reviewCount=2, failCount=1, and each fixture
+      document's authentication_status/score/summary matched exactly
+      (e.g. an invoice missing its required Company Name signal
+      correctly scored 37/100 and landed on FAIL/HIGH risk).
+    - Verified the "View Document" button end-to-end: first confirmed
+      it correctly surfaces a 404 (with a graceful in-page error
+      message, not a silent failure) when a fixture row has no real
+      file bytes, then added real minimal PDF bytes to one fixture row
+      and confirmed a 200 response and successful file open - proving
+      the reused blob-fetch pattern works, not just that the button is
+      visually present.
+    - Verified "View Evidence" still navigates to the existing
+      Authenticity Detail route unchanged.
+    - Screenshot confirmed all 5 fixture documents (with full KPI
+      cards, both charts, and both filter rows above them) fit in a
+      single 900px-tall viewport with room to spare - a dramatic
+      compactness improvement over the old ~250-300px-per-card layout.
+    - All fixture rows (5 documents, 1 purchase_order, 1
+      goods_receipt, 1 extracted_fields per invoice, 5 authenticity_
+      checks, 1 throwaway user) deleted afterward and verified gone
+      from the dev DB.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser check clean
+  (0 console/page errors, all computed values verified numerically
+  correct, View Document/View Evidence both confirmed working end-to-
+  end). No backend changes this phase, so the backend test suite was
+  not re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the redesigned Authenticity page
+     takes effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data or schema changes
+  were made this phase (all fixture rows used for visual verification
+  were inserted and deleted entirely within this phase's own testing).

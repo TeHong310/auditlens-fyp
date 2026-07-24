@@ -2,32 +2,118 @@
 
   <!-- Header -->
   <div class="header">
-    <h1 class="page-title"><i class="ph-duotone ph-shield-check"></i> Authenticity Lens</h1>
+    <h1 class="page-title"><i class="ph-duotone ph-shield-check"></i> Authenticity Review Workspace</h1>
     <p class="page-subtitle">AI-powered visual signal detection • {{ checks.length }} documents checked</p>
   </div>
 
-  <!-- Enterprise V3 Phase 7 (Bug 3/FIX 2) — Summary stats replace the old
-       dominant "Transactions" section: transaction context now lives as
-       a secondary line inside each document card below, never as the
-       page's leading section. Loaded in the SAME call as the document
-       list (GET /authenticity), so there is no separate loading stage
-       and no layout jump. -->
+  <!-- KPI Cards -->
+  <div class="stats-row">
+    <div class="stat-card" style="--card-color:var(--accent);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-file-magnifying-glass" style="font-size:18px;"></i></div>
+      <div class="stat-info">
+        <p class="stat-label">Documents Checked</p>
+        <p class="stat-value" style="color:var(--accent)">{{ checks.length }}</p>
+        <p class="stat-sub">Total authenticity checks</p>
+      </div>
+    </div>
+
+    <div class="stat-card" style="--card-color:var(--success);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-check-circle" style="font-size:18px;"></i></div>
+      <div class="stat-info">
+        <div class="stat-label-row">
+          <p class="stat-label">Passed</p>
+          <span class="stat-badge badge-safe">Safe</span>
+        </div>
+        <p class="stat-value" style="color:var(--success)">{{ passedCount }}</p>
+        <p class="stat-sub">{{ pct(passedCount) }}% of checks</p>
+      </div>
+    </div>
+
+    <div class="stat-card" style="--card-color:var(--warning);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-warning" style="font-size:18px;"></i></div>
+      <div class="stat-info">
+        <div class="stat-label-row">
+          <p class="stat-label">Review Required</p>
+          <span class="stat-badge badge-action">Action</span>
+        </div>
+        <p class="stat-value" style="color:var(--warning)">{{ reviewCount }}</p>
+        <p class="stat-sub">{{ pct(reviewCount) }}% of checks</p>
+      </div>
+    </div>
+
+    <div class="stat-card" style="--card-color:var(--danger);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-shield-warning" style="font-size:18px;"></i></div>
+      <div class="stat-info">
+        <div class="stat-label-row">
+          <p class="stat-label">Risk Detected</p>
+          <span class="stat-badge" [ngClass]="failCount > 0 ? 'badge-risk' : 'badge-safe'">{{ failCount > 0 ? 'Risk' : 'Safe' }}</span>
+        </div>
+        <p class="stat-value" style="color:var(--danger)">{{ failCount }}</p>
+        <p class="stat-sub">{{ pct(failCount) }}% of checks</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Overview charts -->
+  <div class="charts-row">
+    <div class="chart-card">
+      <p class="chart-title">Authenticity Outcome</p>
+      <p class="chart-subtitle">Passed / Review Required / Failed</p>
+      <div class="chart-body-small">
+        <div class="radial-row" *ngIf="checks.length > 0">
+          <div class="radial-item">
+            <div class="radial-ring" [style.background]="ringGradient(passedCount, checks.length, '#34D399')">
+              <div class="radial-ring-hole"><span class="radial-pct">{{ pct(passedCount) }}%</span></div>
+            </div>
+            <p class="radial-caption"><span class="radial-label">Passed</span><span class="radial-count">{{ passedCount }}</span></p>
+          </div>
+          <div class="radial-item">
+            <div class="radial-ring" [style.background]="ringGradient(reviewCount, checks.length, '#FBBF24')">
+              <div class="radial-ring-hole"><span class="radial-pct">{{ pct(reviewCount) }}%</span></div>
+            </div>
+            <p class="radial-caption"><span class="radial-label">Review</span><span class="radial-count">{{ reviewCount }}</span></p>
+          </div>
+          <div class="radial-item">
+            <div class="radial-ring" [style.background]="ringGradient(failCount, checks.length, '#F43F5E')">
+              <div class="radial-ring-hole"><span class="radial-pct">{{ pct(failCount) }}%</span></div>
+            </div>
+            <p class="radial-caption"><span class="radial-label">Failed</span><span class="radial-count">{{ failCount }}</span></p>
+          </div>
+        </div>
+        <p class="chart-empty-note" *ngIf="checks.length === 0">No checks yet</p>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <p class="chart-title">Missing Evidence Analysis</p>
+      <p class="chart-subtitle">Documents lacking each visual signal</p>
+      <div class="chart-body-small">
+        <canvas #evidenceChart></canvas>
+        <p class="chart-empty-note" *ngIf="checks.length === 0">No checks yet</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Filter: authenticity outcome -->
   <div class="filter-row">
     <button class="filter-chip" [class.active]="activeFilter === 'all'" (click)="setFilter('all')">
-      Documents Checked <span class="chip-count">{{ checks.length }}</span>
+      All <span class="chip-count">{{ checks.length }}</span>
     </button>
-    <button class="filter-chip" [class.active]="activeFilter === 'passed'" (click)="setFilter('passed')">
+    <button class="filter-chip" [class.active]="activeFilter === 'PASS'" (click)="setFilter('PASS')">
       <i class="ph-duotone ph-check-circle" style="color:var(--success)"></i> Passed <span class="chip-count">{{ passedCount }}</span>
     </button>
-    <button class="filter-chip" [class.active]="activeFilter === 'warning'" (click)="setFilter('warning')">
-      <i class="ph-duotone ph-warning" style="color:var(--warning)"></i> Review Required <span class="chip-count">{{ warningCount }}</span>
+    <button class="filter-chip" [class.active]="activeFilter === 'REVIEW'" (click)="setFilter('REVIEW')">
+      <i class="ph-duotone ph-warning" style="color:var(--warning)"></i> Review Required <span class="chip-count">{{ reviewCount }}</span>
+    </button>
+    <button class="filter-chip" [class.active]="activeFilter === 'FAIL'" (click)="setFilter('FAIL')">
+      <i class="ph-duotone ph-shield-warning" style="color:var(--danger)"></i> Risk Detected <span class="chip-count">{{ failCount }}</span>
     </button>
   </div>
 
   <!-- Filter: document type -->
   <div class="filter-row">
     <button class="filter-chip" [class.active]="activeDocTypeFilter === 'all'" (click)="setDocTypeFilter('all')">
-      All <span class="chip-count">{{ checks.length }}</span>
+      All Types <span class="chip-count">{{ checks.length }}</span>
     </button>
     <button class="filter-chip" [class.active]="activeDocTypeFilter === 'invoice'" (click)="setDocTypeFilter('invoice')">
       Invoice <span class="chip-count">{{ invoiceCount }}</span>
@@ -42,10 +128,9 @@
 
   <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
 
-  <!-- Loading skeleton — the ONLY loading state on this page now (one
-       request, one render). -->
+  <!-- Loading skeleton -->
   <div class="skeleton-wrap" *ngIf="isLoading">
-    <div class="skeleton-card" *ngFor="let i of [1,2]"></div>
+    <div class="skeleton-card" *ngFor="let i of [1,2,3]"></div>
   </div>
 
   <!-- Empty state -->
@@ -54,56 +139,45 @@
     <p class="empty-text">No authenticity checks to show.</p>
   </div>
 
-  <!-- Document Review List -->
+  <!-- Compact document review queue -->
   <div class="check-list" *ngIf="!isLoading">
-    <div class="check-card" [ngClass]="c.authenticity_status === 'warning' ? 'card-warning' : 'card-passed'" *ngFor="let c of filteredChecks" (click)="viewDocument(c)">
+    <div class="check-card" [ngClass]="statusBadgeClass(c.authentication_status)" *ngFor="let c of filteredChecks" (click)="viewDocument(c)">
 
-      <div class="card-top">
-        <span class="card-icon">
-          <i class="ph-duotone" [ngClass]="c.authenticity_status === 'warning' ? 'ph-warning' : 'ph-shield-check'"
-             [style.color]="c.authenticity_status === 'warning' ? 'var(--warning)' : 'var(--success)'"></i>
+      <div class="check-header">
+        <span class="check-doc-no">{{ c.document_number || 'Unknown Document' }}</span>
+        <span class="check-vendor">{{ c.vendor_name || 'Unknown vendor' }}</span>
+        <span class="check-type-chip">{{ docTypeLabel(c.document_type) }}</span>
+        <span class="check-time">{{ relativeTime(c.created_at) }}</span>
+        <span class="status-pill" [ngClass]="statusBadgeClass(c.authentication_status)">
+          {{ statusLabel(c.authentication_status) }}
         </span>
-        <span class="card-doc-no">{{ c.document_number || 'Unknown Document' }}</span>
-        <span class="status-pill" [ngClass]="c.authenticity_status === 'warning' ? 'status-review' : 'status-pass'">
-          {{ c.authenticity_status === 'warning' ? 'Review Required' : 'Passed' }}
-        </span>
-        <span class="card-time">{{ relativeTime(c.created_at) }}</span>
       </div>
 
-      <!-- Secondary context (Bug 3 / FIX 2) — only when this document
-           belongs to a Finance Transaction Package; absent entirely for
-           a standalone/legacy document. -->
-      <p class="card-transaction-line" *ngIf="c.transaction_context as txn">
-        <i class="ph-duotone ph-package"></i> Transaction: <strong>{{ txn.package_name }}</strong>
+      <p class="check-transaction-line" *ngIf="c.transaction_context as txn">
+        <i class="ph-duotone ph-package"></i> {{ txn.package_name }}
       </p>
 
-      <p class="card-vendor">Vendor: {{ c.vendor_name || 'Unknown vendor' }}</p>
-
-      <div class="meta-row">
-        <span class="meta-item">Document Type: <strong>{{ docTypeLabel(c.document_type) }}</strong></span>
-        <span class="meta-item">Upload Source: <i class="ph-duotone" [ngClass]="uploadSourceIcon(c.upload_source)"></i> {{ uploadSourceLabel(c.upload_source) }}</span>
-      </div>
-
-      <div class="signals-box">
-        <p class="section-label">Detected Signals:</p>
-        <div class="badge-row">
-          <span class="badge" [ngClass]="rowIconClass(row.status)" *ngFor="let row of evidenceRows(c)">
-            <i class="ph-duotone" [ngClass]="rowIcon(row.status)"></i> {{ row.label }}: {{ row.statusLabel }}
-          </span>
+      <div class="check-body">
+        <div class="evidence-checklist">
+          <div class="evidence-row" [ngClass]="'ev-' + row.status" *ngFor="let row of evidenceRows(c)">
+            <i class="ph-duotone" [ngClass]="rowIcon(row.status)"></i> <span>{{ row.label }}</span>
+          </div>
         </div>
-      </div>
 
-      <div class="warning-box" *ngIf="c.authenticity_status === 'warning'">
-        <i class="ph-duotone ph-warning"></i> Warning: {{ warningReason(c) }}
-      </div>
+        <div class="check-risk-wrap">
+          <span class="check-risk-label">Risk</span>
+          <span class="risk-pill" [ngClass]="riskBadgeClass(c.risk_level)">{{ riskLabel(c.risk_level) }}</span>
+        </div>
 
-      <div class="ai-box" *ngIf="c.ai_notes">
-        <p class="section-label"><i class="ph-duotone ph-robot"></i> AI Notes</p>
-        <p class="ai-text">"{{ c.ai_notes }}"</p>
-      </div>
+        <div class="check-summary-wrap">
+          <p class="check-summary-label"><i class="ph-duotone ph-robot"></i> AI Assessment</p>
+          <p class="check-summary-text">{{ c.authentication_summary || 'No assessment available.' }}</p>
+        </div>
 
-      <div class="card-actions">
-        <button class="btn-view" (click)="viewDocument(c); $event.stopPropagation()">View Document →</button>
+        <div class="check-actions">
+          <button class="btn-view-evidence" (click)="viewDocument(c); $event.stopPropagation()">View Evidence</button>
+          <button class="btn-view-doc" (click)="viewRawDocument(c, $event)">View Document</button>
+        </div>
       </div>
 
     </div>
