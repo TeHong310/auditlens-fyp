@@ -1,14 +1,9 @@
 .page-wrapper {
-  --mx: 0;
-  --my: 0;
-  --login-blue: #3B82F6;
   display: flex;
   min-height: 100vh;
   background: var(--bg-app);
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
 }
-
-/* ══════════════════ LEFT PANEL ══════════════════ */
 
 .left-panel {
   flex: 1;
@@ -20,92 +15,31 @@
   overflow: hidden;
 }
 
-/* ── Ambient background — restrained: 2 slow blobs, 2 faint data
-   streams, ~10 small drifting particles. Everything here is
-   decorative, GPU-composited (transform/opacity only), and disabled
-   under prefers-reduced-motion below. ── */
-.ambient-bg {
+.left-panel::before {
+  content: '';
   position: absolute;
-  inset: 0;
-  overflow: hidden;
+  top: -80px;
+  right: -80px;
+  width: 320px;
+  height: 320px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
   pointer-events: none;
-  z-index: 0;
-  transform: translate(calc(var(--mx) * 6px), calc(var(--my) * 6px));
-  transition: transform 0.4s ease-out;
 }
 
-.glow-blob {
+.left-panel::after {
+  content: '';
   position: absolute;
+  bottom: -60px;
+  left: -60px;
+  width: 240px;
+  height: 240px;
   border-radius: 50%;
-  filter: blur(60px);
-  opacity: 0.5;
-  animation: blobDrift 22s ease-in-out infinite;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  pointer-events: none;
 }
 
-.blob-a {
-  top: -100px;
-  right: -100px;
-  width: 340px;
-  height: 340px;
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
-.blob-b {
-  bottom: -80px;
-  left: -80px;
-  width: 260px;
-  height: 260px;
-  background: color-mix(in srgb, var(--login-blue) 16%, transparent);
-  animation-duration: 26s;
-  animation-delay: -8s;
-}
-
-@keyframes blobDrift {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  50%      { transform: translate(18px, -14px) scale(1.06); }
-}
-
-.data-stream {
-  position: absolute;
-  width: 160%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--login-blue) 35%, transparent), transparent);
-  opacity: 0.35;
-  animation: streamMove 12s linear infinite;
-}
-
-.stream-a { top: 28%; left: -60%; transform: rotate(-18deg); }
-.stream-b { top: 68%; left: -60%; transform: rotate(-18deg); animation-duration: 16s; animation-delay: -6s; }
-
-@keyframes streamMove {
-  0%   { transform: rotate(-18deg) translateX(-8%); opacity: 0; }
-  10%  { opacity: 0.35; }
-  90%  { opacity: 0.35; }
-  100% { transform: rotate(-18deg) translateX(8%); opacity: 0; }
-}
-
-.particle {
-  position: absolute;
-  border-radius: 50%;
-  background: var(--accent-soft);
-  opacity: 0;
-  animation-name: particleDrift;
-  animation-timing-function: ease-in-out;
-  animation-iteration-count: infinite;
-}
-
-@keyframes particleDrift {
-  0%   { transform: translateY(0); opacity: 0; }
-  15%  { opacity: 0.4; }
-  85%  { opacity: 0.4; }
-  100% { transform: translateY(-36px); opacity: 0; }
-}
-
-.brand-header {
-  position: relative;
-  z-index: 1;
-  animation: fadeSlideIn 0.7s ease-out both;
-}
+.brand-header { z-index: 1; }
 
 .brand-title {
   font-size: 32px;
@@ -121,126 +55,43 @@
   margin: 0;
 }
 
-/* ── Logo presentation ── */
 .logo-container {
-  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   flex: 1;
   z-index: 1;
-  animation: fadeSlideIn 0.7s ease-out 0.12s both;
-}
-
-.logo-glow {
-  position: absolute;
-  width: 380px;
-  height: 380px;
-  border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 22%, transparent) 0%, transparent 70%);
-  animation: breathe 5s ease-in-out infinite;
-  pointer-events: none;
-}
-
-@keyframes breathe {
-  0%, 100% { opacity: 0.55; transform: scale(1); }
-  50%      { opacity: 0.85; transform: scale(1.07); }
-}
-
-.logo-scan-ring {
-  position: absolute;
-  width: 310px;
-  height: 310px;
-  border-radius: 50%;
-  border: 1px solid transparent;
-  border-top-color: color-mix(in srgb, var(--login-blue) 45%, transparent);
-  border-right-color: color-mix(in srgb, var(--accent-soft) 25%, transparent);
-  animation: scanRotate 14s linear infinite;
-  pointer-events: none;
-}
-
-@keyframes scanRotate {
-  to { transform: rotate(360deg); }
-}
-
-.logo-icon {
-  position: relative;
-  z-index: 1;
-  animation: logoFloat 6s ease-in-out infinite;
-  overflow: hidden;
-  border-radius: 24px;
-}
-
-@keyframes logoFloat {
-  0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-9px); }
 }
 
 .real-logo {
-  display: block;
-  width: 280px;
-  height: 280px;
+  width: 520px;
+  height: 520px;
   object-fit: contain;
 }
 
-/* Slim diagonal light sweep passing across the logo, suggesting an
-   AI scan pass — brief, low-opacity, and spaced out by the long
-   animation duration rather than sweeping continuously. */
-.logo-sweep {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(115deg,
-    transparent 40%,
-    color-mix(in srgb, var(--text-primary) 22%, transparent) 48%,
-    color-mix(in srgb, var(--login-blue) 30%, transparent) 52%,
-    transparent 60%);
-  transform: translateX(-120%);
-  animation: sweep 6s ease-in-out infinite;
-}
-
-@keyframes sweep {
-  0%, 55%   { transform: translateX(-120%); }
-  75%       { transform: translateX(120%); }
-  100%      { transform: translateX(120%); }
-}
-
 .features-list {
-  position: relative;
-  z-index: 1;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  animation: fadeSlideIn 0.7s ease-out 0.24s both;
+  gap: 12px;
+  z-index: 1;
 }
 
 .feature-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   font-size: 13.5px;
   color: var(--text-secondary);
 }
 
-.feature-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: var(--accent-bg);
-  color: var(--accent-soft);
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
   flex-shrink: 0;
-  font-size: 14px;
 }
-
-@keyframes fadeSlideIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-/* ══════════════════ RIGHT PANEL ══════════════════ */
 
 .right-panel {
   display: flex;
@@ -248,50 +99,21 @@
   justify-content: center;
   padding: 48px 56px;
   flex: 1;
-  position: relative;
-  z-index: 1;
 }
 
 .login-card {
-  position: relative;
-  background: color-mix(in srgb, var(--bg-card) 78%, transparent);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  border: 1px solid var(--border);
-  border-radius: 22px;
+  background: var(--bg-card);
+  border-radius: 20px;
   padding: 44px 40px;
   width: 100%;
   max-width: 400px;
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.35), 0 2px 20px color-mix(in srgb, var(--accent) 10%, transparent);
-  animation: cardEnter 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+  box-shadow: 0 4px 32px color-mix(in srgb, var(--accent) 8%, transparent);
+  transition: transform .28s cubic-bezier(.34,1.2,.64,1), box-shadow .28s ease;
 }
 
-@keyframes cardEnter {
-  from { opacity: 0; transform: translateY(20px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-/* Slow, low-opacity gradient border glow — a thin ring only (masked to
-   exclude the card's own fill), not a bright rotating rainbow. */
-.login-card::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(120deg, var(--accent), var(--login-blue), var(--accent-soft), var(--accent));
-  background-size: 220% 220%;
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  opacity: 0.45;
-  animation: borderGlow 10s ease infinite;
-  pointer-events: none;
-}
-
-@keyframes borderGlow {
-  0%, 100% { background-position: 0% 50%; }
-  50%      { background-position: 100% 50%; }
+.login-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 10px 28px var(--accent-glow), 0 0 0 1px var(--border-hover);
 }
 
 .card-header {
@@ -361,7 +183,6 @@
   left: 14px;
   pointer-events: none;
   flex-shrink: 0;
-  transition: color 0.2s ease;
 }
 
 .form-input {
@@ -371,9 +192,9 @@
   border-radius: 10px;
   font-size: 14px;
   color: var(--text-primary);
-  background: color-mix(in srgb, var(--bg-hover) 85%, transparent);
+  background: var(--bg-hover);
   outline: none;
-  transition: border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+  transition: border-color 0.2s, box-shadow 0.2s;
   box-sizing: border-box;
 }
 
@@ -381,13 +202,8 @@
 
 .form-input:focus {
   border-color: var(--accent-soft);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent), 0 0 16px color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
   background: var(--bg-card);
-}
-
-.form-input:focus + .eye-btn i,
-.input-wrapper:focus-within .input-icon {
-  color: var(--accent-soft) !important;
 }
 
 .eye-btn {
@@ -399,16 +215,12 @@
   padding: 4px;
   display: flex;
   align-items: center;
-  transition: transform 0.15s ease;
 }
 
-.eye-btn:hover { transform: scale(1.08); }
-
-/* ── Buttons ── */
 .btn-signin {
   width: 100%;
   padding: 13px;
-  background: linear-gradient(135deg, var(--login-blue), var(--accent));
+  background: linear-gradient(135deg, var(--accent), var(--accent));
   color: var(--text-primary);
   border: none;
   border-radius: 10px;
@@ -416,22 +228,16 @@
   font-weight: 600;
   cursor: pointer;
   margin-bottom: 12px;
-  transition: box-shadow 0.25s ease, transform 0.15s ease, filter 0.25s ease;
+  transition: opacity 0.2s, transform 0.1s;
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 46px;
-  box-shadow: 0 4px 18px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .btn-signin:hover:not(:disabled) {
-  filter: brightness(1.08);
-  transform: translateY(-2px);
-  box-shadow: 0 8px 26px color-mix(in srgb, var(--accent) 38%, transparent);
-}
-
-.btn-signin:active:not(:disabled) {
-  transform: translateY(0);
+  opacity: 0.92;
+  transform: translateY(-1px);
 }
 
 .btn-signin:disabled {
@@ -442,36 +248,18 @@
 .btn-register {
   width: 100%;
   padding: 12px;
-  background: color-mix(in srgb, var(--bg-card) 60%, transparent);
+  background: var(--bg-card);
   color: var(--accent-soft);
-  border: 1.5px solid transparent;
-  background-clip: padding-box;
+  border: 1.5px solid var(--accent);
   border-radius: 10px;
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
   margin-bottom: 20px;
-  position: relative;
-  transition: background 0.2s ease, box-shadow 0.2s ease;
+  transition: background 0.2s;
 }
 
-.btn-register::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1.5px;
-  background: linear-gradient(135deg, var(--accent), var(--login-blue));
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
-}
-
-.btn-register:hover {
-  background: var(--accent-bg);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 20%, transparent);
-}
+.btn-register:hover { background: var(--accent-bg); }
 
 .secure-note {
   display: flex;
@@ -509,40 +297,10 @@
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ══════════════════ ACCESSIBILITY ══════════════════ */
-@media (prefers-reduced-motion: reduce) {
-  .ambient-bg,
-  .glow-blob,
-  .data-stream,
-  .particle,
-  .logo-scan-ring,
-  .logo-sweep,
-  .logo-icon,
-  .logo-glow,
-  .brand-header,
-  .logo-container,
-  .features-list,
-  .login-card,
-  .login-card::before {
-    animation: none !important;
-    transition: none !important;
-  }
-  .ambient-bg { transform: none !important; }
-  .particle { opacity: 0.3; }
-  /* The sweep's resting position relies on the animation to hold it
-     off-canvas (transform: translateX(-120%)) — with the animation
-     disabled above, hide it outright instead of trusting that static
-     fallback, so no stray bright band is left sitting on the logo. */
-  .logo-sweep { display: none !important; }
-}
-
-/* ══════════════════ RESPONSIVE ══════════════════ */
 @media (max-width: 768px) {
   .page-wrapper { flex-direction: column; }
   .left-panel { padding: 32px 24px; min-height: auto; }
   .right-panel { padding: 24px 20px 48px; }
   .login-card { padding: 32px 24px; }
-  .real-logo { width: 150px; height: 150px; }
-  .logo-glow { width: 220px; height: 220px; }
-  .logo-scan-ring { width: 180px; height: 180px; }
+  .real-logo { width: 160px; height: 160px; }
 }

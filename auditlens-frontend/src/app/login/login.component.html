@@ -1,52 +1,28 @@
-<div class="page-wrapper" #pageWrapper (mousemove)="onMouseMove($event)" (mouseleave)="onMouseLeave()">
+<div class="page-wrapper">
 
   <div class="left-panel">
-
-    <!-- Ambient background — restrained: 2 slow blobs, 2 faint data
-         streams, a handful of small drifting particles. Decorative
-         only, hidden from assistive tech. -->
-    <div class="ambient-bg" aria-hidden="true">
-      <div class="glow-blob blob-a"></div>
-      <div class="glow-blob blob-b"></div>
-      <div class="data-stream stream-a"></div>
-      <div class="data-stream stream-b"></div>
-      <span
-        class="particle"
-        *ngFor="let p of particles"
-        [style.left.%]="p.left"
-        [style.top.%]="p.top"
-        [style.width.px]="p.size"
-        [style.height.px]="p.size"
-        [style.animation-duration.s]="p.duration"
-        [style.animation-delay.s]="p.delay"
-      ></span>
-    </div>
-
     <div class="brand-header">
       <h1 class="brand-title">AuditLens</h1>
       <p class="brand-subtitle">Intelligent Audit Verification</p>
     </div>
 
     <div class="logo-container">
-      <div class="logo-glow"></div>
-      <div class="logo-scan-ring" aria-hidden="true"></div>
       <div class="logo-icon">
         <img src="logo.png" alt="AuditLens Logo" class="real-logo" />
-        <span class="logo-sweep" aria-hidden="true"></span>
       </div>
     </div>
 
     <div class="features-list">
       <div class="feature-item">
-        <span class="feature-icon"><i class="ph-duotone ph-magnifying-glass"></i></span>
+        <span class="dot"></span>
         <span>AI-Powered OCR &amp; Document Analysis</span>
       </div>
       <div class="feature-item">
-        <span class="feature-icon"><i class="ph-duotone ph-chart-line-up"></i></span>
+        <span class="dot"></span>
         <span>Real-Time Financial Verification</span>
       </div>
       <div class="feature-item">
-        <span class="feature-icon"><i class="ph-duotone ph-shield-check"></i></span>
+        <span class="dot"></span>
         <span>Enterprise-Grade Security</span>
       </div>
     </div>
