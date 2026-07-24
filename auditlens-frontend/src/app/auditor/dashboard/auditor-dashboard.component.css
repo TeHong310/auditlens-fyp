@@ -168,9 +168,16 @@
   flex: 0 0 auto;
 }
 
-.chart-body-small { height: 80px; }
+.chart-body-small { height: 108px; }
 
 .donut-body { display: flex; align-items: center; justify-content: center; }
+
+/* Secondary row (Status Breakdown / Authenticity Outcomes / Exception
+   Categories / Risk Distribution) only — a bit more breathing room
+   around each card now that its chart body is taller. Scoped so the
+   primary row (Audit Trend / Review Volume) is untouched. */
+.charts-row-secondary .chart-card { padding: 12px 14px; }
+.charts-row-secondary .chart-subtitle { margin-bottom: 6px; }
 
 /* ── Status Breakdown — 3 mini radial progress rings (pure CSS
    conic-gradient, no chart library) ── */
@@ -185,12 +192,12 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
 .radial-ring {
-  width: 40px;
-  height: 40px;
+  width: 54px;
+  height: 54px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -199,8 +206,8 @@
 }
 
 .radial-ring-hole {
-  width: 27px;
-  height: 27px;
+  width: 37px;
+  height: 37px;
   border-radius: 50%;
   background: var(--bg-card);
   display: flex;
@@ -209,7 +216,7 @@
 }
 
 .radial-pct {
-  font-size: 8px;
+  font-size: 9.5px;
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -222,7 +229,7 @@
 }
 
 .radial-label {
-  font-size: 8.5px;
+  font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--text-muted);
@@ -231,7 +238,7 @@
 }
 
 .radial-count {
-  font-size: 11px;
+  font-size: 12.5px;
   font-weight: 700;
   color: var(--text-primary);
 }

@@ -481,7 +481,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         cutout: '65%',
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { position: 'bottom' as const, labels: { boxWidth: 7, padding: 4, font: { size: 9.5 } } } }
+        plugins: { legend: { position: 'bottom' as const, labels: { boxWidth: 8, padding: 6, font: { size: 10.5 } } } }
       }
     });
   }
@@ -513,7 +513,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         plugins: { legend: { display: false } },
         scales: {
           x: { display: false, beginAtZero: true },
-          y: { ticks: { font: { size: 9.5 }, color: '#E6E7EE' }, grid: { display: false } }
+          y: { ticks: { font: { size: 10.5 }, color: '#E6E7EE' }, grid: { display: false } }
         }
       }
     });
@@ -548,7 +548,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { display: true, position: 'bottom' as const, labels: { boxWidth: 7, padding: 4, font: { size: 9 } } }
+          legend: { display: true, position: 'bottom' as const, labels: { boxWidth: 8, padding: 6, font: { size: 10 } } }
         },
         scales: {
           r: {

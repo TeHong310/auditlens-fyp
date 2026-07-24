@@ -11690,3 +11690,91 @@ Rollback instructions:
   Redeploy the previous frontend build - no data or schema changes
   were made this phase (all fixture rows used for visual verification
   were inserted and deleted entirely within this phase's own testing).
+
+----------------------------------------------------------------------
+
+Date: 2026-07-24
+What was changed:
+  Phase 27: increased the size of Auditor Home's 4 secondary chart
+  cards (Status Breakdown, Authenticity Outcomes, Exception
+  Categories, Risk Distribution) - pure sizing/spacing, no chart type
+  or data changes. Audit Trend and Review Volume (primary row) were
+  not touched.
+
+  Frontend (auditlens-frontend/src/app/auditor/dashboard/):
+    - auditor-dashboard.component.css:
+      - .chart-body-small: 80px -> 108px, giving all 4 chart canvases
+        (and the Status Breakdown rings) noticeably more vertical
+        room, since these are the only 4 cards using this class.
+      - New rules scoped to .charts-row-secondary only (so the
+        primary row's Audit Trend/Review Volume cards are untouched):
+        card padding 10px 12px -> 12px 14px, subtitle margin-bottom
+        4px -> 6px, for more breathing room between title/subtitle
+        and the chart below.
+      - Status Breakdown's radial rings enlarged: ring diameter 40px
+        -> 54px, inner hole 27px -> 37px (proportionally thicker
+        ring), percentage/label/count text sizes bumped slightly to
+        match (8px/8.5px/11px -> 9.5px/9px/12.5px).
+    - auditor-dashboard.component.ts: only the Chart.js legend/tick
+      style option VALUES were bumped inside the existing
+      renderAuthChart()/renderExceptionChart()/renderRiskChart()
+      methods - boxWidth 7->8, legend padding 4->6, legend font size
+      9-9.5->10-10.5, exception chart's y-axis tick font 9.5->10.5.
+      No chart type, dataset, color, or data-loading logic changed.
+
+Why:
+  Requested sizing refinement: the 4 secondary charts felt too small
+  to read clearly; increase their card height, canvas size, and
+  internal spacing while keeping the same 4-column layout, dark
+  enterprise style, and without pushing the Transaction Review Queue
+  section too far down the page.
+
+Confirmed unchanged:
+  - No backend files touched (git diff --stat before committing shows
+    only the 2 frontend files below).
+  - No HTML file touched - same DOM structure and bindings.
+  - No chart type, dataset, color palette, or data-fetching/business
+    logic changed - only CSS dimension/spacing values and Chart.js
+    legend/tick style option values.
+  - Audit Trend and Review Volume (primary row, .chart-body / not
+    .chart-body-small) are completely untouched, confirmed via the
+    scoped .charts-row-secondary selectors used for the new padding/
+    subtitle rules.
+  - 4-column .charts-row-secondary grid and its existing responsive
+    breakpoints (2-column at <=1300px, 1-column at <=900px) unchanged.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - Live-verified in a real browser (Playwright, 1440x900 viewport,
+    throwaway auditor account, cleaned up afterward): zero console
+    errors, zero page errors, zero horizontal overflow. Drove all 4
+    secondary charts with realistic sample data via each chart's own
+    existing render method (through Angular's dev debug API, no DB
+    writes needed) to visually confirm the larger canvases/rings and
+    improved legend spacing render correctly - screenshot confirmed
+    all 4 charts clearly larger and more legible, same colors/chart
+    types/4-column layout as before. Measured the Transaction Review
+    Queue's position after the change: still effectively "above the
+    fold" (~520px from top in a 900px viewport, ~16px total page
+    overflow), confirming it was not pushed meaningfully further down.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser check clean
+  (0 console/page errors, 0 horizontal overflow, larger/clearer
+  charts, Transaction Review Queue position essentially unchanged).
+  No backend changes this phase, so the backend test suite was not
+  re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the larger secondary charts take
+     effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data or schema changes
+  were made this phase.
