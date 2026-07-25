@@ -626,6 +626,47 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
     return doc.ocr_confidence ? `${Math.round(parseFloat(doc.ocr_confidence))}%` : '-';
   }
 
+  // ── Document Processing Queue: Related Docs column — same idea as
+  // Auditor Home's Transaction Review Queue "Related Docs" column,
+  // reusing the SAME poList/grList already loaded by loadPoGrLists()
+  // above (no new request). Each PO/GR row's document_id already
+  // points back at the invoice it belongs to, so a plain array lookup
+  // is enough to find this invoice's own linked PO/GR. When multiple
+  // invoices share the same PO number, every one of those invoices'
+  // numbers is shown together (searched across allDocuments, not just
+  // the 5 rows currently displayed), so a shared PO is visible even if
+  // its sibling invoice isn't one of the rows on screen. ──
+
+  private poFor(documentId: number): any {
+    return this.poList.find((p: any) => p.document_id === documentId) || null;
+  }
+
+  private grFor(documentId: number): any {
+    return this.grList.find((g: any) => g.document_id === documentId) || null;
+  }
+
+  relatedInvoiceNumbers(doc: any): string {
+    const po = this.poFor(doc.document_id);
+    if (!po) return doc.invoice_number || '-';
+
+    const siblingIds = new Set(
+      this.poList.filter((p: any) => p.po_number === po.po_number).map((p: any) => p.document_id)
+    );
+    const numbers = this.allDocuments
+      .filter((d: any) => siblingIds.has(d.document_id) && d.invoice_number)
+      .map((d: any) => d.invoice_number);
+
+    return numbers.length > 0 ? numbers.join(', ') : (doc.invoice_number || '-');
+  }
+
+  relatedPoLabel(doc: any): string {
+    return this.poFor(doc.document_id)?.po_number || '-';
+  }
+
+  relatedGrLabel(doc: any): string {
+    return this.grFor(doc.document_id)?.gr_number || '-';
+  }
+
   ageDays(dateStr: string): number {
     if (!dateStr) return 0;
     return Math.max(0, Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000));

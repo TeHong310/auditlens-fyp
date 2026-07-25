@@ -12762,3 +12762,116 @@ Rollback instructions:
   Redeploy the previous backend + frontend builds - no data or schema
   changes were made this phase (all fixture rows used for verification
   were inserted and deleted entirely within this phase's own testing).
+
+----------------------------------------------------------------------
+
+Date: 2026-07-25
+What was changed:
+  Phase 35: added a "Related Docs" column to Finance Home's Document
+  Processing Queue, matching the Related Docs column added to Auditor
+  Home's Transaction Review Queue in the previous phase (same styling,
+  same intent). No database changes, no new backend endpoints.
+
+  Frontend only (auditlens-frontend/src/app/finance/home/):
+    - finance-home.component.ts: added 3 small presentation helpers -
+      relatedInvoiceNumbers(doc), relatedPoLabel(doc), relatedGrLabel
+      (doc) - built entirely from poList/grList, which this page
+      already loads via the EXISTING loadPoGrLists() (GET /documents/
+      po/list, GET /documents/gr/list) added in an earlier phase for
+      the Document Type Distribution / Correction Analysis charts. No
+      new HTTP request. Each PO/GR row's own document_id already
+      points back at the invoice it belongs to (same fact already
+      relied on by poDocumentIds/grDocumentIds), so a plain array
+      lookup finds this invoice's own linked PO/GR.
+    - "Multiple invoices sharing the same PO": relatedInvoiceNumbers()
+      finds every OTHER invoice (searched across allDocuments, not
+      just the 5 rows currently shown) whose own linked PO has the
+      SAME po_number, and lists all of their invoice numbers together
+      - so if invoice A and invoice B are both billed against
+      PO3006000, BOTH rows show "A, B" in that line, while each row's
+      OWN PO/GR reference stays specific to that row (e.g. if only A
+      has a GR attached, B's GR line still correctly shows "-", not a
+      copy of A's).
+    - finance-home.component.html: added a "Related Docs" <th>/<td>
+      right after "Document" (8 columns now), same 3-stacked-line
+      structure as Auditor Home's Related Docs cell (invoice
+      number(s) / "PO: ..." / "GR: ...", "-" when absent).
+    - finance-home.component.css: reused the EXACT same
+      .related-docs-cell/.related-doc-line CSS as auditor-dashboard.
+      component.css (same font size, same muted/bold color treatment)
+      per "keep the same table styling as Auditor Transaction Review
+      Queue"; rebalanced the table's column widths for 8 columns.
+
+Why:
+  Requested parity with the Related Docs column just added to Auditor
+  Home: Finance users should be able to see, directly from the
+  Document Processing Queue, which PO and GR are linked to a given
+  invoice, and notice at a glance when multiple invoices are billed
+  against the same PO - without opening each document individually.
+
+Confirmed unchanged:
+  - No backend files touched, no database changes - git diff --stat
+    before committing shows only the 3 finance-home files above.
+  - No new API calls - poList/grList were already being fetched by
+    this exact page for its charts; this phase only adds new READS of
+    that already-loaded data, not new requests.
+  - Every existing column (Document, Vendor, Status, OCR Confidence,
+    Required Action, Age, Action) and every existing method
+    (getStatusClass/Label, ocrConfidenceLabel, requiredActionLabel,
+    actionLabel/isActionClickable/onAction, all 5 chart renders, the
+    KPI cards, Priority Finance Action panel) are byte-for-byte
+    unchanged.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - Live-verified in a real browser (Playwright, throwaway
+    finance_executive account, cleaned up afterward) against
+    deliberately-inserted, fully-disposable fixture data reproducing
+    both the task's own example (invoice IX107587 with its own PO
+    PO3006000 and GR PD6011823) and the "multiple invoices sharing a
+    PO" case (a second invoice, IX107588, also billed against
+    PO3006000 but with no GR of its own), plus a third invoice with no
+    PO/GR at all:
+    - Confirmed IX107587's row renders exactly "IX107587, IX107588" /
+      "PO: PO3006000" / "GR: PD6011823" - matching the task's example
+      format precisely, correctly including its sibling invoice.
+    - Confirmed IX107588's row ALSO shows "IX107587, IX107588" (the
+      same sibling group, correct symmetry) with its OWN "PO:
+      PO3006000" but "GR: -" (correctly did NOT inherit IX107587's GR
+      - each row's own linkage stays accurate).
+    - Confirmed the no-PO/GR invoice correctly shows "-" / "-".
+    - Confirmed zero horizontal overflow (1440px page, 1440px
+      content) after adding the 8th column.
+    - Zero console/page errors.
+    - Noticed the narrower "OCR Confidence" header abbreviated more
+      than before after the initial width rebalance; adjusted the
+      column-width split once more to give it back comparable room
+      (still ellipsis-truncated at this width, same graceful
+      truncation behavior already used everywhere else in this table,
+      not overlapping text) - re-verified clean afterward.
+    - All fixture rows (3 documents, 2 purchase_orders, 1
+      goods_receipt, 3 extracted_fields, 1 throwaway user) deleted
+      afterward and verified gone from the dev DB.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser check clean
+  (0 console/page errors, correct shared-PO/sibling-invoice rendering,
+  correct per-row GR accuracy, correct "-" fallback, 0 horizontal
+  overflow). No backend changes this phase, so the backend test suite
+  was not re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the new Related Docs column on
+     Finance Home takes effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No database migration needed (no schema changes).
+  4. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data or schema changes
+  were made this phase (all fixture rows used for verification were
+  inserted and deleted entirely within this phase's own testing).
