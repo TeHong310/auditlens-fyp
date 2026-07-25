@@ -188,7 +188,7 @@
       <div class="table-header">
         <div>
           <h2 class="section-title">Document Processing Queue</h2>
-          <p class="section-subtitle">Latest {{ documents.length }} documents this month</p>
+          <p class="section-subtitle">Showing {{ queueRows.length }} record{{ queueRows.length === 1 ? '' : 's' }} this month</p>
         </div>
         <div class="table-actions">
           <button class="btn-filter">Filter</button>
@@ -212,28 +212,28 @@
           </thead>
           <tbody>
             <tr *ngIf="isLoading"><td colspan="8" class="loading-row">Loading...</td></tr>
-            <tr *ngIf="!isLoading && documents.length === 0">
+            <tr *ngIf="!isLoading && queueRows.length === 0">
               <td colspan="8" class="empty-row">No documents uploaded yet</td>
             </tr>
-            <tr *ngFor="let doc of documents">
-              <td class="doc-name">{{ doc.invoice_number || doc.file_name }}</td>
+            <tr *ngFor="let row of queueRows">
+              <td class="doc-name">{{ row.invoiceLabel }}</td>
               <td class="related-docs-cell">
-                <div class="related-doc-line inv-line">{{ relatedInvoiceNumbers(doc) }}</div>
-                <div class="related-doc-line po-line">PO: {{ relatedPoLabel(doc) }}</div>
-                <div class="related-doc-line gr-line">GR: {{ relatedGrLabel(doc) }}</div>
+                <div class="related-doc-line inv-line">{{ row.invoiceLabel }}</div>
+                <div class="related-doc-line po-line">PO: {{ row.poLabel || '-' }}</div>
+                <div class="related-doc-line gr-line">GR: {{ row.grLabel }}</div>
               </td>
-              <td>{{ doc.vendor_name || 'Unknown vendor' }}</td>
+              <td>{{ row.vendor || 'Unknown vendor' }}</td>
               <td>
-                <span class="badge" [ngClass]="getStatusClass(doc.status)">
-                  {{ getStatusLabel(doc.status) }}
+                <span class="badge" [ngClass]="getStatusClass(row.status)">
+                  {{ getStatusLabel(row.status) }}
                 </span>
               </td>
-              <td>{{ ocrConfidenceLabel(doc) }}</td>
-              <td>{{ requiredActionLabel(doc) }}</td>
-              <td>{{ ageDays(doc.uploaded_at) }}d</td>
+              <td>{{ ocrConfidenceLabel(row) }}</td>
+              <td>{{ requiredActionLabel(row.primaryDoc) }}</td>
+              <td>{{ row.ageDaysValue }}d</td>
               <td>
-                <button class="btn-open" *ngIf="isActionClickable(doc)" (click)="onAction(doc)">{{ actionLabel(doc) }}</button>
-                <span class="action-label-static" *ngIf="!isActionClickable(doc)">{{ actionLabel(doc) }}</span>
+                <button class="btn-open" *ngIf="isActionClickable(row.primaryDoc)" (click)="onAction(row.primaryDoc)">{{ actionLabel(row.primaryDoc) }}</button>
+                <span class="action-label-static" *ngIf="!isActionClickable(row.primaryDoc)">{{ actionLabel(row.primaryDoc) }}</span>
               </td>
             </tr>
           </tbody>

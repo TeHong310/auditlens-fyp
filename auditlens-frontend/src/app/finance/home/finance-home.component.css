@@ -368,14 +368,14 @@
   font-size: 12px;
 }
 
-.data-table th:nth-child(1), .data-table td:nth-child(1) { width: 14%; }
-.data-table th:nth-child(2), .data-table td:nth-child(2) { width: 17%; }
+.data-table th:nth-child(1), .data-table td:nth-child(1) { width: 12%; }
+.data-table th:nth-child(2), .data-table td:nth-child(2) { width: 20%; }
 .data-table th:nth-child(3), .data-table td:nth-child(3) { width: 11%; }
 .data-table th:nth-child(4), .data-table td:nth-child(4) { width: 11%; }
-.data-table th:nth-child(5), .data-table td:nth-child(5) { width: 11%; }
-.data-table th:nth-child(6), .data-table td:nth-child(6) { width: 15%; }
+.data-table th:nth-child(5), .data-table td:nth-child(5) { width: 10%; }
+.data-table th:nth-child(6), .data-table td:nth-child(6) { width: 14%; }
 .data-table th:nth-child(7), .data-table td:nth-child(7) { width: 6%; }
-.data-table th:nth-child(8), .data-table td:nth-child(8) { width: 14%; }
+.data-table th:nth-child(8), .data-table td:nth-child(8) { width: 16%; }
 
 .data-table th {
   text-align: left;
@@ -405,17 +405,19 @@
 
 .doc-name { font-weight: 600; color: var(--accent-soft); }
 
-/* Related Docs — same styling as Auditor Home's Transaction Review
-   Queue "Related Docs" column (auditor-dashboard.component.css). */
+/* Related Docs — same color/weight treatment as Auditor Home's
+   Transaction Review Queue "Related Docs" column (auditor-dashboard.
+   component.css), but allowed to WRAP rather than ellipsis-truncate:
+   a grouped row's invoice/GR lines can be longer (multiple comma-
+   joined references), and truncating them would hide exactly the
+   information this column exists to surface. */
 .related-docs-cell {
   white-space: normal;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 
 .related-doc-line {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word;
   max-width: 100%;
   font-size: 10.5px;
 }

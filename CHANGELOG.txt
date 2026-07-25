@@ -12875,3 +12875,136 @@ Rollback instructions:
   Redeploy the previous frontend build - no data or schema changes
   were made this phase (all fixture rows used for verification were
   inserted and deleted entirely within this phase's own testing).
+
+----------------------------------------------------------------------
+
+Date: 2026-07-25
+What was changed:
+  Phase 36: fixed Finance Home's Document Processing Queue so invoices
+  that share the same linked PO (i.e. belong to the same procurement/
+  AP case) are grouped into ONE row instead of appearing as duplicate
+  separate rows. Frontend only — no backend, no database changes.
+
+  Reported bug: two invoices (e.g. L000016639 and L000016545) sharing
+  one PO were shown as two unrelated rows in the queue, even though
+  the previous phase's Related Docs column already cross-referenced
+  them textually within each row — the ROWS themselves were still not
+  merged.
+
+  Frontend (auditlens-frontend/src/app/finance/home/):
+    - finance-home.component.ts: replaced the previous phase's flat
+      "documents = thisMonthDocs.slice(0, 5)" (one row per invoice)
+      plus its 3 per-row Related Docs helpers (relatedInvoiceNumbers/
+      relatedPoLabel/relatedGrLabel, now dead code) with a single
+      computeQueueGroups() method and a new `queueRows` field:
+      - Groups this month's invoices by their linked PO number (via
+        the SAME poList/grList already loaded by loadPoGrLists() —
+        no new request); an invoice with no PO stays its own
+        single-member group rather than being merged with anything.
+      - Each group becomes one row: Document/Related Docs show every
+        member invoice's number joined together; PO shows the shared
+        PO number; GR shows the UNION of every member's own GR
+        number(s) (deduplicated).
+      - The other columns (Status/Required Action/Age/Action) need a
+        single representative value per group: Status/Required
+        Action/Action are taken from the group's most URGENT member
+        (priority order: returned > under_review/resubmitted >
+        ocr_processing > ocr_done > approved), so a case isn't hidden
+        behind an already-approved sibling; OCR Confidence is the
+        group's average; Age uses the OLDEST member (most
+        conservative/urgent framing); Vendor is read straight from
+        the representative member (a shared PO is inherently one
+        vendor).
+      - Same dual call-site pattern already used elsewhere on this
+        page (e.g. computeCorrectionAnalysis()): computeQueueGroups()
+        is called from both loadDocuments() and loadPoGrLists(), so
+        whichever of the two async loads finishes last is the one
+        that actually produces populated grouped rows.
+    - finance-home.component.html: table body now iterates
+      `queueRows` instead of raw `documents`; every existing column's
+      binding was updated to read from the grouped row shape (e.g.
+      requiredActionLabel(row.primaryDoc), onAction(row.primaryDoc))
+      rather than removed - Status/OCR Confidence/Required Action/
+      Action all still call the EXACT SAME existing methods as
+      before, just against the group's representative document.
+    - finance-home.component.css: Related Docs cell changed from
+      single-line ellipsis truncation to wrapping text (a grouped
+      row's comma-joined invoice/GR list can be longer than a single
+      reference number, and truncating it would hide exactly the
+      relationship this column exists to show); column widths
+      rebalanced to give Related Docs more room.
+
+Why:
+  The auditor/finance side already understands "these 2 invoices are
+  the same AP case" once a shared PO makes that clear - showing them
+  as 2 separate queue rows was misleading and made the queue look
+  like there were more open items than there actually are.
+
+Confirmed unchanged:
+  - No backend files touched, no database changes - git diff --stat
+    before committing shows only the 2 finance-home files above.
+  - No new API calls - poList/grList were already being fetched by
+    this exact page.
+  - Every existing method (getStatusClass/Label, ocrConfidenceLabel,
+    requiredActionLabel, actionLabel/isActionClickable/onAction, all
+    5 chart renders, computeDocStatusOverview/computeDocumentType
+    Distribution/computeCorrectionAnalysis/computePriorityFinance
+    Items, the KPI cards, Priority Finance Action panel) is
+    byte-for-byte unchanged - only WHICH document object gets passed
+    into requiredActionLabel()/actionLabel()/onAction() changed (the
+    group's representative document, instead of always the row's own
+    single document).
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - Live-verified in a real browser (Playwright, throwaway
+    finance_executive account, cleaned up afterward) against
+    deliberately-inserted, fully-disposable fixture data reproducing
+    the EXACT reported bug: invoices L000016639 (under_review) and
+    L000016545 (approved) both billed against PO3006231, with their
+    own GRs PD6012187/PD6012318 respectively, plus one unrelated
+    invoice with no PO:
+    - Confirmed the queue shows exactly 2 rows (not 3) - the two
+      shared-PO invoices correctly merged into one row, the unrelated
+      invoice correctly stayed separate.
+    - Confirmed the merged row's Document AND Related Docs columns
+      show "L000016639, L000016545" / "PO: PO3006231" / "GR:
+      PD6012187, PD6012318" - matching the task's requested format
+      exactly, with the GR union correctly combining both invoices'
+      individually-attached GRs.
+    - Confirmed the merged row's Status correctly surfaced "Under
+      Review" (the more urgent of the two members' statuses) rather
+      than being hidden behind the approved sibling, with a matching
+      "Waiting" action label.
+    - Confirmed the solo invoice's row still shows its own number only
+      and "-"/"-" for PO/GR.
+    - Confirmed zero horizontal overflow and the full grouped text
+      renders without being cut off (switched Related Docs from
+      ellipsis-truncation to wrapping specifically to verify this).
+    - Zero console/page errors.
+    - All fixture rows (3 documents, 2 purchase_orders, 2
+      goods_receipts, 3 extracted_fields, 1 throwaway user) deleted
+      afterward and verified gone from the dev DB.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser check clean
+  (0 console/page errors, correct row-count deduplication, correct
+  grouped Document/Related Docs/Status/GR-union rendering, 0
+  horizontal overflow). No backend changes this phase, so the backend
+  test suite was not re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the grouped queue rows take effect
+     immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No database migration needed (no schema changes).
+  4. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data or schema changes
+  were made this phase (all fixture rows used for verification were
+  inserted and deleted entirely within this phase's own testing).

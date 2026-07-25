@@ -50,7 +50,11 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
   @ViewChild('ocrConfidenceChart') ocrConfidenceChartRef!: ElementRef;
   @ViewChild('correctionChart') correctionChartRef!: ElementRef;
 
-  documents: any[] = [];
+  // Document Processing Queue rows — one row per PROCUREMENT CASE, not
+  // per invoice: invoices sharing the same linked PO are grouped into a
+  // single row (see computeQueueGroups() below), so e.g. two invoices
+  // billed against the same PO no longer appear as two separate rows.
+  queueRows: any[] = [];
   allDocuments: any[] = [];
   totalUploaded: number = 0;
   totalOcrProcessed: number = 0;
@@ -186,11 +190,9 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
           this.avgConfidence = Math.round(sum / withConfidence.length);
         }
 
-        // Document Processing Queue — current month only, last 5
-        this.documents = thisMonthDocs.slice(0, 5);
-
         this.computeDocStatusOverview(thisMonthDocs);
         this.computePriorityFinanceItems(thisMonthDocs);
+        this.computeQueueGroups();
 
         this.isLoading = false;
         this.cdr.detectChanges();
@@ -224,6 +226,7 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
 
       this.computeDocumentTypeDistribution();
       this.computeCorrectionAnalysis();
+      this.computeQueueGroups();
       this.cdr.detectChanges();
       this.renderDocTypeChart();
       this.renderCorrectionChart();
@@ -626,45 +629,76 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
     return doc.ocr_confidence ? `${Math.round(parseFloat(doc.ocr_confidence))}%` : '-';
   }
 
-  // ── Document Processing Queue: Related Docs column — same idea as
-  // Auditor Home's Transaction Review Queue "Related Docs" column,
-  // reusing the SAME poList/grList already loaded by loadPoGrLists()
-  // above (no new request). Each PO/GR row's document_id already
-  // points back at the invoice it belongs to, so a plain array lookup
-  // is enough to find this invoice's own linked PO/GR. When multiple
-  // invoices share the same PO number, every one of those invoices'
-  // numbers is shown together (searched across allDocuments, not just
-  // the 5 rows currently displayed), so a shared PO is visible even if
-  // its sibling invoice isn't one of the rows on screen. ──
+  // ── Document Processing Queue grouping — invoices that share the
+  // same linked PO (and therefore belong to the same procurement/AP
+  // case) are grouped into a single row instead of appearing as
+  // separate rows. Built entirely from poList/grList, already loaded
+  // by loadPoGrLists() for the charts above (no new request); each
+  // PO/GR row's own document_id already points back at the invoice it
+  // belongs to. Needs poGrLoaded — called from both loadDocuments()
+  // and loadPoGrLists() (dual call-site, same pattern as
+  // computeCorrectionAnalysis() above), so whichever of the two
+  // resolves last is the one that actually produces the grouped rows.
+  private computeQueueGroups() {
+    if (!this.poGrLoaded) return;
 
-  private poFor(documentId: number): any {
-    return this.poList.find((p: any) => p.document_id === documentId) || null;
-  }
+    const poNumberByDocId = new Map<number, string>();
+    for (const po of this.poList) {
+      if (po.po_number) poNumberByDocId.set(po.document_id, po.po_number);
+    }
+    const grNumbersByDocId = new Map<number, string[]>();
+    for (const gr of this.grList) {
+      if (!gr.gr_number) continue;
+      const arr = grNumbersByDocId.get(gr.document_id) || [];
+      arr.push(gr.gr_number);
+      grNumbersByDocId.set(gr.document_id, arr);
+    }
 
-  private grFor(documentId: number): any {
-    return this.grList.find((g: any) => g.document_id === documentId) || null;
-  }
+    // Group key = shared PO number when one exists; otherwise each
+    // invoice is its own single-member group (never merged with an
+    // unrelated invoice just for lacking a PO).
+    const groupMap = new Map<string, any[]>();
+    for (const doc of this.thisMonthDocsCache) {
+      const po = poNumberByDocId.get(doc.document_id);
+      const key = po ? `po:${po}` : `doc:${doc.document_id}`;
+      const arr = groupMap.get(key) || [];
+      arr.push(doc);
+      groupMap.set(key, arr);
+    }
 
-  relatedInvoiceNumbers(doc: any): string {
-    const po = this.poFor(doc.document_id);
-    if (!po) return doc.invoice_number || '-';
+    // Which single invoice in a group represents the row for Status/
+    // Required Action/Age/Action purposes: the most urgent one, so a
+    // case isn't hidden behind an already-approved sibling.
+    const STATUS_PRIORITY: Record<string, number> = {
+      returned: 5, under_review: 4, resubmitted: 4, ocr_processing: 3, ocr_done: 2, approved: 1,
+    };
 
-    const siblingIds = new Set(
-      this.poList.filter((p: any) => p.po_number === po.po_number).map((p: any) => p.document_id)
-    );
-    const numbers = this.allDocuments
-      .filter((d: any) => siblingIds.has(d.document_id) && d.invoice_number)
-      .map((d: any) => d.invoice_number);
+    const rows = Array.from(groupMap.values()).map((docs: any[]) => {
+      const primary = [...docs].sort((a, b) => (STATUS_PRIORITY[b.status] || 0) - (STATUS_PRIORITY[a.status] || 0))[0];
+      const newest = [...docs].sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())[0];
 
-    return numbers.length > 0 ? numbers.join(', ') : (doc.invoice_number || '-');
-  }
+      const invoiceNumbers = docs.map(d => d.invoice_number).filter((n: any) => !!n);
+      const grNumbers = Array.from(new Set(docs.flatMap(d => grNumbersByDocId.get(d.document_id) || [])));
+      const confidences = docs
+        .map(d => d.ocr_confidence ? parseFloat(d.ocr_confidence) : null)
+        .filter((c): c is number => c !== null);
 
-  relatedPoLabel(doc: any): string {
-    return this.poFor(doc.document_id)?.po_number || '-';
-  }
+      return {
+        documentIds: docs.map(d => d.document_id),
+        invoiceLabel: invoiceNumbers.length > 0 ? invoiceNumbers.join(', ') : (docs[0].file_name || '-'),
+        poLabel: poNumberByDocId.get(docs[0].document_id) || null,
+        grLabel: grNumbers.length > 0 ? grNumbers.join(', ') : '-',
+        vendor: primary.vendor_name,
+        status: primary.status,
+        ocr_confidence: confidences.length > 0 ? confidences.reduce((a, b) => a + b, 0) / confidences.length : null,
+        ageDaysValue: Math.max(...docs.map(d => this.ageDays(d.uploaded_at))),
+        primaryDoc: primary,
+        newestUploadedAt: newest.uploaded_at,
+      };
+    });
 
-  relatedGrLabel(doc: any): string {
-    return this.grFor(doc.document_id)?.gr_number || '-';
+    rows.sort((a, b) => new Date(b.newestUploadedAt || 0).getTime() - new Date(a.newestUploadedAt || 0).getTime());
+    this.queueRows = rows.slice(0, 5);
   }
 
   ageDays(dateStr: string): number {
