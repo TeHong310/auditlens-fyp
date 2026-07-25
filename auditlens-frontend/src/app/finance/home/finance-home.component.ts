@@ -629,22 +629,31 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
     return doc.ocr_confidence ? `${Math.round(parseFloat(doc.ocr_confidence))}%` : '-';
   }
 
-  // ── Document Processing Queue grouping — invoices that share the
-  // same linked PO (and therefore belong to the same procurement/AP
-  // case) are grouped into a single row instead of appearing as
-  // separate rows. Built entirely from poList/grList, already loaded
-  // by loadPoGrLists() for the charts above (no new request); each
-  // PO/GR row's own document_id already points back at the invoice it
-  // belongs to. Needs poGrLoaded — called from both loadDocuments()
-  // and loadPoGrLists() (dual call-site, same pattern as
-  // computeCorrectionAnalysis() above), so whichever of the two
+  // ── Document Processing Queue grouping — invoices that belong to
+  // the SAME procurement case are grouped into a single row instead of
+  // appearing as separate rows. Built entirely from poList/grList,
+  // already loaded by loadPoGrLists() for the charts above (no new
+  // request); each PO/GR row's own document_id already points back at
+  // the invoice it belongs to. Needs poGrLoaded — called from both
+  // loadDocuments() and loadPoGrLists() (dual call-site, same pattern
+  // as computeCorrectionAnalysis() above), so whichever of the two
   // resolves last is the one that actually produces the grouped rows.
+  //
+  // A "procurement case" = same PO number AND same vendor — matching
+  // on PO number text alone is not enough: two DIFFERENT vendors could
+  // coincidentally use the same/generic PO number (e.g. "PO-001", or
+  // an OCR misread), and merging those would incorrectly combine two
+  // unrelated invoices into one row. Requiring both keeps a genuine
+  // shared-PO case (same vendor billing the same PO across invoices)
+  // grouped correctly while leaving unrelated invoices untouched.
   private computeQueueGroups() {
     if (!this.poGrLoaded) return;
 
-    const poNumberByDocId = new Map<number, string>();
+    const norm = (s: any) => (s || '').toString().trim().toLowerCase();
+
+    const poByDocId = new Map<number, { number: string; vendor: string }>();
     for (const po of this.poList) {
-      if (po.po_number) poNumberByDocId.set(po.document_id, po.po_number);
+      if (po.po_number) poByDocId.set(po.document_id, { number: po.po_number, vendor: norm(po.vendor_name) });
     }
     const grNumbersByDocId = new Map<number, string[]>();
     for (const gr of this.grList) {
@@ -654,13 +663,15 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
       grNumbersByDocId.set(gr.document_id, arr);
     }
 
-    // Group key = shared PO number when one exists; otherwise each
-    // invoice is its own single-member group (never merged with an
-    // unrelated invoice just for lacking a PO).
+    // Group key = shared PO number + shared vendor when a PO exists;
+    // otherwise each invoice is its own single-member group (never
+    // merged with an unrelated invoice just for lacking a PO, and
+    // never merged across vendors just for a matching PO string).
     const groupMap = new Map<string, any[]>();
     for (const doc of this.thisMonthDocsCache) {
-      const po = poNumberByDocId.get(doc.document_id);
-      const key = po ? `po:${po}` : `doc:${doc.document_id}`;
+      const po = poByDocId.get(doc.document_id);
+      const vendor = po ? po.vendor || norm(doc.vendor_name) : null;
+      const key = po ? `po:${norm(po.number)}|${vendor}` : `doc:${doc.document_id}`;
       const arr = groupMap.get(key) || [];
       arr.push(doc);
       groupMap.set(key, arr);
@@ -686,7 +697,7 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
       return {
         documentIds: docs.map(d => d.document_id),
         invoiceLabel: invoiceNumbers.length > 0 ? invoiceNumbers.join(', ') : (docs[0].file_name || '-'),
-        poLabel: poNumberByDocId.get(docs[0].document_id) || null,
+        poLabel: poByDocId.get(docs[0].document_id)?.number || null,
         grLabel: grNumbers.length > 0 ? grNumbers.join(', ') : '-',
         vendor: primary.vendor_name,
         status: primary.status,

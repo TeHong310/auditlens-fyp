@@ -13008,3 +13008,114 @@ Rollback instructions:
   Redeploy the previous frontend build - no data or schema changes
   were made this phase (all fixture rows used for verification were
   inserted and deleted entirely within this phase's own testing).
+
+----------------------------------------------------------------------
+
+Date: 2026-07-25
+What was changed:
+  Phase 37: tightened Finance Home's Document Processing Queue grouping
+  (added in the previous phase) to prevent a real over-grouping risk —
+  invoices from DIFFERENT vendors could be incorrectly merged into one
+  row if their PO numbers happened to be textually identical (e.g. a
+  generic/reused PO numbering scheme, or an OCR misread). Frontend
+  only — no backend, no database changes.
+
+  auditlens-frontend/src/app/finance/home/finance-home.component.ts,
+  computeQueueGroups():
+    - Grouping key changed from PO NUMBER TEXT ALONE to PO NUMBER +
+      VENDOR (both normalized via trim + lowercase before comparing,
+      to tolerate minor OCR/formatting whitespace-or-case
+      differences without loosening the match into a false positive).
+      A genuine procurement case is a specific vendor billing against
+      a specific PO — matching on the PO string in isolation was too
+      permissive.
+    - Behavior for the actual reported case is unchanged: two
+      invoices that share BOTH the same PO number and the same
+      vendor (a real shared-PO procurement case) still merge into one
+      row exactly as before, with the same PO-shown-once / GR-union /
+      most-urgent-status aggregation logic untouched.
+    - New protection: two invoices that share only a coincidentally-
+      matching PO number STRING but belong to DIFFERENT vendors no
+      longer merge — each stays its own row, since they are not
+      actually the same procurement case.
+    - Everything else in computeQueueGroups() (the poGrLoaded guard,
+      the dual call-site pattern with loadDocuments()/loadPoGrLists(),
+      the ungrouped-when-no-PO fallback, the GR union, the STATUS_
+      PRIORITY-based representative document) is unchanged — only the
+      grouping key itself and the local variable it's built from
+      (renamed poByDocId, now storing {number, vendor} instead of a
+      bare string) changed.
+
+Why:
+  Follow-up correction: the previous phase's grouping only checked
+  matching PO number text, which risked incorrectly combining
+  unrelated invoices into one row whenever two different vendors'
+  invoices happened to reference a similarly-formatted or coincidentally
+  identical PO number - undermining the very "one row per real AP case"
+  goal the feature exists for. Requested fix: only merge invoices that
+  truly belong to the same procurement case.
+
+Confirmed unchanged:
+  - No backend files touched, no database changes - git diff --stat
+    before committing shows only the one finance-home.component.ts
+    file.
+  - No new API calls - still built entirely from the SAME poList/
+    grList already loaded by loadPoGrLists().
+  - Every other method on this page is untouched; only the grouping
+    KEY inside computeQueueGroups() changed.
+
+Test results:
+  - Directly queried the dev database for the specific invoice numbers
+    named in the bug report (L000016639, L000016545, IX107587) before
+    writing any fix, to check whether this was a real-data issue in
+    the current dev environment - none of the three exist in the dev
+    DB, confirming these are illustrative example identifiers (the
+    same ones used in this session's own prior fixture-based testing),
+    not literal rows to inspect - so the fix was verified via a fresh,
+    purpose-built fixture instead.
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - Live-verified in a real browser (Playwright, throwaway
+    finance_executive account, cleaned up afterward) against
+    deliberately-inserted, fully-disposable fixture data covering
+    BOTH required behaviors in one scenario:
+    - L000016639 (under_review) and L000016545 (approved), both
+      vendor "Zenith Industries", both PO "PO3006231", with their own
+      GRs PD6012187/PD6012318 - confirmed these still correctly merge
+      into ONE row, showing "L000016639, L000016545" / "PO: PO3006231"
+      / "GR: PD6012187, PD6012318" exactly as required.
+    - IX107587, vendor "Coilcraft Supplies" (a DIFFERENT vendor),
+      given the SAME PO number text "PO3006231" specifically to probe
+      the bug this phase fixes - confirmed it correctly stayed as its
+      OWN separate row (not merged into the Zenith row), proving the
+      vendor+PO grouping key now rejects a same-PO-text/different-
+      vendor false match that the previous PO-only key would have
+      incorrectly merged.
+    - Total row count was 2 (not 3, not 1) - exactly the expected
+      outcome.
+    - Zero console/page errors, zero horizontal overflow.
+    - All fixture rows (3 documents, 3 purchase_orders, 2
+      goods_receipts, 3 extracted_fields, 1 throwaway user) deleted
+      afterward and verified gone from the dev DB.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser check clean
+  (0 console/page errors, correct merge for the genuine shared-PO/
+  same-vendor case, correct non-merge for the same-PO-text/different-
+  vendor case, 0 horizontal overflow). No backend changes this phase,
+  so the backend test suite was not re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render FRONTEND - the tightened grouping takes
+     effect immediately.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No database migration needed (no schema changes).
+  4. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data or schema changes
+  were made this phase (all fixture rows used for verification were
+  inserted and deleted entirely within this phase's own testing).
