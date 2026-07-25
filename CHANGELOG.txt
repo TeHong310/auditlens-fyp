@@ -12638,3 +12638,127 @@ Deployment instructions:
 Rollback instructions:
   Redeploy the previous frontend build - no data, schema, or backend
   logic changes were made this phase.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-25
+What was changed:
+  Phase 34: added a "Related Docs" column to Auditor Home's Transaction
+  Review Queue table, showing each row's linked invoice number(s), PO
+  number, and GR number so an auditor can spot document relationships
+  (e.g. multiple invoices sharing one PO) directly from the queue,
+  without opening each record. No database schema changes.
+
+  Backend (auditlens-backend/routes/auditor.py, GET /auditor/
+  transactions):
+    - transaction_package rows: added invoice_numbers/po_numbers/
+      gr_numbers (arrays of strings) built from data this endpoint
+      ALREADY fetches per package via list_all_packages_with_
+      documents() (docs['invoices']/docs['purchase_orders']/docs
+      ['goods_receipts'], each already carrying its own invoice_
+      number/po_number/gr_number field) — no new query.
+    - standalone_invoice rows: same 3 fields, built from the SAME
+      `comparison` object already fetched for matching_status via
+      build_comparison() (comparison['po']['po_no'] / comparison['gr']
+      ['gr_no']) — also no new query.
+    - Every other field in both branches (matching_status computation,
+      po_count/gr_count, package_status, etc.) is byte-for-byte
+      unchanged.
+
+  Frontend (auditlens-frontend/src/app/auditor/dashboard/):
+    - auditor-dashboard.component.html: added a "Related Docs" <th>/
+      <td> immediately after "Invoice / Package" (7 columns total now),
+      rendering 3 stacked lines per row (invoice number(s), "PO: ...",
+      "GR: ...", each falling back to "-" when empty) via a new
+      relatedDocLabel() helper.
+    - auditor-dashboard.component.ts: added relatedDocLabel(numbers) -
+      a small, pure presentation helper (numbers.join(', ') or '-'),
+      no data fetching added (reuses the same GET /auditor/transactions
+      call this page already makes).
+    - auditor-dashboard.component.css: rebalanced the table's 6 fixed
+      column widths to 7 (19/19/19/16/10/8/9%) and added compact,
+      multi-line cell styling for the new column (small font, per-line
+      ellipsis truncation) so the table stays within its existing
+      card width and dark enterprise style.
+
+Why:
+  Requested improvement: auditors currently can't tell from the queue
+  whether, say, two invoice rows reference the same purchase order -
+  they'd have to open each record individually. Surfacing the actual
+  PO/GR reference numbers inline makes that relationship visible at a
+  glance, reusing data the backend was already computing for other
+  purposes on this same endpoint.
+
+Confirmed unchanged:
+  - No database schema changes - no new columns, tables, or migrations.
+  - No changes to the matching engine, relationship builder, or any
+    other business logic - build_comparison(), _matching_status_for_
+    comparison(), and list_all_packages_with_documents() are called
+    exactly as before; only 3 new fields are read off data structures
+    those functions already returned.
+  - Every existing column (Invoice/Package, Supplier, Match Status,
+    Risk, Age, Action) and the row-click-to-open-record behavior are
+    unchanged.
+  - The dedicated /auditor/review-queue page (which already has its
+    own separate Invoice/PO/GR *count* columns) was not touched - this
+    task named the "Invoice/Package" column specifically, which only
+    exists on the Auditor Home dashboard's queue table.
+
+Test results:
+  - Ran this app's own existing backend test suites covering this
+    exact endpoint before making any frontend changes:
+    python tests/extraction/test_transaction_auditor_integration.py
+    and python tests/extraction/test_transaction_packages.py - both
+    "All checks passed." after the routes/auditor.py edit, confirming
+    the matching/status/package logic these tests already cover was
+    not broken by adding the 3 new response fields.
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - Live-verified in a real browser (Playwright, throwaway auditor
+    account, cleaned up afterward) against deliberately-inserted,
+    fully-disposable fixture data specifically covering the task's own
+    motivating example: a transaction package with 2 invoices (INV001,
+    INV002) linked to the SAME PO (PO3006000) and a GR (GR001), plus a
+    second package with no PO/GR linked at all:
+    - Confirmed the shared-PO package's Related Docs cell renders
+      exactly "INV001, INV002" / "PO: PO3006000" / "GR: GR001" -
+      matching the task's example format precisely, and directly
+      demonstrating "multiple invoices sharing the same PO" is now
+      visible in one glance.
+    - Confirmed the no-PO/GR package correctly falls back to "PO: -"
+      / "GR: -" rather than blank or erroring.
+    - Confirmed zero horizontal overflow (1440px page, 1440px content)
+      after adding the 7th column.
+    - Confirmed clicking a row still navigates to Record Detail
+      correctly (existing click-to-open behavior unaffected).
+    - Zero console/page errors caused by this change (one unrelated
+      404 was traced to GET /authenticity/<id> on the Record Detail
+      page for a fixture document with no real file bytes - confirmed
+      unrelated to the Related Docs column by checking the exact
+      failing URL).
+    - All fixture rows (2 packages, 5 documents, 1 purchase_order, 1
+      goods_receipt, 1 extracted_fields per invoice, 1 throwaway user)
+      deleted afterward and verified gone from the dev DB.
+
+Build result:
+  Backend: both existing relevant test suites pass unchanged. Frontend:
+  clean production build, exit 0; live browser check clean (0 console/
+  page errors from this change, correct multi-invoice/shared-PO
+  rendering, correct "-" fallback, 0 horizontal overflow, row-click
+  navigation still works).
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Redeploy the Render BACKEND - GET /auditor/transactions now
+     returns the 3 new fields.
+  2. Redeploy the Render FRONTEND - the new Related Docs column takes
+     effect immediately.
+  3. No database migration needed (no schema changes).
+  4. No config changes needed.
+
+Rollback instructions:
+  Redeploy the previous backend + frontend builds - no data or schema
+  changes were made this phase (all fixture rows used for verification
+  were inserted and deleted entirely within this phase's own testing).

@@ -1521,6 +1521,14 @@ def get_auditor_transactions():
                 'package_status':        pkg['status'],
                 'created_at':            pkg['created_at'].isoformat() if pkg['created_at'] else None,
                 'primary_document_id':   invoice_ids[0] if invoice_ids else None,
+                # Related Docs column (Auditor Home queue) — reuses the
+                # SAME docs already fetched above via list_all_packages_
+                # with_documents(), just surfacing each linked document's
+                # own reference number so an auditor can spot, e.g.,
+                # multiple invoices sharing one PO by scanning the column.
+                'invoice_numbers':       [inv['invoice_number'] for inv in docs['invoices'] if inv.get('invoice_number')],
+                'po_numbers':            [po['po_number'] for po in docs['purchase_orders'] if po.get('po_number')],
+                'gr_numbers':            [gr['gr_number'] for gr in docs['goods_receipts'] if gr.get('gr_number')],
             })
 
         # STEP 10 backward compatibility: legacy/standalone invoices
@@ -1529,6 +1537,8 @@ def get_auditor_transactions():
         for doc in list_standalone_invoices():
             comparison = build_comparison(cursor, doc['document_id'])
             matching_status = _matching_status_for_comparison(comparison) if comparison else 'PENDING'
+            po = comparison.get('po') if comparison else None
+            gr = comparison.get('gr') if comparison else None
             rows.append({
                 'kind':                  'standalone_invoice',
                 'transaction_package_id': None,
@@ -1536,12 +1546,18 @@ def get_auditor_transactions():
                 'supplier':              doc['vendor_name'],
                 'document_count':        1,
                 'invoice_count':         1,
-                'po_count':              1 if (comparison and comparison.get('po')) else 0,
-                'gr_count':              1 if (comparison and comparison.get('gr')) else 0,
+                'po_count':              1 if po else 0,
+                'gr_count':              1 if gr else 0,
                 'matching_status':       matching_status,
                 'package_status':        doc['status'],
                 'created_at':            doc['uploaded_at'].isoformat() if doc['uploaded_at'] else None,
                 'primary_document_id':   doc['document_id'],
+                # Same Related Docs fields as the package branch above,
+                # reusing the SAME comparison data already fetched for
+                # matching_status — no new query.
+                'invoice_numbers':       [doc['invoice_number']] if doc.get('invoice_number') else [],
+                'po_numbers':            [po['po_no']] if po and po.get('po_no') else [],
+                'gr_numbers':            [gr['gr_no']] if gr and gr.get('gr_no') else [],
             })
 
         conn.close()

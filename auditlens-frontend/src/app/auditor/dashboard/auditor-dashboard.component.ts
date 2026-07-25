@@ -214,6 +214,14 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     return Math.max(0, Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000));
   }
 
+  // Related Docs column — joins the reference numbers already returned
+  // by GET /auditor/transactions (invoice_numbers/po_numbers/gr_numbers)
+  // so an auditor can spot, e.g., multiple invoices sharing one PO
+  // just by scanning the column. No new data fetching.
+  relatedDocLabel(numbers: string[] | undefined): string {
+    return numbers && numbers.length > 0 ? numbers.join(', ') : '-';
+  }
+
   pct(n: number): string {
     return this.totalRecords > 0 ? ((n / this.totalRecords) * 100).toFixed(1) : '0';
   }
