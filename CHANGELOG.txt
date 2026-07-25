@@ -13119,3 +13119,149 @@ Rollback instructions:
   Redeploy the previous frontend build - no data or schema changes
   were made this phase (all fixture rows used for verification were
   inserted and deleted entirely within this phase's own testing).
+
+----------------------------------------------------------------------
+
+Date: 2026-07-25
+What was changed:
+  Phase 38: replaced Finance Home's Document Processing Queue grouping
+  with the SAME grouping mechanism Auditor Home's Transaction Review
+  Queue actually uses — real transaction_package membership — instead
+  of the previous phase's PO-number/vendor TEXT-matching heuristic.
+  Frontend only — no backend, no database changes, no Auditor files
+  touched.
+
+  Also checked (before writing any code) whether this was actually a
+  deployment gap rather than a code bug: this repo's own render.yaml
+  configures both services as standard Render Blueprint web services
+  with no `autoDeploy: false`, so Render auto-deploys on every push to
+  main - there is no separate manual "update Render" action available
+  to trigger from here. Per the project's standing update-workflow
+  preference, this is noted explicitly below rather than silently
+  assumed handled.
+
+  Why the previous (PO+vendor) fix was still insufficient: it was a
+  heuristic INFERRING a relationship from matching text fields, which
+  is a fundamentally different (and less trustworthy) signal than
+  Auditor Home's actual grouping, which groups by literal
+  transaction_package_documents membership - an explicit, Finance-
+  created relationship, not inferred from text. Two invoices could
+  share matching PO text without being formally linked into the same
+  case (or vice versa, in principle), so a heuristic can never fully
+  "match Auditor's grouping behavior" - only reading the same
+  relationship data Auditor reads can.
+
+  Frontend (auditlens-frontend/src/app/finance/home/finance-home.
+  component.ts):
+    - New loadTransactionPackages(): calls the EXISTING GET
+      /transaction-packages (Finance-scoped list, already used by
+      finance-transactions.component.ts) then, for every package
+      returned, GET /transaction-packages/<id> (existing detail
+      endpoint) in parallel via forkJoin - the same forkJoin-over-a-
+      bounded-set pattern already used by loadCyclesForActionStats()
+      in this file. Both endpoints already existed and were already
+      used elsewhere in this app; neither routes/transaction_
+      packages.py nor helpers/transaction_packages.py were touched.
+      Builds packageGroupByDocId: a Map from each package-linked
+      invoice's document_id to that package's combined, deduplicated
+      invoice/PO/GR numbers (read from get_package_documents() output
+      - the SAME helper function Auditor's list_all_packages_with_
+      documents() calls internally for its own queue).
+    - computeQueueGroups() rewritten: an invoice found in
+      packageGroupByDocId is placed into that package's row (using
+      the package's own combined invoice/PO/GR numbers, not a
+      recomputed heuristic); every other invoice becomes its own row,
+      reading only its own directly-linked PO/GR via the existing
+      poList/grList - exactly mirroring Auditor's get_auditor_
+      transactions() split between grouped "transaction_package" rows
+      and individual "standalone_invoice" rows. The PO-number+vendor
+      matching key, and the norm() text-normalization helper it used,
+      were removed entirely - no more text-based grouping of any kind.
+    - Needs both poGrLoaded and the new packagesLoaded before running
+      (guard extended accordingly); called from loadDocuments(),
+      loadPoGrLists(), AND the new loadTransactionPackages() (extended
+      from the existing dual call-site pattern to a triple call-site),
+      so whichever of the three async loads finishes last is the one
+      that actually produces the grouped rows.
+    - Every downstream field the template reads (invoiceLabel,
+      poLabel, grLabel, vendor, status, ocr_confidence, ageDaysValue,
+      primaryDoc) keeps the exact same shape as before, so finance-
+      home.component.html required no changes this phase.
+
+Confirmed unchanged:
+  - No backend files touched, no database changes, no Auditor files
+    touched - git diff --stat before committing shows only the one
+    finance-home.component.ts file.
+  - No new backend endpoint - GET /transaction-packages and GET
+    /transaction-packages/<id> both already existed and were already
+    in production use by finance-transactions.component.ts.
+  - Every other method on this page (getStatusClass/Label,
+    ocrConfidenceLabel, requiredActionLabel, actionLabel/
+    isActionClickable/onAction, all 5 chart renders,
+    computeDocStatusOverview/computeDocumentTypeDistribution/
+    computeCorrectionAnalysis/computePriorityFinanceItems, the KPI
+    cards, Priority Finance Action panel) is byte-for-byte unchanged.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size warnings, no new errors).
+  - Live-verified in a real browser (Playwright, throwaway
+    finance_executive account, cleaned up afterward) against
+    deliberately-inserted, fully-disposable fixture data using a REAL
+    transaction_packages row (not just matching text) to reproduce the
+    exact required scenario:
+    - L000016639 (under_review) and L000016545 (approved) formally
+      linked into ONE transaction package alongside PO3006231 and two
+      GRs (PD6012187, PD6012318) - confirmed the queue shows them as
+      exactly ONE row: "L000016639, L000016545" / "PO: PO3006231" /
+      "GR: PD6012187, PD6012318", matching the required example
+      precisely.
+    - IX107587, given its OWN directly-linked PO with the IDENTICAL
+      "PO3006231" text but NO transaction-package relationship at all
+      - confirmed it correctly stayed as its own separate row (not
+      merged with the Zenith case), proving grouping is now driven
+      purely by real package membership and can no longer be fooled by
+      matching PO text, which is the precise scenario this phase was
+      asked to fix.
+    - Total row count was exactly 2, zero console/page errors, zero
+      horizontal overflow.
+    - Caught and fixed a fixture-only mistake during testing (not a
+      code bug): initially gave the package's PO/GR fixture rows their
+      own throwaway `documents` entries, which leaked into Finance's
+      own GET /documents/-sourced queue as 3 extra phantom rows;
+      confirmed purchase_orders.document_id/goods_receipts.document_id
+      are nullable and a package-linked PO/GR doesn't need one, fixed
+      the fixture, and re-verified clean.
+    - All fixture rows (3 invoice documents, 1 transaction package, 2
+      package-document links for invoices + 3 for PO/GR, 1 standalone
+      PO, 1 throwaway user) deleted afterward and verified gone from
+      the dev DB.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser check clean
+  (0 console/page errors, correct package-based merge, correct non-
+  merge for a same-PO-text/no-package invoice, 0 horizontal overflow).
+  No backend changes this phase, so the backend test suite was not
+  re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false
+     on either service, so Render should auto-deploy the frontend from
+     this push with no separate manual trigger needed on my end.
+  2. If the fix still isn't visible after a few minutes, check the
+     Render dashboard's Deploys tab for auditlens-frontend to confirm
+     the latest commit actually built and deployed (a stuck/failed
+     auto-deploy would explain "the fix isn't showing" even though the
+     code itself is correct and pushed).
+  3. No backend redeploy strictly needed (no backend changes this
+     phase), but redeploying is harmless if done together with the
+     frontend.
+  4. No database migration needed (no schema changes).
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data or schema changes
+  were made this phase (all fixture rows used for verification were
+  inserted and deleted entirely within this phase's own testing).

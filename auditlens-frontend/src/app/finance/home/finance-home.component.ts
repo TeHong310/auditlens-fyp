@@ -50,10 +50,13 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
   @ViewChild('ocrConfidenceChart') ocrConfidenceChartRef!: ElementRef;
   @ViewChild('correctionChart') correctionChartRef!: ElementRef;
 
-  // Document Processing Queue rows — one row per PROCUREMENT CASE, not
-  // per invoice: invoices sharing the same linked PO are grouped into a
-  // single row (see computeQueueGroups() below), so e.g. two invoices
-  // billed against the same PO no longer appear as two separate rows.
+  // Document Processing Queue rows — one row per AP CASE, not per
+  // invoice, grouped the SAME way Auditor Home's Transaction Review
+  // Queue groups: by real transaction_package membership (see
+  // loadTransactionPackages()/computeQueueGroups() below) — not a
+  // text-matching heuristic. An invoice not linked into any package
+  // stays its own row, exactly like Auditor's "standalone_invoice"
+  // rows.
   queueRows: any[] = [];
   allDocuments: any[] = [];
   totalUploaded: number = 0;
@@ -99,6 +102,19 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
   poGrLoaded: boolean = false;
   cyclesLoaded: boolean = false;
 
+  // ── Document Processing Queue grouping — reuses the SAME
+  // transaction-package data Auditor Home's Transaction Review Queue
+  // groups by (GET /transaction-packages, the Finance-scoped
+  // equivalent of the endpoint list_all_packages_with_documents()
+  // backs on the Auditor side — both call the same helpers.
+  // transaction_packages.get_package_documents() under the hood).
+  // packageGroupByDocId maps an invoice's document_id to its
+  // package's combined invoice/PO/GR numbers, built once all package
+  // details have loaded. No new backend endpoint, no transaction-
+  // package logic touched — read-only. ──
+  private packageGroupByDocId: Map<number, { packageId: number; invoiceNumbers: string[]; poNumbers: string[]; grNumbers: string[] }> = new Map();
+  packagesLoaded: boolean = false;
+
   // ── Derived, presentation-only breakdowns for the 6-chart grid —
   // each computed purely from data already fetched above, no new
   // business logic. ──
@@ -124,10 +140,11 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
   ) { }
 
   ngOnInit() {
-    // Both fired together, in parallel — loadPoGrLists() is not
-    // chained behind loadDocuments(), avoiding a slower waterfall.
+    // All three fired together, in parallel — none is chained behind
+    // another, avoiding a slower waterfall.
     this.loadDocuments();
     this.loadPoGrLists();
+    this.loadTransactionPackages();
   }
 
   ngAfterViewInit() {
@@ -231,6 +248,60 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
       this.renderDocTypeChart();
       this.renderCorrectionChart();
     });
+  }
+
+  // Document Processing Queue grouping data source — reuses the
+  // EXISTING GET /transaction-packages (list, Finance-scoped to the
+  // current user) and GET /transaction-packages/<id> (detail, same
+  // get_package_documents() helper Auditor's own queue endpoint calls)
+  // endpoints, already used elsewhere in this app (finance-transactions
+  // .component.ts). No new backend endpoint, no transaction-package
+  // logic touched — purely read-only. The list call is typically small
+  // (a Finance user's own packages), so fetching every package's full
+  // document detail in parallel is bounded, same forkJoin-over-a-
+  // bounded-set pattern already used by loadCyclesForActionStats()
+  // below.
+  loadTransactionPackages() {
+    this.http.get<any[]>(`${this.apiUrl}/transaction-packages`, { headers: this.getHeaders() })
+      .pipe(catchError(() => of([])))
+      .subscribe((packages: any[]) => {
+        if (!packages.length) {
+          this.packagesLoaded = true;
+          this.computeQueueGroups();
+          this.cdr.detectChanges();
+          return;
+        }
+
+        const requests: { [id: number]: any } = {};
+        for (const pkg of packages) {
+          requests[pkg.id] = this.http.get<any>(`${this.apiUrl}/transaction-packages/${pkg.id}`, { headers: this.getHeaders() })
+            .pipe(catchError(() => of(null)));
+        }
+
+        forkJoin(requests).subscribe((results: any) => {
+          const map = new Map<number, { packageId: number; invoiceNumbers: string[]; poNumbers: string[]; grNumbers: string[] }>();
+          for (const pkg of packages) {
+            const detail = results[pkg.id];
+            const docs = detail?.documents;
+            if (!docs) continue;
+
+            const group = {
+              packageId: pkg.id,
+              invoiceNumbers: Array.from(new Set<string>(docs.invoices.map((d: any) => d.invoice_number).filter(Boolean))),
+              poNumbers: Array.from(new Set<string>(docs.purchase_orders.map((p: any) => p.po_number).filter(Boolean))),
+              grNumbers: Array.from(new Set<string>(docs.goods_receipts.map((g: any) => g.gr_number).filter(Boolean))),
+            };
+            for (const inv of docs.invoices) {
+              map.set(inv.document_id, group);
+            }
+          }
+          this.packageGroupByDocId = map;
+          this.packagesLoaded = true;
+
+          this.computeQueueGroups();
+          this.cdr.detectChanges();
+        });
+      });
   }
 
   // Reuses GET /reviews/send-back-cycles/<id> (already used identically
@@ -629,31 +700,27 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
     return doc.ocr_confidence ? `${Math.round(parseFloat(doc.ocr_confidence))}%` : '-';
   }
 
-  // ── Document Processing Queue grouping — invoices that belong to
-  // the SAME procurement case are grouped into a single row instead of
-  // appearing as separate rows. Built entirely from poList/grList,
-  // already loaded by loadPoGrLists() for the charts above (no new
-  // request); each PO/GR row's own document_id already points back at
-  // the invoice it belongs to. Needs poGrLoaded — called from both
-  // loadDocuments() and loadPoGrLists() (dual call-site, same pattern
-  // as computeCorrectionAnalysis() above), so whichever of the two
-  // resolves last is the one that actually produces the grouped rows.
-  //
-  // A "procurement case" = same PO number AND same vendor — matching
-  // on PO number text alone is not enough: two DIFFERENT vendors could
-  // coincidentally use the same/generic PO number (e.g. "PO-001", or
-  // an OCR misread), and merging those would incorrectly combine two
-  // unrelated invoices into one row. Requiring both keeps a genuine
-  // shared-PO case (same vendor billing the same PO across invoices)
-  // grouped correctly while leaving unrelated invoices untouched.
+  // ── Document Processing Queue grouping — matches Auditor Home's
+  // Transaction Review Queue behavior exactly: invoices linked into
+  // the SAME transaction package are grouped into one row (a real AP
+  // case); an invoice not in any package is its own row, just like
+  // Auditor's "standalone_invoice" rows. Grouping is based on the
+  // ACTUAL transaction_package_documents relationship (via
+  // packageGroupByDocId, built by loadTransactionPackages() above) —
+  // not text/PO-number matching, so it can't accidentally merge or
+  // split cases differently than Auditor's own queue would. Needs
+  // both poGrLoaded (standalone invoices still read their own PO/GR
+  // from poList/grList) and packagesLoaded — called from
+  // loadDocuments(), loadPoGrLists(), and loadTransactionPackages()
+  // (triple call-site, same pattern as computeCorrectionAnalysis()
+  // above), so whichever load finishes last is the one that actually
+  // produces the grouped rows.
   private computeQueueGroups() {
-    if (!this.poGrLoaded) return;
+    if (!this.poGrLoaded || !this.packagesLoaded) return;
 
-    const norm = (s: any) => (s || '').toString().trim().toLowerCase();
-
-    const poByDocId = new Map<number, { number: string; vendor: string }>();
+    const poByDocId = new Map<number, string>();
     for (const po of this.poList) {
-      if (po.po_number) poByDocId.set(po.document_id, { number: po.po_number, vendor: norm(po.vendor_name) });
+      if (po.po_number) poByDocId.set(po.document_id, po.po_number);
     }
     const grNumbersByDocId = new Map<number, string[]>();
     for (const gr of this.grList) {
@@ -663,20 +730,6 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
       grNumbersByDocId.set(gr.document_id, arr);
     }
 
-    // Group key = shared PO number + shared vendor when a PO exists;
-    // otherwise each invoice is its own single-member group (never
-    // merged with an unrelated invoice just for lacking a PO, and
-    // never merged across vendors just for a matching PO string).
-    const groupMap = new Map<string, any[]>();
-    for (const doc of this.thisMonthDocsCache) {
-      const po = poByDocId.get(doc.document_id);
-      const vendor = po ? po.vendor || norm(doc.vendor_name) : null;
-      const key = po ? `po:${norm(po.number)}|${vendor}` : `doc:${doc.document_id}`;
-      const arr = groupMap.get(key) || [];
-      arr.push(doc);
-      groupMap.set(key, arr);
-    }
-
     // Which single invoice in a group represents the row for Status/
     // Required Action/Age/Action purposes: the most urgent one, so a
     // case isn't hidden behind an already-approved sibling.
@@ -684,29 +737,60 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
       returned: 5, under_review: 4, resubmitted: 4, ocr_processing: 3, ocr_done: 2, approved: 1,
     };
 
-    const rows = Array.from(groupMap.values()).map((docs: any[]) => {
+    const docsByPackageId = new Map<number, any[]>();
+    const standaloneDocs: any[] = [];
+    for (const doc of this.thisMonthDocsCache) {
+      const group = this.packageGroupByDocId.get(doc.document_id);
+      if (group) {
+        const arr = docsByPackageId.get(group.packageId) || [];
+        arr.push(doc);
+        docsByPackageId.set(group.packageId, arr);
+      } else {
+        standaloneDocs.push(doc);
+      }
+    }
+
+    const rows: any[] = [];
+
+    for (const docs of docsByPackageId.values()) {
+      const group = this.packageGroupByDocId.get(docs[0].document_id)!;
       const primary = [...docs].sort((a, b) => (STATUS_PRIORITY[b.status] || 0) - (STATUS_PRIORITY[a.status] || 0))[0];
       const newest = [...docs].sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())[0];
-
-      const invoiceNumbers = docs.map(d => d.invoice_number).filter((n: any) => !!n);
-      const grNumbers = Array.from(new Set(docs.flatMap(d => grNumbersByDocId.get(d.document_id) || [])));
       const confidences = docs
         .map(d => d.ocr_confidence ? parseFloat(d.ocr_confidence) : null)
         .filter((c): c is number => c !== null);
 
-      return {
+      rows.push({
         documentIds: docs.map(d => d.document_id),
-        invoiceLabel: invoiceNumbers.length > 0 ? invoiceNumbers.join(', ') : (docs[0].file_name || '-'),
-        poLabel: poByDocId.get(docs[0].document_id)?.number || null,
-        grLabel: grNumbers.length > 0 ? grNumbers.join(', ') : '-',
+        invoiceLabel: group.invoiceNumbers.length > 0 ? group.invoiceNumbers.join(', ') : (docs[0].file_name || '-'),
+        poLabel: group.poNumbers.length > 0 ? group.poNumbers.join(', ') : null,
+        grLabel: group.grNumbers.length > 0 ? group.grNumbers.join(', ') : '-',
         vendor: primary.vendor_name,
         status: primary.status,
         ocr_confidence: confidences.length > 0 ? confidences.reduce((a, b) => a + b, 0) / confidences.length : null,
         ageDaysValue: Math.max(...docs.map(d => this.ageDays(d.uploaded_at))),
         primaryDoc: primary,
         newestUploadedAt: newest.uploaded_at,
-      };
-    });
+      });
+    }
+
+    // Standalone invoices (not in any transaction package) — each its
+    // own row, reading its own directly-linked PO/GR only, exactly
+    // like Auditor's standalone_invoice rows.
+    for (const doc of standaloneDocs) {
+      rows.push({
+        documentIds: [doc.document_id],
+        invoiceLabel: doc.invoice_number || doc.file_name || '-',
+        poLabel: poByDocId.get(doc.document_id) || null,
+        grLabel: (grNumbersByDocId.get(doc.document_id) || []).join(', ') || '-',
+        vendor: doc.vendor_name,
+        status: doc.status,
+        ocr_confidence: doc.ocr_confidence ? parseFloat(doc.ocr_confidence) : null,
+        ageDaysValue: this.ageDays(doc.uploaded_at),
+        primaryDoc: doc,
+        newestUploadedAt: doc.uploaded_at,
+      });
+    }
 
     rows.sort((a, b) => new Date(b.newestUploadedAt || 0).getTime() - new Date(a.newestUploadedAt || 0).getTime());
     this.queueRows = rows.slice(0, 5);
