@@ -23,7 +23,7 @@ from helpers.claude_cache import get_cached_claude_result, save_claude_result_to
 from helpers.ai_extractor_router import route_ai_extraction
 from helpers.confidence_engine import compute_field_confidence, compute_line_items_confidence, log_field_confidence
 from helpers.extraction_validator import validate_extraction
-from routes.authenticity import generate_invoice_authenticity_if_missing
+from routes.authenticity import generate_invoice_authenticity_if_missing, generate_authenticity_if_missing
 from routes.ai_assistant import _build_case_context
 from config import Config
 
@@ -637,8 +637,16 @@ def upload_purchase_order(document_id):
         conn.commit()
         conn.close()
 
-        # Authentication check no longer runs automatically here — it's
-        # on-demand only (see upload_document()'s invoice endpoint for why).
+        # Auto-trigger the authenticity engine for this PO — same
+        # idempotent, never-raising trigger the invoice endpoint uses
+        # (see generate_authenticity_if_missing's docstring in
+        # routes/authenticity.py). Wrapped the same defensively as
+        # invoice's call: any failure here must never break the upload
+        # response.
+        try:
+            generate_authenticity_if_missing(document_id, file_bytes_data, safe_name, 'po')
+        except Exception as e:
+            print(f"DEBUG authenticity auto-trigger error: {type(e).__name__}: {e}")
 
         log_audit(user['user_id'], 'UPLOAD_PO', 'purchase_orders', po_id,
                   f'PO uploaded for document {document_id}: {safe_name}')
@@ -822,8 +830,16 @@ def upload_goods_receipt(document_id):
         conn.commit()
         conn.close()
 
-        # Authentication check no longer runs automatically here — it's
-        # on-demand only (see upload_document()'s invoice endpoint for why).
+        # Auto-trigger the authenticity engine for this GR — same
+        # idempotent, never-raising trigger the invoice endpoint uses
+        # (see generate_authenticity_if_missing's docstring in
+        # routes/authenticity.py). Wrapped the same defensively as
+        # invoice's call: any failure here must never break the upload
+        # response.
+        try:
+            generate_authenticity_if_missing(document_id, file_bytes_data, safe_name, 'gr')
+        except Exception as e:
+            print(f"DEBUG authenticity auto-trigger error: {type(e).__name__}: {e}")
 
         log_audit(user['user_id'], 'UPLOAD_GR', 'goods_receipts', gr_id,
                   f'GR uploaded for document {document_id}: {safe_name}')

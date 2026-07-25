@@ -708,10 +708,11 @@ def run_authenticity_check(document_id, file_bytes, file_name, document_type, do
                             extracted_vendor_name=None, use_cache=True):
     """
     Main entry — Claude Vision primary, Gemini fallback, OCR-text-only as
-    the last-resort safety net. NEVER raises — pipeline safe. Called
-    on-demand only (GET /authenticity/<id> on first view, or
-    POST /authenticity/<id>/recheck) — NOT automatically at upload time
-    (see routes/documents.py, which no longer calls this).
+    the last-resort safety net. NEVER raises — pipeline safe. Called both
+    automatically right after upload for Invoice/PO/GR (routes/documents.py's
+    generate_authenticity_if_missing()) and on-demand (GET /authenticity/<id>
+    on first view, POST /authenticity/<id>/recheck, or the opportunistic
+    sibling check in routes/authenticity.py's _ensure_sibling_checks()).
 
     document_type: 'invoice' | 'po' | 'gr' (required)
     file_bytes/file_name: the raw bytes of the uploaded document (from

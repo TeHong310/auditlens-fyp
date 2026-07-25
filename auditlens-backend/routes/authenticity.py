@@ -163,14 +163,16 @@ def _ensure_sibling_checks(document_id, primary_type):
     has an uploaded file for this document_id has an authenticity_checks
     row — not just the one document_type the caller explicitly requested.
 
-    This is what makes PO/GR show up on the Authenticity page: Record
-    Detail's warning banner is the only place that already calls
-    GET /authenticity/<id> (for the invoice) on every record view, so
-    piggybacking sibling checks onto that call means opening a record
-    once is enough to check all of its Invoice/PO/GR — no separate UI
-    trigger needed for PO/GR specifically. Idempotent (a sibling that
-    already has a row is skipped) and best-effort: a sibling failure is
-    logged and never propagates to the caller's primary result.
+    Invoice/PO/GR now each get their own row automatically at upload
+    time (generate_authenticity_if_missing(), called from
+    routes/documents.py), so this is mainly a fallback for documents
+    uploaded before that existed, or where the upload-time check
+    skipped/failed for one type (e.g. a file too large to persist to
+    the DB and no longer on disk) — it still runs on every Record Detail
+    view so a gap eventually self-heals the first time someone opens the
+    record. Idempotent (a sibling that already has a row is skipped) and
+    best-effort: a sibling failure is logged and never propagates to the
+    caller's primary result.
     """
     for doc_type in VALID_DOC_TYPES:
         if doc_type == primary_type:
@@ -352,12 +354,10 @@ def _document_consistency_for(cursor, document_id):
 
 # ------------------------------------------------------------
 # AUTO-TRIGGER: called from routes/documents.py right after a successful
-# invoice extraction, so the Authenticity page has a result the first
-# time an auditor looks — instead of only after someone has separately
-# opened Record Detail for that specific document (the old on-demand-
-# only behavior). PO/GR uploads and manual Re-check are UNCHANGED — this
-# only adds a new call site for the invoice-upload moment; nothing about
-# how/when PO/GR checks or _ensure_sibling_checks() run is touched.
+# Invoice/PO/GR extraction, so the Authenticity page has a result the
+# first time an auditor looks — instead of only after someone has
+# separately opened Record Detail for that specific document (the old
+# on-demand-only behavior). Manual Re-check is unchanged.
 #
 # Reuses the EXACT SAME existing pieces GET /authenticity/<id> already
 # uses on-demand: the same run_authenticity_check() engine (Claude
@@ -367,9 +367,9 @@ def _document_consistency_for(cursor, document_id):
 # document_consistency/extracted_vendor_name helpers. No new AI
 # provider, no new engine, no new cache.
 # ------------------------------------------------------------
-def generate_invoice_authenticity_if_missing(document_id, file_bytes, file_name):
+def generate_authenticity_if_missing(document_id, file_bytes, file_name, document_type):
     """Idempotent: if authenticity_checks already has a row for
-    (document_id, document_type='invoice') — the exact same
+    (document_id, document_type) — the exact same
     UNIQUE(document_id, document_type) constraint the table already
     enforces — this is a no-op and NO AI call is made. Otherwise runs
     the existing engine once and lets it persist its own row exactly as
@@ -378,9 +378,9 @@ def generate_invoice_authenticity_if_missing(document_id, file_bytes, file_name)
 
     Never raises: any failure (DB error, engine error) is logged and
     swallowed so a problem here can never break the upload response —
-    the caller in routes/documents.py wraps this in its own try/except
+    every caller in routes/documents.py wraps this in its own try/except
     too, matching the existing run_anomaly_detection(document_id) call
-    immediately above it in that file.
+    pattern in that file.
 
     Returns the new check_id, or None if skipped/failed (nothing reads
     this return value today; kept for parity with run_authenticity_check
@@ -392,31 +392,40 @@ def generate_invoice_authenticity_if_missing(document_id, file_bytes, file_name)
 
         cursor.execute(
             'SELECT 1 FROM authenticity_checks WHERE document_id = %s AND document_type = %s',
-            (document_id, 'invoice')
+            (document_id, document_type)
         )
         if cursor.fetchone():
             conn.close()
-            print(f"DEBUG Authenticity auto-trigger: document_id={document_id} already has an "
-                  f"invoice authenticity check — skipped (no AI call)")
+            print(f"DEBUG Authenticity auto-trigger: document_id={document_id} already has a "
+                  f"{document_type} authenticity check — skipped (no AI call)")
             return None
 
         document_consistency  = _document_consistency_for(cursor, document_id)
-        extracted_vendor_name = _extracted_vendor_name_for(cursor, document_id, 'invoice')
+        extracted_vendor_name = _extracted_vendor_name_for(cursor, document_id, document_type)
         conn.close()
 
-        check_id = run_authenticity_check(document_id, file_bytes, file_name, 'invoice',
+        check_id = run_authenticity_check(document_id, file_bytes, file_name, document_type,
                                             document_consistency=document_consistency,
                                             extracted_vendor_name=extracted_vendor_name)
         if check_id is None:
             print(f"DEBUG Authenticity auto-trigger: run_authenticity_check returned None "
-                  f"for document_id={document_id} — engine failure, see prior logs; upload is unaffected")
+                  f"for document_id={document_id} type={document_type} — engine failure, see prior logs; upload is unaffected")
         else:
-            print(f"DEBUG Authenticity auto-trigger: check_id={check_id} created for document_id={document_id}")
+            print(f"DEBUG Authenticity auto-trigger: check_id={check_id} created for document_id={document_id} type={document_type}")
         return check_id
 
     except Exception as e:
-        print(f"DEBUG Authenticity auto-trigger error for document_id={document_id}: {type(e).__name__}: {e}")
+        print(f"DEBUG Authenticity auto-trigger error for document_id={document_id} type={document_type}: {type(e).__name__}: {e}")
         return None
+
+
+def generate_invoice_authenticity_if_missing(document_id, file_bytes, file_name):
+    """Invoice-specific entry point, kept so the existing
+    routes/documents.py invoice call site and existing tests
+    (test_authenticity_auto_trigger.py) are unaffected — see
+    generate_authenticity_if_missing() above for the full behavior,
+    now shared by Invoice/PO/GR."""
+    return generate_authenticity_if_missing(document_id, file_bytes, file_name, 'invoice')
 
 
 # ------------------------------------------------------------

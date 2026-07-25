@@ -13265,3 +13265,194 @@ Rollback instructions:
   Redeploy the previous frontend build - no data or schema changes
   were made this phase (all fixture rows used for verification were
   inserted and deleted entirely within this phase's own testing).
+
+
+----------------------------------------------------------------------
+
+Date: 2026-07-25
+What was changed:
+  Phase 39: Purchase Order and Goods Receipt uploads now trigger the
+  authenticity engine automatically at upload time, the same way
+  Invoice uploads already did — instead of only being checked
+  on-demand when an auditor opens Record Detail. Backend only — no
+  frontend, no database schema changes.
+
+  routes/authenticity.py:
+    - generate_invoice_authenticity_if_missing(document_id, file_bytes,
+      file_name) — the existing invoice-only auto-trigger added in an
+      earlier phase — is generalized into a new
+      generate_authenticity_if_missing(document_id, file_bytes,
+      file_name, document_type), identical logic parameterized by
+      document_type instead of hardcoded 'invoice'.
+      generate_invoice_authenticity_if_missing() itself becomes a thin
+      one-line wrapper calling the generic function with
+      document_type='invoice', so its existing call site in
+      routes/documents.py's invoice upload endpoint, and the existing
+      test suite (test_authenticity_auto_trigger.py), are completely
+      unaffected — invoice behavior is byte-for-byte identical to
+      before.
+    - Updated two doc-comments that were about to become misleading:
+      the AUTO-TRIGGER block comment above the function (previously
+      said PO/GR uploads were deliberately left unchanged — no longer
+      true) and _ensure_sibling_checks' docstring (previously claimed
+      to be the mechanism that "makes PO/GR show up on the Authenticity
+      page" — now a secondary fallback, since upload-time triggering is
+      the primary path for a newly-uploaded PO/GR).
+
+  routes/documents.py:
+    - upload_purchase_order() and upload_goods_receipt(): replaced the
+      "Authentication check no longer runs automatically here" comment
+      (left over from when this WAS intentionally disabled for PO/GR,
+      to keep upload latency down before the Claude-powered engine
+      existed) with a call to
+      generate_authenticity_if_missing(document_id, file_bytes_data,
+      safe_name, 'po'/'gr'), wrapped in the same defensive
+      try/except-log-and-continue pattern already used for the invoice
+      endpoint's call and for run_anomaly_detection() — any failure
+      here can never break the upload response.
+    - upload_document() (invoice endpoint) is completely untouched —
+      same call, same import name, same behavior.
+
+  helpers/authenticity_check.py:
+    - Fixed a stale docstring on run_authenticity_check() that still
+      said it was "NOT automatically [called] at upload time" — no
+      longer accurate for any of the 3 document types after this
+      phase.
+
+  routes/authenticity.py's PO/GR on-demand paths (GET /authenticity/<id>
+  with document_type=po|gr, POST /authenticity/<id>/recheck, and
+  _ensure_sibling_checks' opportunistic sibling-check when Record Detail
+  is opened) are all UNCHANGED — the idempotency check
+  (UNIQUE(document_id, document_type) on authenticity_checks) means a
+  PO/GR that already got its row at upload time is simply skipped
+  (no AI call) when any of those on-demand paths run later, exactly the
+  same "already has a row, no-op" behavior invoice uploads have always
+  had.
+
+Why:
+  Reported gap: authenticity_checks only ever had rows for Invoice
+  documents, because upload-time auto-triggering (added in an earlier
+  phase for cost/UX reasons — so the Authenticity page has a result the
+  first time anyone looks) was only ever wired up for the invoice
+  upload endpoint. PO/GR were still on-demand-only, so a PO/GR uploaded
+  but never separately opened in Record Detail never got checked.
+  Requested fix: extend the SAME upload-time trigger Invoice already
+  has to Purchase Order and Goods Receipt uploads too, reusing the
+  existing engine rather than adding a new one.
+
+Confirmed unchanged:
+  - No frontend files touched — git diff --stat before committing
+    shows only routes/authenticity.py, routes/documents.py,
+    helpers/authenticity_check.py, plus a new/updated test file.
+  - No database schema changes — authenticity_checks already had a
+    document_type column and the UNIQUE(document_id, document_type)
+    constraint this relies on (added in the earlier Authenticity Vision
+    Accuracy Upgrade v2 phase).
+  - Invoice upload behavior is unchanged: same function name at the
+    same call site, now delegating to the generalized helper but
+    producing an identical result — proven by a dedicated regression
+    test case (below) asserting the wrapper still calls
+    run_authenticity_check with document_type='invoice'.
+  - GET /authenticity/<id>, POST /authenticity/<id>/recheck, and
+    _ensure_sibling_checks (the Record Detail opportunistic sibling
+    check) are byte-for-byte unchanged aside from the two doc-comments
+    noted above.
+
+Test results:
+  - New test file tests/extraction/test_authenticity_po_gr_auto_trigger.py
+    (added to tests/extraction/run_all.py's suite list), no real
+    Anthropic/Gemini calls, no real DB — get_db_connection,
+    _document_consistency_for, _extracted_vendor_name_for, and
+    run_authenticity_check monkey-patched with fakes, same house style
+    as the existing test_authenticity_auto_trigger.py:
+    - PO and GR each independently trigger run_authenticity_check
+      exactly once with the correct document_type when no row exists
+      yet.
+    - An existing row is skipped (zero AI calls) — idempotency proven
+      for PO/GR the same way it was already proven for invoice.
+    - The engine returning None, or raising, is swallowed and never
+      breaks the caller (upload response safety, same as invoice).
+    - generate_invoice_authenticity_if_missing() still delegates
+      correctly with document_type='invoice' after the refactor into a
+      thin wrapper.
+  - Full backend regression suite (python tests/extraction/run_all.py,
+    25 suites including test_authenticity_ai.py,
+    test_authenticity_siblings.py, test_authenticity_scoring.py,
+    test_authenticity_auto_trigger.py, and the new
+    test_authenticity_po_gr_auto_trigger.py) — all 25 PASS, zero
+    regressions in the pre-existing invoice auto-trigger or sibling-
+    check suites.
+  - python -c "import app" — succeeds, no migration needed (no new
+    columns).
+  - Live end-to-end verification against the real dev backend (Flask
+    dev server started locally, throwaway finance_executive account,
+    cleaned up afterward) — the actual scenario requested:
+    - Uploaded 2 invoices (their own document_ids), 1 PO attached to
+      the first invoice's document_id, and 2 GRs — one attached to
+      each invoice's document_id (necessary because authenticity_checks
+      is uniquely keyed by (document_id, document_type): a single
+      document_id can only ever hold ONE 'po' row and ONE 'gr' row, so
+      2 independently-checked GRs need 2 different document_ids, same
+      as they would in real usage — an AP case with 2 invoices
+      naturally has 2 document_ids to hang each GR off).
+    - Linked all 5 into ONE transaction_packages record (2x 'invoice',
+      1x 'purchase_order', 2x 'goods_receipt' roles) via the existing
+      POST /transaction-packages and POST /transaction-packages/<id>/documents
+      endpoints — all 201.
+    - Queried authenticity_checks directly for the 2 document_ids
+      afterward: exactly 5 rows — (doc1, invoice), (doc1, po),
+      (doc1, gr), (doc2, invoice), (doc2, gr) — one per uploaded
+      document, confirming the fix.
+    - This dev environment's configured Gemini API key is currently
+      returning 401 UNAUTHENTICATED on every call (pre-existing
+      environment issue, unrelated to this change) and no
+      ANTHROPIC_API_KEY is set, so every one of the 5 checks resolved
+      through run_authenticity_check's documented last-resort
+      OCR-text-only fallback engine rather than a real Claude/Gemini
+      vision result — the ROW was still created every time exactly as
+      designed (that graceful degradation is existing, unmodified
+      behavior), but visual accuracy of these 5 particular fallback
+      results should not be read as a signal of AI engine quality. A
+      redeploy with a working Gemini/Anthropic key will exercise the
+      same code path with the real vision engine.
+    - All fixture rows (2 documents, 2 extracted_fields, 1
+      purchase_orders, 2 goods_receipts, 5 authenticity_checks, 1
+      transaction_packages, 5 transaction_package_documents, 7
+      audit_logs, 1 throwaway user) deleted afterward and verified
+      gone (0 remaining) from the dev DB via direct COUNT queries.
+    - Dev server processes stopped by exact PID afterward (Flask debug
+      reloader's watcher + child + grandchild — none left running).
+
+Build result:
+  Backend: python -c "import app" clean; full extraction test suite
+  (25/25 suites) green; live upload-to-authenticity_checks flow
+  verified end-to-end against the real dev DB and cleaned up. No
+  frontend changes this phase, so no Angular build was run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0. (The live verification above
+  exercised AuditLens's OWN internal Claude/Gemini calls as part of
+  testing the app's upload pipeline — not Claude/Gemini calls made by
+  me while doing this task.)
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false
+     on either service, so Render should auto-deploy the backend from
+     this push with no separate manual trigger needed on my end.
+  2. If PO/GR uploads still don't produce an authenticity_checks row
+     after deploy, check Render's Deploys tab for auditlens-backend to
+     confirm the latest commit actually built and deployed, and check
+     that a working GEMINI_API_KEY/ANTHROPIC_API_KEY is configured in
+     Render's environment — the trigger itself will still create a row
+     via the OCR-text-only fallback even with no working AI key (as
+     proven above), but visual authenticity checks require at least one
+     working key.
+  3. No frontend redeploy needed (no frontend changes this phase).
+  4. No database migration needed (no schema changes — this reuses the
+     existing document_type column and UNIQUE(document_id,
+     document_type) constraint on authenticity_checks).
+
+Rollback instructions:
+  Redeploy the previous backend build - no data or schema changes were
+  made this phase (all fixture rows used for verification were
+  inserted and deleted entirely within this phase's own testing).
