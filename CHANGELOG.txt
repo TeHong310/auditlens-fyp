@@ -14451,3 +14451,182 @@ Rollback instructions:
   Redeploy the previous backend + frontend build - no data or schema
   changes were made this phase (all fixture rows used for verification
   were inserted and deleted entirely within this phase's own testing).
+
+
+----------------------------------------------------------------------
+
+Date: 2026-07-26
+What was changed:
+  Phase 45: added a 4th Approval Assessment section, "Risk Context",
+  for non-blocking/informational anomaly findings (weekend transaction,
+  low-severity amount pattern, informational/already-reviewed duplicate
+  pattern, etc.) that give the auditor useful context WITHOUT ever
+  counting as a reason approval is blocked. Approval Readiness/Blocking
+  Issues logic (_compute_approval_readiness) is completely untouched —
+  this phase only adds a new, independent field alongside it.
+
+  auditlens-backend/routes/ai_assistant.py:
+    - New _ANOMALY_TYPE_PLAIN_LABEL dict (duplicate/amount/round/
+      weekend -> plain-language phrase) — the SAME translation table
+      the prompt below already asks the AI to use in its own wording,
+      shared here so the deterministic fallback can never contradict
+      what a working AI call would have said.
+    - New _compute_risk_context_fallback(context): plain-language
+      translation of every INFORMATIONAL (non-blocking) anomaly
+      already computed for this case — reuses the exact same
+      'classification' field _compute_approval_readiness/_classify_
+      anomaly already rely on, so a 'blocking' anomaly can NEVER leak
+      into Risk Context (it belongs in blocking_issues instead).
+      Returns [] when there are no informational anomalies — a
+      genuinely empty Risk Context is the correct result in that case,
+      not a fallback failure, so (unlike passed_checks/recommended_
+      next_steps) no filler text is used.
+    - _clamp_approval_assessment_result(): added risk_context as a 4th
+      field, independent of approval_readiness — it's computed and
+      shown regardless of whether the case is Ready, Not Ready, or
+      Requires Review (a Ready record can still have a historical/
+      informational anomaly worth noting, exactly the original "PASS
+      document + reviewed historical duplicate" scenario from an
+      earlier phase). Uses the AI's own risk_context list when it
+      returns something usable, otherwise falls back to
+      _compute_risk_context_fallback() above. Capped at the same
+      _APPROVAL_ASSESSMENT_MAX_POINTS (4) as every other section.
+
+  auditlens-backend/helpers/ai_assistant.py:
+    - _ACTION_INSTRUCTIONS['approval_assessment']: added risk_context
+      to the "at most 4 items" list and to the JSON return schema, with
+      its own paragraph defining it (non-blocking/informational
+      findings — weekend-dated invoice, low-severity unusual-amount
+      pattern, already-reviewed/historical duplicate pattern, or any
+      other informational risk finding; empty when there are none, do
+      not invent one) and 3 explicit separation rules matching the
+      task's own: (1) an informational/non-blocking anomaly is NEVER a
+      blocking issue — reinforced in blocking_issues' own description
+      too; (2) never repeat a risk_context item under passed_checks;
+      (3) never recommend resolving a risk_context item in
+      recommended_next_steps unless that same item is ALSO listed in
+      blocking_issues.
+
+  auditlens-frontend/src/app/auditor/record-detail/
+  auditor-record-detail.component.ts:
+    - aiApprovalAssessment's type and approvalAssessment()'s response
+      mapping extended with risk_context: string[].
+
+  auditlens-frontend/src/app/auditor/record-detail/
+  auditor-record-detail.component.html:
+    - New "Risk Context" mini-card, positioned between Passed Checks
+      and Recommended Next Steps, using the ph-info icon (the SAME icon
+      this app already uses for every other informational-note context
+      — auditor-authenticity-detail's evidence-summary note, the
+      Finance profile page's own notes, the Finance notification bell)
+      for genuine visual consistency rather than a one-off choice.
+      Reuses the EXACT SAME .audit-impact-box/.approval-mini-card/
+      .subsection-title/.ai-risk-reasons classes the other 3 mini-cards
+      already use — zero new CSS. *ngIf-guarded exactly like the other
+      3 sections, so a case with no informational anomalies simply
+      shows no Risk Context card at all.
+
+Why:
+  Requested improvement: informational anomalies (weekend transaction,
+  low-severity amount, informational duplicate pattern) had nowhere to
+  go in the Approval Assessment output — the prompt only distinguished
+  blocking_issues (things that DO block approval) from passed_checks
+  (things that passed), with no home for "worth knowing, but not a
+  blocker" findings. Without a dedicated Risk Context section, an
+  auditor either lost that context entirely or risked seeing it
+  mis-categorized as if it were blocking.
+
+Confirmed unchanged (existing AI logic / approval workflow):
+  - _compute_approval_readiness(context) — the ONLY thing that decides
+    Ready/Not Ready/Requires Review, and the deterministic blocking_
+    issues list — is byte-for-byte unchanged. Risk Context is a
+    completely independent field computed alongside it, never feeding
+    back into the readiness verdict.
+  - _clamp_approval_assessment_result() still ALWAYS substitutes the
+    deterministic readiness for whatever the AI returned, and still
+    forces blocking_issues empty for a 'Ready' verdict — the exact same
+    'AI can inform, never decide' guarantee as before.
+  - approveDocument()/submitSendBack() and the Need Review/Send Back to
+    Finance/Approve buttons: completely untouched.
+  - blocking_issues/passed_checks/recommended_next_steps' own
+    definitions, caps, and fallback behavior are unchanged aside from
+    the added cross-reference to risk_context (never repeat one there).
+  - Every other AI action (explain_exception/explain_risk/
+    generate_remark/prepare_send_back/ask/generate_finance_response/
+    recommended_steps) and the shared _SYSTEM_PREAMBLE: byte-for-byte
+    unchanged.
+
+Test results:
+  - tests/extraction/test_ai_assistant.py: updated every existing
+    Approval Assessment test to include risk_context in its context/
+    result dicts, and added 7 new cases: 3 for _compute_risk_context_
+    fallback directly (translates informational anomalies to plain
+    language with no raw field-name leakage; a blocking anomaly is
+    NEVER included; genuinely empty when there are no informational
+    anomalies, including when every anomaly present is blocking-only),
+    2 for the clamp function (risk_context surfaces an informational
+    anomaly even for a Ready/PASS record — proving independence from
+    approval_readiness — and the AI's own risk_context wording is kept
+    as-is rather than silently overwritten when it provides something
+    usable), and 2 for the prompt (defines Risk Context with concrete
+    examples and states all 3 separation rules; explicitly names all 5
+    output sections). All pass, plus every pre-existing test (updated
+    for the new field where relevant).
+  - Full backend regression suite (python tests/extraction/run_all.py,
+    all 26 suites) — all PASS.
+  - npx ng build --configuration production — succeeded (exit 0; CSS
+    budget-warning size byte-identical to the previous phase, since no
+    new CSS was added — only a new icon class and a new *ngIf block
+    reusing existing styling).
+  - Live-verified in a real browser (Playwright, throwaway auditor +
+    finance_executive accounts, cleaned up afterward): intercepted the
+    approval-assessment network call with the exact scenario the task
+    itself describes — a Ready record (no blocking issues) that still
+    has 2 informational anomalies (a weekend-dated invoice, an already-
+    reviewed historical duplicate pattern) — and confirmed:
+    - The Blocking Issues card correctly does NOT render (empty for a
+      Ready record).
+    - The Risk Context card DOES render, with the ph-info icon, listing
+      both informational findings in plain, non-alarming language.
+    - Card order was Passed Checks -> Risk Context -> Recommended Next
+      Steps, and Recommended Next Steps correctly said "No further
+      action needed" rather than suggesting the auditor resolve either
+      risk_context item — the exact "do not recommend resolving non-
+      blocking anomalies" rule the task asked for.
+    - Zero horizontal overflow; the only console message was the
+      already-known, unrelated 404 from GET /authenticity/<id> on a
+      fixture record with no real file bytes.
+    - Visually confirmed (screenshot) the new card matches the dark
+      theme and the other 3 mini-cards' styling exactly.
+    - All fixture rows (1 document, 1 extracted_fields, 2 throwaway
+      users, their audit_logs) deleted afterward and verified gone (0
+      remaining) from the dev DB. Dev server processes (Flask debug
+      reloader watcher + child, Angular CLI + its esbuild service
+      child) stopped afterward by exact PID — none left running.
+
+Build result:
+  Backend: full extraction test suite (26/26 suites) green, including
+  updated + 7 new Risk Context regression tests. Frontend: clean
+  production build, exit 0; live browser check clean (0 unrelated
+  console errors, correct card independence from readiness verified,
+  correct icon/content, 0 horizontal overflow).
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false
+     on either service, so Render should auto-deploy both services from
+     this push with no separate manual trigger needed on my end.
+  2. No database migration needed (no schema changes).
+  3. As with prior AI Assistant phases, a working ANTHROPIC_API_KEY or
+     GEMINI_API_KEY is needed in Render's environment to see real AI-
+     generated Risk Context wording (this dev environment has neither,
+     so only the intercepted-response UI rendering could be verified
+     live here — the prompt/clamp/fallback logic itself is covered by
+     the backend unit tests above).
+
+Rollback instructions:
+  Redeploy the previous backend + frontend build - no data or schema
+  changes were made this phase (all fixture rows used for verification
+  were inserted and deleted entirely within this phase's own testing).

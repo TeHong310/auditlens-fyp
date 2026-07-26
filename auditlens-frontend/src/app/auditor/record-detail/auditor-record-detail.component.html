@@ -713,12 +713,17 @@
                approval_assessment_result), never the AI's own guess, and
                is purely informational: the auditor's own Approve/Send
                Back/Need Review buttons below (unchanged) are still the
-               only way this record is actually decided. Laid out as 3
+               only way this record is actually decided. Laid out as 4
                short, independently-collapsing mini-cards (reusing the
                EXISTING .audit-impact-box styling from Exception Summary)
                instead of one long block, each capped server-side at 4
                short points, so the whole assessment stays scannable at a
-               glance. -->
+               glance. Risk Context surfaces non-blocking/informational
+               anomalies (e.g. a weekend-dated invoice, a low-severity
+               amount pattern, an already-reviewed duplicate) that give
+               the auditor extra context WITHOUT ever counting as a
+               reason approval is blocked — that stays Blocking Issues'
+               job alone. -->
           <div class="ai-answer-box approval-assessment-box" *ngIf="aiApprovalAssessment">
             <p class="ai-answer-label"><i class="ph-duotone ph-clipboard-text"></i> Approval Assessment</p>
 
@@ -739,6 +744,13 @@
               <p class="subsection-title"><i class="ph-duotone ph-check-circle"></i> Passed Checks</p>
               <ul class="ai-risk-reasons">
                 <li *ngFor="let p of aiApprovalAssessment.passed_checks">{{ p }}</li>
+              </ul>
+            </div>
+
+            <div class="audit-impact-box approval-mini-card" *ngIf="aiApprovalAssessment.risk_context.length">
+              <p class="subsection-title"><i class="ph-duotone ph-info"></i> Risk Context</p>
+              <ul class="ai-risk-reasons">
+                <li *ngFor="let r of aiApprovalAssessment.risk_context">{{ r }}</li>
               </ul>
             </div>
 

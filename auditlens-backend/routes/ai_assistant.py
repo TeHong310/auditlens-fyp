@@ -421,26 +421,66 @@ def _compute_approval_readiness(context):
 
 _APPROVAL_ASSESSMENT_MAX_POINTS = 4
 
+# Plain-language translation for an anomaly_type — mirrors the SAME
+# mapping the approval_assessment prompt below already asks the AI to
+# use in its own wording, so the deterministic fallback (when the AI
+# returns nothing usable) never contradicts what a working AI call
+# would have said.
+_ANOMALY_TYPE_PLAIN_LABEL = {
+    'duplicate': 'Possible duplicate invoice pattern',
+    'amount':    'Unusual invoice amount pattern',
+    'round':     'Unusually round invoice amount',
+    'weekend':   'Invoice dated on a weekend',
+}
+
+
+def _compute_risk_context_fallback(context):
+    """Deterministic fallback for 'Risk Context' when the AI doesn't
+    return anything usable — plain-language translations of every
+    INFORMATIONAL (non-blocking) anomaly already computed for this case
+    (see _classify_anomaly in this same file: already reviewed/
+    dismissed, or a low-risk pattern that isn't inherently high-
+    stakes). A 'blocking' anomaly is NEVER included here — that
+    belongs in blocking_issues via _compute_approval_readiness instead.
+    Returns [] when there are no informational anomalies at all — an
+    empty Risk Context is the CORRECT result in that case (the
+    frontend simply doesn't render the card), not a fallback failure."""
+    informational = [a for a in (context.get('anomalies') or []) if a.get('classification') == 'informational']
+    labels = []
+    for a in informational:
+        label = _ANOMALY_TYPE_PLAIN_LABEL.get(a.get('anomaly_type'), 'Additional informational risk pattern noted')
+        severity = a.get('severity')
+        if severity:
+            label = f'{label} ({severity} risk, non-blocking)'
+        labels.append(label)
+    return labels[:_APPROVAL_ASSESSMENT_MAX_POINTS]
+
 
 def _clamp_approval_assessment_result(result, context):
     """Never trust the AI's own approval_readiness verdict — always use
     _compute_approval_readiness()'s deterministic value instead,
     regardless of what the AI narrated (same 'never let the AI make the
     actual call' guarantee _clamp_explain_exception_result gives
-    audit_status). The underlying readiness LOGIC is unchanged from the
-    previous phase — only the response shape/wording around it changed
+    audit_status). The underlying readiness LOGIC is unchanged from
+    earlier phases — only the response shape/wording around it changed
     (blocking_factors/evidence/recommended_actions renamed to blocking_
     issues/passed_checks/recommended_next_steps, each capped at 4 short
-    points, to match the auditor-facing format this phase asks for).
+    points; risk_context added as a 4th, independent field for non-
+    blocking/informational anomalies).
 
     blocking_issues falls back to audit_status_reasons (the same
     authoritative list used everywhere else) when the AI returns
     nothing usable, and is forced empty for a 'Ready' verdict no matter
-    what the AI said. passed_checks/recommended_next_steps fall back to
-    a minimal safe default rather than an empty list, so the response
-    is never blank. Every list is capped at _APPROVAL_ASSESSMENT_MAX_
-    POINTS items even if the AI ignores the prompt's own "at most 4"
-    instruction — defense in depth, not a substitute for it."""
+    what the AI said. risk_context falls back to _compute_risk_context_
+    fallback() above — grounded in the SAME informational-anomaly data,
+    never fabricated — and, unlike the other 3 fields, is allowed to
+    stay genuinely empty (no informational anomalies is a real, correct
+    state, not a blank-response failure). passed_checks/recommended_
+    next_steps fall back to a minimal safe default rather than an empty
+    list, so those two are never blank. Every list is capped at
+    _APPROVAL_ASSESSMENT_MAX_POINTS items even if the AI ignores the
+    prompt's own "at most 4" instruction — defense in depth, not a
+    substitute for it."""
     result = result or {}
     readiness, blocking_default = _compute_approval_readiness(context)
 
@@ -457,6 +497,11 @@ def _clamp_approval_assessment_result(result, context):
         passed_checks = ['No passed checks were identified for this case.']
     passed_checks = passed_checks[:_APPROVAL_ASSESSMENT_MAX_POINTS]
 
+    risk_context = [r for r in (result.get('risk_context') or []) if isinstance(r, str) and r.strip()]
+    if not risk_context:
+        risk_context = _compute_risk_context_fallback(context)
+    risk_context = risk_context[:_APPROVAL_ASSESSMENT_MAX_POINTS]
+
     recommended_next_steps = [s for s in (result.get('recommended_next_steps') or []) if isinstance(s, str) and s.strip()]
     if not recommended_next_steps:
         recommended_next_steps = (['No further action needed — ready for approval.'] if readiness == 'Ready'
@@ -467,6 +512,7 @@ def _clamp_approval_assessment_result(result, context):
         'approval_readiness':      readiness,
         'blocking_issues':         blocking_issues,
         'passed_checks':           passed_checks,
+        'risk_context':            risk_context,
         'recommended_next_steps':  recommended_next_steps,
     }
 

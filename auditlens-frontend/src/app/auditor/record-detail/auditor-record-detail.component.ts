@@ -167,8 +167,8 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   // decision (the auditor still does that via the Approve/Send Back/
   // Need Review buttons below, unchanged).
   aiApprovalAssessment: {
-    approval_readiness: string; blocking_issues: string[];
-    passed_checks: string[]; recommended_next_steps: string[];
+    approval_readiness: string; blocking_issues: string[]; passed_checks: string[];
+    risk_context: string[]; recommended_next_steps: string[];
   } | null = null;
   aiQuestion: string = '';
   aiConversation: { question: string; answer: string }[] = [];
@@ -713,6 +713,7 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
           approval_readiness: res.approval_readiness || 'Requires Review',
           blocking_issues: res.blocking_issues || [],
           passed_checks: res.passed_checks || [],
+          risk_context: res.risk_context || [],
           recommended_next_steps: res.recommended_next_steps || []
         };
         this.cdr.detectChanges();
