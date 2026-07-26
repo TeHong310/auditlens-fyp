@@ -14630,3 +14630,180 @@ Rollback instructions:
   Redeploy the previous backend + frontend build - no data or schema
   changes were made this phase (all fixture rows used for verification
   were inserted and deleted entirely within this phase's own testing).
+
+
+----------------------------------------------------------------------
+
+Date: 2026-07-26
+What was changed:
+  Phase 46 (Performance Phase 1): added database connection pooling to
+  auditlens-backend/db.py — the ONLY file changed this phase. Follows
+  directly from a read-only performance audit (previous phase) that
+  identified get_db_connection() opening a brand-new, un-pooled
+  psycopg2 connection on every single call — measured empirically at
+  ~34-141ms per connection open vs ~0.7ms to run a query on an already-
+  open one — as the systemic root cause of slow page loads across the
+  whole app (every route calls get_user_by_id(), which itself calls
+  get_db_connection(), before doing any real work; several endpoints
+  additionally loop and open many more connections per request).
+
+  No query, matching, anomaly-detection, authenticity, AI Assistant,
+  approval-assessment, or workflow logic was touched — this phase is
+  connection handling ONLY, exactly as scoped.
+
+  auditlens-backend/db.py:
+    - get_db_connection() now borrows from a lazily-created
+      psycopg2.pool.ThreadedConnectionPool instead of calling
+      psycopg2.connect() directly. Same Config.DB_* environment
+      variables, same connection kwargs, same function name/signature/
+      return value (a live, connection-like object) as before — every
+      existing caller (193 call sites across 32 files, none touched)
+      keeps working unmodified.
+    - New _PooledConnection(psycopg2.extensions.connection) subclass
+      overrides ONLY close() — instead of tearing down the socket, it
+      rolls back any open transaction defensively (so a route that
+      raised mid-transaction can never leak dirty state into whichever
+      request borrows this same connection next) and returns the
+      connection to the pool. Every other method (cursor(), commit(),
+      rollback(), etc.) is inherited unchanged from the real psycopg2
+      connection class — this is what lets hundreds of existing
+      "conn = get_db_connection(); ...; conn.close()" call sites keep
+      behaving identically without being rewritten to call a pool's own
+      putconn(). close() stays idempotent (safe to call twice, matching
+      real psycopg2 behavior) and never lets a pool-bookkeeping edge
+      case surface as a NEW error type to callers that only ever
+      expected close() to succeed silently.
+    - The pool is created LAZILY, on the first real get_db_connection()
+      call — not at module import time — so importing db.py (e.g. from
+      a test that fully monkey-patches get_db_connection() and never
+      calls the real implementation) still never touches the network,
+      matching the previous behavior exactly.
+    - Pool sized conservatively (minconn=1, maxconn=10) based on
+      inspecting Dockerfile (gunicorn --workers 2, no --threads
+      configured — 2 worker PROCESSES, each importing db.py
+      independently and getting its own pool, 1 request at a time per
+      worker today) and render.yaml (a small/free-tier managed Postgres
+      instance) — worst-case total physical connections stays well
+      within a safe budget, with headroom if worker/thread config
+      changes later.
+
+Why:
+  Direct continuation of the read-only performance audit's #1 finding:
+  connection-open overhead (not query execution time, and not row
+  count — every core table is currently empty) is what dominates page-
+  load latency today, and will only get worse as N+1 query patterns
+  (documented separately in the audit, deliberately NOT touched this
+  phase) compound against real data volume later.
+
+Confirmed unchanged (safety rules for this phase):
+  - No business logic, audit rules, matching, anomaly detection,
+    authenticity verification, AI Assistant, approval assessment, or
+    workflow-timeline code touched — git diff --stat shows exactly one
+    file, db.py, changed.
+  - No API response format changes — every endpoint checked below
+    returned the identical response shape it did before.
+  - No database schema changes, no migration.
+  - No DB_* environment variable behavior changed — the exact same
+    Config.DB_NAME/DB_USER/DB_PASSWORD/DB_HOST/DB_PORT values already
+    read before are still the only inputs to the pool's connection
+    kwargs.
+  - get_user_by_id() (also in db.py) required NO edit — it already
+    calls get_db_connection() internally, so it benefits from pooling
+    automatically.
+
+Test results:
+  - Full backend regression suite (python tests/extraction/run_all.py,
+    all 26 suites, including 5 suites that exercise REAL database
+    connections end-to-end — test_phase4_integration.py,
+    test_shadow_comparison.py, test_transaction_auditor_integration.py,
+    test_transaction_packages.py, test_relationship_builder.py) — all
+    PASS, run twice (once immediately after the change, once again as
+    a final gate right before committing) with identical results both
+    times.
+  - Direct smoke test of the pool mechanics themselves: confirmed
+    importing db.py does not create the pool (lazy init preserved);
+    first get_db_connection() call took ~39ms (pool creation + one real
+    connection); a SECOND call reused the exact same underlying
+    connection object in ~0.0ms; close() took ~0.5ms (rollback+return,
+    not a real socket teardown); calling close() twice on the same
+    connection did not raise (idempotence preserved); get_user_by_id()
+    still round-trips correctly through the pool; 10 sequential
+    borrow+query+close cycles averaged ~0.14ms/cycle (vs ~34-141ms/
+    cycle for a fresh connection under the old implementation — roughly
+    a 250-1000x reduction in connection-acquisition cost alone).
+  - Live-verified against the real dev backend (throwaway auditor +
+    finance_executive accounts, cleaned up afterward) with a
+    deliberately-inserted, fully-disposable 2-invoice fixture (one
+    clean PASS record with a matching PO+GR; one exception record with
+    an amount mismatch, a missing GR, a blocking high-severity
+    duplicate anomaly, an authenticity warning, and a real send-back
+    cycle+review-record history) — exercised every page/endpoint group
+    named in the task:
+    - Auditor Home / Review Queue: GET /auditor/transactions,
+      /auditor/report/summary, /auditor/exceptions, /authenticity,
+      /anomalies/stats — all 200, correct data shape (matching_status,
+      exception classification, authentication_score, anomaly counts
+      all computed correctly from the fixture).
+    - Exception page: GET /auditor/exceptions — 200, correctly listed
+      the amount-mismatch exception with its detail text.
+    - Record Detail (both the clean and the exception record): GET
+      /auditor/record/<id>/comparison, /authenticity/<id>,
+      /reviews/send-back-cycles/<id>, /reviews/history/<id>,
+      /documents/<id>/timeline — all 200 (except the clean record's
+      authenticity check, correctly 404 "No authenticity check for
+      this document" since none was ever run for it) with fully correct
+      content, including the send-back cycle and review history for the
+      exception record.
+    - AI Assistant: POST explain-exception/explain-risk/approval-
+      assessment/generate-remark/prepare-send-back — all returned a
+      clean 502 "AI Assistant is unavailable right now" (this dev
+      environment's known missing/invalid Claude/Gemini keys, unrelated
+      to this change and unchanged from every prior AI Assistant
+      phase) — critically, NOT a 500, confirming the pooled-connection
+      change introduces no new error class along this request path
+      (auth check, DB context-build, cache lookup, provider-fallback
+      attempt all still complete correctly before the expected
+      provider failure).
+    - 21/21 endpoint checks passed; backend log inspected for
+      tracebacks/unexpected errors during the run — none found.
+    - Measured real response times on Auditor Home's 5 parallel
+      endpoints with pooling active: 2-49ms each (vs. the audit's
+      empirical finding that a SINGLE fresh connection alone costs
+      34-141ms, and /auditor/transactions' N+1 loop was shown to open
+      many connections per call) — confirms the fix delivers the
+      diagnosed speedup with the underlying query patterns completely
+      unchanged.
+    - All fixture rows (2 documents, 2 extracted_fields, 2
+      purchase_orders, 1 goods_receipts, 1 authenticity_checks, 1
+      anomalies, 1 send_back_cycles, 1 review_records, 2 throwaway
+      users, their audit_logs) deleted afterward and verified gone (0
+      remaining) from the dev DB. Dev server process stopped afterward
+      by exact PID — none left running.
+  - No regression found at any point — the "if any regression happens,
+    revert the change" contingency was not needed.
+
+Build result:
+  Backend: full extraction test suite (26/26 suites) green, run twice.
+  Live endpoint verification: 21/21 checks green across every page/
+  endpoint group named in the task, with response shapes and data
+  confirmed correct against the fixture. No frontend changes this
+  phase, so no Angular build was run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false,
+     so Render should auto-deploy the backend from this push with no
+     separate manual trigger needed on my end.
+  2. No frontend redeploy needed (no frontend changes this phase).
+  3. No database migration needed (no schema changes).
+  4. Nothing new to configure — the pool reuses the exact same DB_*
+     environment variables Render already provides via the
+     auditlens-db database binding in render.yaml.
+
+Rollback instructions:
+  Revert this one commit (git revert, or redeploy the previous backend
+  build) - db.py is the only file changed, get_db_connection()'s
+  interface is unchanged, so reverting instantly restores the exact
+  prior (unpooled) behavior with no data or schema implications.
