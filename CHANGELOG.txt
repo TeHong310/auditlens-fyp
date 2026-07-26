@@ -13824,3 +13824,195 @@ Rollback instructions:
   Redeploy the previous backend + frontend build - no data or schema
   changes were made this phase (all fixture rows used for verification
   were inserted and deleted entirely within this phase's own testing).
+
+
+----------------------------------------------------------------------
+
+Date: 2026-07-26
+What was changed:
+  Phase 42: improved the AI Audit Assistant's prompt instructions for
+  Explain Risk, Generate Audit Remark, and Prepare Send Back
+  Instruction so the AI is explicitly directed to draw on the FULL
+  audit context (three-way matching result, missing documents,
+  authenticity result, and anomaly findings) already available to it —
+  not new data, no new AI provider, no schema change. Pure prompt-text
+  change in one backend helper file.
+
+  Root cause investigated first: routes/ai_assistant.py::_build_case_
+  context() already assembles ALL 5 dimensions the task named (match_
+  result via matching_details/exception, missing_documents,
+  authenticity, anomalies with blocking/informational classification,
+  audit_status/audit_status_reasons) into one context dict, and
+  helpers/ai_assistant.py::ask_ai_assistant() already serializes that
+  ENTIRE dict into the system prompt for EVERY action — so the data was
+  never actually missing from what the AI receives. The real gap was in
+  each action's own INSTRUCTION text: explain_risk's instruction only
+  told the AI to look at "audit_status/audit_status_reasons and any
+  blocking anomaly" (informational anomalies, authenticity, and
+  matching_details weren't called out at all); generate_remark's
+  instruction said "explain the current review status" with no mention
+  of which specific dimension to name; and the send-back instruction
+  only ever gave a missing-document example, with no guidance at all
+  for how a blocking anomaly or an authenticity warning should map to
+  reason_category/required_actions — even though matching enum values
+  for exactly those cases (possible_duplicate_invoice/confirm_
+  duplicate_submission, amount_or_quantity_requires_verification/
+  verify_amount_or_quantity, authenticity_evidence_requires_
+  clarification/provide_written_explanation) already existed in
+  helpers/send_back.py's REASON_CATEGORIES/REQUIRED_ACTIONS.
+
+  auditlens-backend/helpers/ai_assistant.py:
+    - _ACTION_INSTRUCTIONS['explain_risk']: now explicitly tells the AI
+      to cover matching_details/missing_documents/the authenticity
+      result/every anomaly finding, to name a blocking anomaly's
+      anomaly_type and severity explicitly (e.g. "a high-severity
+      duplicate-invoice finding") rather than a generic mention, to
+      name an authenticity "warning" as a reason when present, and to
+      still name an informational anomaly briefly in potential_impact
+      instead of omitting it entirely (previously easy to drop given
+      the narrower "only... and any blocking anomaly" phrasing). Risk-
+      level rules (blocking-only, PASS -> normally Low) and the JSON
+      return schema are unchanged.
+    - _ACTION_INSTRUCTIONS['generate_remark']: now tells the AI to name
+      the SPECIFIC item(s) actually driving a "REVIEW REQUIRED" status
+      from audit_status_reasons — the mismatched field from matching_
+      details, the specific missing_documents entry, the authenticity
+      concern, or the blocking anomaly's type+severity — instead of a
+      generic "needs review" remark. PASS-case wording and the JSON
+      return schema are unchanged.
+    - _SEND_BACK_INSTRUCTION: added an explicit mapping from each audit-
+      context finding to the EXISTING reason_category/required_action
+      enum pair: missing_documents -> missing_document/upload_missing_
+      document (unchanged, was already the only example given);
+      matching_details mismatch -> invoice_po_gr_mismatch/correct_
+      extracted_information (or verify_amount_or_quantity for an
+      amount mismatch); a blocking "duplicate" anomaly ->
+      possible_duplicate_invoice/confirm_duplicate_submission; a
+      blocking "amount"/"round" anomaly -> amount_or_quantity_requires_
+      verification/verify_amount_or_quantity; an authenticity "warning"
+      -> authenticity_evidence_requires_clarification/provide_written_
+      explanation. When more than one applies, picks by audit_status_
+      reasons' primary/first entry and lists the others as additional
+      required_actions, mentioning all of them in the instruction
+      sentence. priority guidance also now factors in a high-severity
+      blocking anomaly or an authenticity warning (-> "high"). The
+      REASON_CATEGORIES/REQUIRED_ACTIONS/PRIORITIES enum values
+      themselves, and the reason_category/required_actions/priority/
+      instruction JSON return schema, are completely unchanged.
+    - explain_exception, ask, generate_finance_response, and
+      recommended_steps (not named in this task) are byte-for-byte
+      untouched, as is the shared _SYSTEM_PREAMBLE.
+
+  auditlens-backend/tests/extraction/test_ai_assistant.py:
+    - 4 new regression tests: explain_risk and generate_remark's
+      instruction text is asserted to reference matching_details/
+      missing_documents/authenticity/anomaly_type/severity; the send-
+      back instruction is asserted to map "duplicate" ->
+      possible_duplicate_invoice, "amount"/"round" ->
+      amount_or_quantity_requires_verification, an authenticity warning
+      -> authenticity_evidence_requires_clarification, and a matching
+      mismatch -> invoice_po_gr_mismatch; and a realistic full context
+      dict (missing document + authenticity warning + blocking
+      duplicate anomaly + matching mismatch) is confirmed to actually
+      reach the system prompt Claude/Gemini receive.
+
+Why:
+  Requested improvement: the 3 named AI actions should draw on the
+  COMPLETE audit context (matching, exceptions, missing documents,
+  anomalies, authenticity) rather than a narrower slice of it, so an
+  auditor's AI-drafted risk explanation/remark/send-back instruction
+  actually reflects everything AuditLens' own engines already found for
+  this case — especially now that Risk Indicators (previous phase)
+  surfaces anomaly findings directly on Record Detail, an auditor
+  reasonably expects the AI Assistant to reference the same findings
+  when asked to explain risk or draft a send-back.
+
+Confirmed unchanged (AI decision authority / human approval):
+  - _clamp_send_back_result(), _clamp_explain_exception_result(), and
+    _compute_audit_status() (routes/ai_assistant.py) are completely
+    untouched — the deterministic audit_status/reason_category/
+    required_actions/priority CLAMPING logic that already overrides an
+    invalid or hallucinated AI answer is unaffected; these prompt
+    changes can only influence what the AI DRAFTS within that same
+    already-enforced envelope, never widen it.
+  - Every AI action remains a DRAFT into an existing, fully-editable
+    form field (Remarks/Notes, the Send Back modal) or a read-only
+    explanation panel — approveDocument()/submitSendBack() (routes/
+    reviews.py) still require an explicit auditor click; nothing here
+    changes who can approve/send back or removes that requirement.
+  - No new AI provider, no new endpoint, no database schema change —
+    reuses the exact existing Claude-primary/Gemini-fallback call path
+    (_call_provider) and the exact existing ai_assistant_cache table/
+    key shape.
+  - No frontend changes this phase — the 3 buttons/response rendering
+    on Record Detail are unchanged; only the server-side instruction
+    text sent to the AI changed.
+
+Test results:
+  - tests/extraction/test_ai_assistant.py — 4 new cases plus all
+    existing cases pass (provider fallback, cache behavior, clamp
+    logic, _build_case_context field mapping, _classify_anomaly/
+    _compute_audit_status scenarios all unaffected).
+  - Full backend regression suite (python tests/extraction/run_all.py,
+    all 26 suites) — all PASS, zero regressions elsewhere.
+  - Live-verified against the real dev backend (throwaway auditor +
+    finance_executive accounts, cleaned up afterward) with a
+    deliberately-inserted, fully-disposable fixture invoice exercising
+    all 5 audit-context dimensions at once: a PO amount mismatch
+    (matching_details), no GR uploaded (missing_documents), an
+    authenticity_checks row with status='warning', and a pending high-
+    severity 'duplicate' anomaly (blocking). Called
+    _build_case_context() directly against this REAL database record
+    (not a hand-built test dict) and confirmed its context correctly
+    surfaced all 4 audit_status_reasons ("Three-way matching status is
+    FAIL", "Missing: Goods Receipt", "Authenticity check flagged a
+    warning", "Unresolved duplicate anomaly (high severity)") and that
+    the actual system prompt built from it embeds the duplicate
+    anomaly, high severity, the authenticity warning, the missing
+    Goods Receipt, and matching_details.amount_match — proving the
+    full context genuinely reaches the AI for a real record, not just
+    a synthetic unit-test dict.
+  - Also called the 3 live endpoints (POST /ai-assistant/<id>/
+    explain-risk, /generate-remark, /prepare-send-back) against this
+    fixture record end-to-end through the real Flask app with a real
+    JWT: all 3 returned a clean 502 "AI Assistant is unavailable right
+    now" — this dev environment's configured Gemini API key currently
+    returns 401 UNAUTHENTICATED on every call and no ANTHROPIC_API_KEY
+    is set (pre-existing environment limitation noted in earlier
+    phases, unrelated to this change), so no real Claude/Gemini
+    response could be generated or inspected here. The clean 502 (not
+    a 500/traceback) confirms the request path — auth, DB context
+    build, cache-miss handling, provider-fallback attempt, graceful
+    failure — runs correctly end-to-end with no Python error introduced
+    by the prompt-text edits; a deployment with a working AI key
+    exercises the exact same code path with a real model response.
+  - All fixture rows (1 document, 1 extracted_fields, 1 purchase_
+    orders, 1 authenticity_checks, 1 anomalies, 2 throwaway users,
+    their audit_logs) deleted afterward and verified gone (0 remaining)
+    from the dev DB. Dev server process (Flask debug reloader watcher +
+    child) stopped afterward by exact PID — none left running.
+
+Build result:
+  Backend: full extraction test suite (26/26 suites) green, including 4
+  new AI-context regression tests. No frontend changes this phase, so
+  no Angular build was run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false,
+     so Render should auto-deploy the backend from this push with no
+     separate manual trigger needed on my end.
+  2. No frontend redeploy needed (no frontend changes this phase).
+  3. No database migration needed (no schema changes).
+  4. For the actual AI-generated wording improvement to be visible (not
+     just the graceful-502 path verified here), Render's environment
+     needs a working ANTHROPIC_API_KEY or GEMINI_API_KEY — unrelated to
+     this change, but worth checking if Explain Risk/Generate Audit
+     Remark/Prepare Send Back are still 502ing after deploy.
+
+Rollback instructions:
+  Redeploy the previous backend build - no data or schema changes were
+  made this phase (all fixture rows used for verification were
+  inserted and deleted entirely within this phase's own testing).

@@ -144,6 +144,94 @@ def run_case_send_back_prompt_lists_valid_enums():
 
 
 # ============================================================
+# helpers/ai_assistant.py — full-context awareness for explain_risk /
+# generate_remark / prepare_send_back (Improve AI Audit Assistant
+# context). These 3 actions' instruction text must explicitly point the
+# AI at matching_details/missing_documents/authenticity/anomalies —
+# already present in every context dict via _build_case_context, but
+# previously only implicitly covered by the shared system preamble.
+# ============================================================
+
+def run_case_explain_risk_prompt_covers_full_context():
+    print('Case: explain_risk instruction explicitly covers matching/missing-docs/authenticity/anomaly context')
+    captured = {}
+
+    def fake_ask_claude_text(system_prompt, user_prompt, **k):
+        captured['user_prompt'] = user_prompt
+        return '{"risk_level": "Medium", "reasons": ["x"], "potential_impact": "y"}'
+    with _Patched(haa, ask_claude_text=fake_ask_claude_text, call_gemini_sdk=lambda *a, **k: None):
+        haa.ask_ai_assistant('explain_risk', {'invoice_number': 'INV-1'})
+    up = captured.get('user_prompt', '')
+    check('prompt references matching_details', 'matching_details' in up, up)
+    check('prompt references missing_documents', 'missing_documents' in up, up)
+    check('prompt references authenticity', 'authenticity' in up, up)
+    check('prompt tells the AI to name anomaly_type and severity', 'anomaly_type' in up and 'severity' in up, up)
+
+
+def run_case_generate_remark_prompt_covers_full_context():
+    print('Case: generate_remark instruction explicitly covers matching/missing-docs/authenticity/anomaly context')
+    captured = {}
+
+    def fake_ask_claude_text(system_prompt, user_prompt, **k):
+        captured['user_prompt'] = user_prompt
+        return '{"remark": "ok"}'
+    with _Patched(haa, ask_claude_text=fake_ask_claude_text, call_gemini_sdk=lambda *a, **k: None):
+        haa.ask_ai_assistant('generate_remark', {'invoice_number': 'INV-1'})
+    up = captured.get('user_prompt', '')
+    check('prompt references matching_details', 'matching_details' in up, up)
+    check('prompt references missing_documents', 'missing_documents' in up, up)
+    check('prompt references authenticity', 'authenticity' in up, up)
+    check('prompt tells the AI to name anomaly_type and severity', 'anomaly_type' in up and 'severity' in up, up)
+
+
+def run_case_send_back_prompt_maps_anomaly_and_authenticity_to_categories():
+    print('Case: prepare_send_back instruction maps blocking anomaly types and authenticity warnings to the correct reason_category')
+    captured = {}
+
+    def fake_ask_claude_text(system_prompt, user_prompt, **k):
+        captured['user_prompt'] = user_prompt
+        return ('{"reason_category": "possible_duplicate_invoice", '
+                 '"required_actions": ["confirm_duplicate_submission"], '
+                 '"priority": "high", "instruction": "Please confirm."}')
+    with _Patched(haa, ask_claude_text=fake_ask_claude_text, call_gemini_sdk=lambda *a, **k: None):
+        haa.ask_ai_assistant('prepare_send_back', {'invoice_number': 'INV-1'})
+    up = captured.get('user_prompt', '')
+    check('prompt maps a duplicate anomaly to possible_duplicate_invoice',
+          'possible_duplicate_invoice' in up and 'duplicate' in up, up)
+    check('prompt maps an amount/round anomaly to amount_or_quantity_requires_verification',
+          'amount_or_quantity_requires_verification' in up, up)
+    check('prompt maps an authenticity warning to authenticity_evidence_requires_clarification',
+          'authenticity_evidence_requires_clarification' in up, up)
+    check('prompt maps a matching mismatch to invoice_po_gr_mismatch',
+          'invoice_po_gr_mismatch' in up, up)
+
+
+def run_case_explain_risk_system_prompt_includes_full_case_data():
+    print('Case: explain_risk system prompt embeds the FULL case data (anomalies, authenticity, missing_documents, matching)')
+    captured = {}
+
+    def fake_ask_claude_text(system_prompt, user_prompt, **k):
+        captured['system_prompt'] = system_prompt
+        return '{"risk_level": "High", "reasons": ["x"], "potential_impact": "y"}'
+    context = {
+        'invoice_number': 'INV-1',
+        'missing_documents': ['Goods Receipt'],
+        'authenticity': {'invoice': {'status': 'warning', 'risk_level': 'medium'}},
+        'anomalies': [{'anomaly_type': 'duplicate', 'severity': 'high', 'status': 'pending', 'classification': 'blocking'}],
+        'matching_details': {'amount_match': False},
+        'audit_status': 'REVIEW REQUIRED',
+        'audit_status_reasons': ['Unresolved duplicate anomaly (high severity)'],
+    }
+    with _Patched(haa, ask_claude_text=fake_ask_claude_text, call_gemini_sdk=lambda *a, **k: None):
+        haa.ask_ai_assistant('explain_risk', context)
+    sp = captured.get('system_prompt', '')
+    check('system prompt embeds missing_documents', 'Goods Receipt' in sp, sp)
+    check('system prompt embeds the authenticity warning', '"warning"' in sp, sp)
+    check('system prompt embeds the blocking duplicate anomaly', '"duplicate"' in sp and '"high"' in sp, sp)
+    check('system prompt embeds matching_details', 'amount_match' in sp, sp)
+
+
+# ============================================================
 # routes/ai_assistant.py — _clamp_send_back_result()
 # ============================================================
 
@@ -730,6 +818,11 @@ if __name__ == '__main__':
     run_case_markdown_fences_are_stripped()
     run_case_ask_action_includes_question_in_prompt()
     run_case_send_back_prompt_lists_valid_enums()
+
+    run_case_explain_risk_prompt_covers_full_context()
+    run_case_generate_remark_prompt_covers_full_context()
+    run_case_send_back_prompt_maps_anomaly_and_authenticity_to_categories()
+    run_case_explain_risk_system_prompt_includes_full_case_data()
 
     run_case_clamp_passes_through_valid_values()
     run_case_clamp_invalid_reason_category_falls_back()
