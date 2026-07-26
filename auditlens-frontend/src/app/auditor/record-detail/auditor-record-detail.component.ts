@@ -853,6 +853,54 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return '';
   }
 
+  // Financial Impact (Exception Summary card) — the monetary read of
+  // this exception. Deliberately reuses amountCompareBasis/amountSymbol
+  // (below) rather than the raw backend match_result.amount_match:
+  // amount_match compares the invoice against the PRIMARY PO's FULL
+  // total even for a v2/enterprise invoice that's only allocated a
+  // share of a multi-invoice PO, so it can read as a mismatch even when
+  // that invoice's own allocated amount genuinely matches — exactly the
+  // gap amountCompareBasis already exists to close for the Field
+  // Comparison table's Amount row. Reusing it here keeps this section
+  // from ever contradicting that table. No new API call — every value
+  // is already loaded in `comparison` for that same table. Returns null
+  // (section hidden) when there's no invoice amount to report at all,
+  // or when the exception has no real financial angle (amounts match,
+  // no PO/GR missing).
+  get financialImpact(): { headline: string; invoiceAmountText: string; poAmountLabel: string; poAmountText: string | null; varianceText: string | null } | null {
+    if (!this.comparison || this.comparison.invoice.total_amount === null) return null;
+    const invoiceAmountText = this.formatAmount(this.comparison.invoice.total_amount, this.comparison.invoice.currency);
+
+    if (this.comparison.po) {
+      const basis = this.amountCompareBasis;
+      const sym = this.amountSymbol(this.comparison.invoice.total_amount, basis, this.comparison.invoice.currency, this.comparison.po.currency);
+      if (sym === 'neq' && basis !== null) {
+        const variance = Math.abs(this.comparison.invoice.total_amount - basis);
+        return {
+          headline: this.isV2Allocated
+            ? 'Invoice total does not match its allocated share of the Purchase Order.'
+            : 'Invoice total does not match the Purchase Order total.',
+          invoiceAmountText,
+          poAmountLabel: this.isV2Allocated ? 'PO (Allocated)' : 'PO',
+          poAmountText: this.formatAmount(basis, this.comparison.po.currency),
+          varianceText: this.formatAmount(variance, this.comparison.invoice.currency),
+        };
+      }
+    }
+
+    if (this.isMissingDocumentsIssue) {
+      return {
+        headline: `Full invoice value is unverified pending the missing ${this.missingDocs.join(' and ')}.`,
+        invoiceAmountText,
+        poAmountLabel: '',
+        poAmountText: null,
+        varianceText: null,
+      };
+    }
+
+    return null;
+  }
+
   // Shown inside the Send Back modal (Feature 5) only for the missing-
   // document case, matching the task's own example wording exactly —
   // UI guidance only, the auditor can still change every field.

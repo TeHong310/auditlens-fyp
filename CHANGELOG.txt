@@ -13456,3 +13456,172 @@ Rollback instructions:
   Redeploy the previous backend build - no data or schema changes were
   made this phase (all fixture rows used for verification were
   inserted and deleted entirely within this phase's own testing).
+
+
+----------------------------------------------------------------------
+
+Date: 2026-07-26
+What was changed:
+  Phase 40: improved the Auditor Record Detail "Exception Summary" card
+  layout, and added Control Impact, Financial Impact and Recommended
+  Action sections — reusing data already computed on this page, no
+  backend or database changes.
+
+  auditlens-frontend/src/app/auditor/record-detail/
+  auditor-record-detail.component.html:
+    - Exception Summary card (`.exception-summary-card`): the existing
+      Issue/Risk/Impact rows and the Missing Documents/Affected Fields
+      evidence list are completely untouched (same markup, same
+      wording, same position).
+    - Added, after that existing block, a divider and up to 3 new
+      conditionally-rendered sections:
+        - Control Impact — reuses the existing `auditImpact` getter
+          (the fuller explanation already shown lower on the page in
+          the Audit Decision panel's "Audit Impact" box), now also
+          surfaced here for one-glance triage instead of only after
+          scrolling down.
+        - Financial Impact (NEW) — invoice amount, and, when there's
+          an actual amount discrepancy, the PO amount and variance; or,
+          for a missing-PO/GR record, a note that the full invoice
+          value is unverified. See the new `financialImpact` getter
+          below for exactly which data has to exist for this to render.
+        - Recommended Action — reuses the existing `suggestedAction`
+          getter (already shown lower on the page in the "Suggested
+          Action" box).
+      Each section only renders when its underlying getter actually
+      returns something — a record whose only issue is, say, a vendor
+      mismatch (amounts match fine) shows Control Impact and
+      Recommended Action but no Financial Impact section, since there's
+      no real financial finding to report for it.
+    - Reused the EXISTING `.audit-impact-box`/`.suggested-action-box`/
+      `.subsection-title`/`.impact-text`/`.suggested-action-text` CSS
+      classes for these new sections (same classes the lower Audit
+      Decision panel already uses) instead of inventing new box
+      styling, so the new sections are visually identical to boxes
+      already proven to fit this page's dark theme.
+    - The lower "Audit Impact" and "Suggested Action" boxes in the
+      Audit Decision panel are UNCHANGED — still there, still reading
+      the same getters. Nothing was removed; the new Exception Summary
+      sections are an additional, earlier read of the same information,
+      not a replacement.
+
+  auditlens-frontend/src/app/auditor/record-detail/
+  auditor-record-detail.component.ts:
+    - New `financialImpact` getter (near the existing `auditImpact`/
+      `suggestedAction` getters). Deliberately reuses the SAME
+      allocation-aware comparison the Field Comparison table's Amount
+      row already uses (`amountCompareBasis` + `amountSymbol()`) rather
+      than the raw backend `match_result.amount_match` flag: for a v2/
+      enterprise invoice allocated against a shared multi-invoice PO,
+      `amount_match` compares against the PO's FULL total and can read
+      as a mismatch even when that invoice's own allocated share
+      genuinely matches — using the same corrected basis here means
+      this new section can never show a variance that contradicts the
+      Field Comparison table directly below it. No new API call —
+      every value (`comparison.invoice.total_amount`, `comparison.po`,
+      `amountCompareBasis`) was already loaded on this page for that
+      same table. Returns null (section hidden) when there's no invoice
+      amount to report, or when the exception has no real financial
+      angle (amounts match, no PO/GR missing) — nothing is fabricated.
+
+  auditlens-frontend/src/app/auditor/record-detail/
+  auditor-record-detail.component.css:
+    - Added `.es-divider` (same border-top-on-var(--bg-hover) technique
+      the existing `.es-evidence` divider already uses), tightened
+      `.audit-impact-box`/`.suggested-action-box` margin specifically
+      inside `.exception-summary-card` (12px→10px, zeroed on the actual
+      last box) to fit the more compact card, and a small `.fi-amounts`/
+      `.fi-amount-item`/`.fi-amount-label`/`.fi-variance` set for the
+      Financial Impact figures row (variance in `var(--danger)`, same
+      color already used for mismatch pills elsewhere on this page). No
+      new CSS custom properties — every color/spacing token used
+      already existed in this file's dark theme.
+
+Why:
+  Requested improvement: the Exception Summary card only showed Issue/
+  Risk/Impact/Missing Documents — useful but thin for an auditor trying
+  to quickly understand WHY an exception matters and WHAT to do about
+  it, when that fuller context (Control Impact via `auditImpact`,
+  Recommended Action via `suggestedAction`) already existed on the page
+  but only appeared after scrolling past the Field Comparison table.
+  Financial Impact didn't exist anywhere on the page at all, despite
+  the invoice/PO amount figures already being loaded for the Amount row
+  in that same table.
+
+Confirmed unchanged:
+  - No backend files touched, no database changes — git diff --stat
+    before committing shows only the 3 frontend files for this
+    component (.html/.ts/.css).
+  - No new API calls — financialImpact/auditImpact/suggestedAction are
+    all pure getters over `comparison`, already fetched once by
+    ngOnInit's existing GET /auditor/record/<id>/comparison call.
+  - Issue/Risk/Impact/Missing Documents rows: same DOM structure, same
+    class names, same wording, same position as before.
+  - The lower Audit Decision panel's Audit Impact/Suggested Action
+    boxes, Field Comparison table, Send Back modal, AI Audit Assistant,
+    approve/send-back actions — all byte-for-byte untouched.
+
+Test results:
+  - npx ng build --configuration production — succeeded (exit 0; same
+    pre-existing bundle-size warnings this file already had before this
+    change — auditor-record-detail.component.css was already well over
+    the per-component 12KB budget beforehand, confirmed by checking the
+    file's size at HEAD before this change; no NEW warnings introduced).
+  - Live-verified in a real browser (Playwright, throwaway auditor +
+    finance_executive accounts, cleaned up afterward) against 3
+    deliberately-inserted, fully-disposable fixture records covering
+    every rendering branch:
+    - FAIL (invoice RM 5,000.00 vs PO RM 4,500.00, same vendor/PO
+      reference otherwise): Exception Summary card showed Issue "Field
+      Mismatch Detected", Risk "High", Impact unchanged, Affected
+      Fields "Amount" unchanged, PLUS the new Control Impact box,
+      Financial Impact box showing "Invoice RM 5,000.00 / PO RM
+      4,500.00 / Variance RM 500.00" (correct arithmetic), and
+      Recommended Action box — all reusing existing wording, nothing
+      fabricated.
+    - PARTIAL (invoice with no PO/GR uploaded at all): Issue "Missing
+      Supporting Documents", Risk "Medium", Missing "Purchase Order,
+      Goods Receipt" unchanged, PLUS Control Impact, Financial Impact
+      correctly showing ONLY "Invoice RM 3,000.00" with the "unverified
+      pending the missing Purchase Order and Goods Receipt" headline
+      (no PO figure/variance shown, since none exists), and Recommended
+      Action.
+    - PASS (invoice/PO/GR all matching): confirmed the ENTIRE Exception
+      Summary card (including all 3 new sections) is still completely
+      absent from the page, exactly as before this change — the
+      regression check for a clean record.
+    - Zero page errors in all 3 cases. The only console messages were 3
+      expected 404s from GET /authenticity/<id> (the fixture records
+      have no real uploaded file bytes, so the on-demand authenticity
+      check correctly finds nothing to analyze) — confirmed unrelated
+      to this change by inspecting the failing request URLs directly.
+    - Zero horizontal overflow (scrollWidth === clientWidth) on all 3
+      pages.
+    - All fixture rows (3 documents, 3 extracted_fields, 2
+      purchase_orders, 1 goods_receipts, 2 throwaway users, their
+      audit_logs) deleted afterward and verified gone (0 remaining)
+      from the dev DB.
+    - Dev server processes (Flask debug reloader watcher + child,
+      Angular CLI + its esbuild service child) stopped afterward by
+      exact PID — none left running.
+
+Build result:
+  Frontend: clean production build, exit 0; live browser check clean
+  (0 page errors, correct new-section rendering for FAIL/PARTIAL,
+  correct complete-hide for PASS, 0 horizontal overflow). No backend
+  changes this phase, so the backend test suite was not re-run.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false
+     on either service, so Render should auto-deploy the frontend from
+     this push with no separate manual trigger needed on my end.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No database migration needed (no schema changes).
+
+Rollback instructions:
+  Redeploy the previous frontend build - no data or schema changes
+  were made this phase (all fixture rows used for verification were
+  inserted and deleted entirely within this phase's own testing).

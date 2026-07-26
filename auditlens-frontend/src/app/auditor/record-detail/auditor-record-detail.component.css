@@ -196,6 +196,53 @@
 
 .es-evidence-item i { color: var(--danger); }
 
+/* Control Impact / Financial Impact / Recommended Action — reuse the
+   SAME .audit-impact-box/.suggested-action-box/.subsection-title/
+   .impact-text/.suggested-action-text classes already defined below for
+   the Audit Decision panel, so these new sections match the existing
+   dark theme exactly with no new box styling. Only the spacing is
+   tightened here to fit this more compact card. */
+.es-divider {
+  border-top: 1px solid var(--bg-hover);
+  margin: 12px 0 10px;
+}
+
+.exception-summary-card .audit-impact-box,
+.exception-summary-card .suggested-action-box {
+  margin-bottom: 10px;
+}
+
+.exception-summary-card .audit-impact-box:last-child,
+.exception-summary-card .suggested-action-box:last-child {
+  margin-bottom: 0;
+}
+
+.fi-amounts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin-top: 8px;
+}
+
+.fi-amount-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.fi-amount-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.fi-variance { color: var(--danger); }
+
 /* Main Content */
 .content-row {
   display: grid;

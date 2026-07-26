@@ -75,6 +75,38 @@
           <i class="ph-duotone" [ngClass]="isMissingDocumentsIssue ? 'ph-x-circle' : 'ph-warning'"></i> {{ item }}
         </span>
       </div>
+
+      <!-- Control Impact / Financial Impact / Recommended Action — added
+           on top of the existing Issue/Risk/Impact/evidence above, each
+           shown ONLY when its underlying data already exists (auditImpact/
+           financialImpact/suggestedAction all return '' or null when not
+           applicable, same guard pattern the rest of this card already
+           uses). Control Impact reuses auditImpact (the fuller sentence
+           already computed for the Audit Decision panel below); Recommended
+           Action reuses suggestedAction the same way — no new backend call,
+           no duplicated logic, just surfaced here too for one-glance triage
+           at the top of the page instead of only after scrolling down. -->
+      <div class="es-divider" *ngIf="auditImpact || financialImpact || suggestedAction"></div>
+
+      <div class="audit-impact-box" *ngIf="auditImpact">
+        <p class="subsection-title"><i class="ph-duotone ph-shield-warning"></i> Control Impact</p>
+        <p class="impact-text">{{ auditImpact }}</p>
+      </div>
+
+      <div class="audit-impact-box" *ngIf="financialImpact as fi">
+        <p class="subsection-title"><i class="ph-duotone ph-currency-circle-dollar"></i> Financial Impact</p>
+        <p class="impact-text">{{ fi.headline }}</p>
+        <div class="fi-amounts">
+          <span class="fi-amount-item"><span class="fi-amount-label">Invoice</span> {{ fi.invoiceAmountText }}</span>
+          <span class="fi-amount-item" *ngIf="fi.poAmountText"><span class="fi-amount-label">{{ fi.poAmountLabel }}</span> {{ fi.poAmountText }}</span>
+          <span class="fi-amount-item fi-variance" *ngIf="fi.varianceText"><span class="fi-amount-label">Variance</span> {{ fi.varianceText }}</span>
+        </div>
+      </div>
+
+      <div class="suggested-action-box" *ngIf="suggestedAction">
+        <p class="subsection-title"><i class="ph-duotone ph-lightbulb"></i> Recommended Action</p>
+        <p class="suggested-action-text">{{ suggestedAction }}</p>
+      </div>
     </div>
 
     <!-- Success / Error -->
