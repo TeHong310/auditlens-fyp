@@ -15013,3 +15013,146 @@ Rollback instructions:
   entries, one new sidebar link per layout, one CSS rule swap per
   layout), so reverting cleanly restores the exact prior sidebar/
   routing behavior with no data or schema implications.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-27
+What was changed:
+  Login page visual redesign, from a user-supplied high-fidelity design
+  handoff (HTML/CSS prototype + README spec + logo image + reference
+  screenshot). Frontend only, one component, no logic changes:
+  - auditlens-frontend/src/app/login/login.component.html — left panel
+    rebuilt: compact top-left logo + "AuditLens" wordmark lockup (using
+    the existing public/logo.png asset, not a new file), a "COMMAND
+    CENTER" eyebrow label, a gradient headline ("AI-powered audit
+    intelligence, from document to decision."), and a subhead. Added a
+    new 6-stage pipeline visualization (Document Upload -> AI OCR
+    Extraction -> Validation & Three-way Matching -> Risk & Anomaly
+    Detection -> AI Audit Assistant -> Auditor Decision) with an
+    animated dashed connector line, rendered via *ngFor over a new
+    `pipelineStages` array. Expanded the old 3-card vertical feature
+    list into a 6-card, 3-column capability grid (AI Document Analysis,
+    Three-way Matching, Risk & Exception Detection, AI Audit Assistant,
+    Authenticity Verification, Approval Intelligence) via a new
+    `capabilities` array. The right panel (login card: email/password
+    fields, sign-in button, register button, security checklist,
+    footer link) is unchanged beyond what already matched the
+    reference. No "Remember me" checkbox added (the design spec
+    explicitly excludes it).
+  - auditlens-frontend/src/app/login/login.component.css — replaced
+    the old static "no motion" background (fixed blobs + straight tech
+    lines) with a pulsing glow-blob animation and a diagonal scan-line
+    sweep, plus new styles for the brand lockup, eyebrow, gradient
+    headline, pipeline (animated dashed line, floating icon tiles) and
+    the 6-card capability grid. All colors reuse the app's existing
+    CSS custom properties (var(--accent), var(--login-blue),
+    var(--text-primary), etc.) and the color-mix() idiom already used
+    elsewhere in this file — no new hardcoded hex colors. Every new
+    transform/opacity animation is neutralized under
+    prefers-reduced-motion (the transform ones are already covered by
+    the app's existing global rule in styles.css; added an explicit
+    supplemental rule here for the opacity-based blob pulse and
+    scan-line, which the global rule doesn't reach). Updated the
+    900px/768px responsive breakpoints to collapse the capability grid
+    to 2 columns and let the pipeline row wrap, replacing the old
+    breakpoint rules that referenced now-removed classes
+    (.logo-container/.real-logo/.logo-glow/.logo-ring).
+  - auditlens-frontend/src/app/login/login.component.ts — added the
+    two new data arrays (`pipelineStages`, `capabilities`) the template
+    iterates over. Every existing property and method (email, password,
+    showPassword, isLoading, errorMessage, togglePassword(), onLogin(),
+    goToRegister()) is untouched.
+  - Icons: all placeholder emoji in the design reference were mapped to
+    this app's existing Phosphor Duotone icon set (ph-upload-simple,
+    ph-scan, ph-arrows-left-right, ph-shield-warning, ph-robot,
+    ph-gavel for the pipeline; ph-magnifying-glass, ph-arrows-left-
+    right, ph-shield-warning, ph-robot, ph-shield-check, ph-check-
+    circle for the capability cards) — this app has never used a
+    literal emoji in its UI, consistent with every prior phase.
+  - The pipeline explicitly ends in "Auditor Decision" (a human icon
+    concept, ph-gavel), never "AI approval" — the design handoff itself
+    calls this out, and it matches the AI-never-decides principle this
+    session already enforces elsewhere (e.g. Approval Assessment's
+    readiness check never trusts the AI's verdict on its own).
+  - 'JetBrains Mono' (used by the reference for the eyebrow label) was
+    NOT added as a new font import — this app has never loaded any
+    webfont (confirmed nothing in index.html or styles.css), so the
+    eyebrow just falls back to the existing 'Consolas', monospace
+    stack rather than introducing a new external font dependency for
+    one small label.
+
+Why:
+  User-supplied design handoff (AuditLens Login.dc.html + README.md +
+  logo image + reference screenshot) asking to recreate the new login
+  page design "in our app's existing framework and component library,"
+  using the reference only for visual/layout guidance, not as literal
+  code to copy.
+
+Confirmed unchanged (safety rules for this phase):
+  - No backend file touched — git diff --stat shows only the 3 login
+    component files.
+  - No authentication logic touched — onLogin()/togglePassword()/
+    goToRegister() and all component state are byte-for-byte the same
+    as before this phase; only two new plain data arrays were added.
+  - No other route, page, or shared component touched.
+
+Test results:
+  - No Angular unit-test suite exists in this project — verification
+    follows this session's established methodology of live Playwright
+    checks against the running app.
+  - npx ng build --configuration production — succeeded (exit 0; same
+    pre-existing bundle-size warnings as before, unrelated to this
+    change).
+  - Live-verified in a real browser (Playwright, real seeded admin
+    account, no fixture data needed) — 17/19 checks pass:
+    - Brand wordmark, "Command Center" eyebrow, headline, and subhead
+      text all render correctly.
+    - Pipeline renders exactly 6 stages, the last one is "Auditor
+      Decision", and the phrase "AI approval" never appears anywhere
+      in the pipeline.
+    - Capability grid renders exactly 6 cards with the correct titles.
+    - No "Remember me" checkbox present anywhere on the page.
+    - "Secure Audit Workspace" badge preserved.
+    - No horizontal overflow at 1440px or at a 375px mobile width
+      (pipeline wraps to 2 rows, capability grid drops to 2 columns,
+      panels stack vertically — verified visually via screenshot).
+    - All 12 pipeline/capability icons (including ph-robot and
+      ph-gavel, not previously used elsewhere in this app) resolve to
+      distinct, non-empty Private Use Area glyphs in the Phosphor font
+      — confirmed via computed ::before content, not just visual
+      inspection, ruling out a silently-blank icon.
+    - Password visibility toggle still works.
+    - Register button still navigates to /register.
+    - A real login with the seeded admin account (loylth910@gmail.com)
+      still redirects to /admin/home correctly.
+    - No uncaught page (JS) errors.
+    - 2 checks failed, both a PRE-EXISTING bug unrelated to this
+      phase, confirmed via `git stash` (tested the untouched original
+      component): submitting invalid credentials gets a real 401 from
+      the backend, but the component's `.error-box` never renders and
+      the browser logs the 401 as a console error. Reproduced
+      identically on the pre-redesign code, so this phase did not
+      cause it and did not fix it (out of scope for a visual
+      recreation task) — flagging it for a separate follow-up.
+
+Build result:
+  Frontend: clean production build, exit 0. Live browser check: 17/19
+  checks green; the 2 failures are a pre-existing, unrelated bug
+  (invalid-login error banner never renders) confirmed present before
+  this phase's changes via git stash comparison.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false,
+     so Render should auto-deploy the frontend from this push with no
+     separate manual trigger needed on my end.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No database migration needed (no schema changes).
+
+Rollback instructions:
+  Revert this one commit (git revert, or redeploy the previous frontend
+  build) - the change is confined to 3 files in one component
+  (login.component.html/.css/.ts), so reverting cleanly restores the
+  exact prior login page with no data or schema implications.

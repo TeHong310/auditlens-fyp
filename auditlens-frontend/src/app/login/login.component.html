@@ -2,49 +2,42 @@
 
   <div class="left-panel">
 
-    <!-- Static decorative background — grid pattern + soft light
-         wash + minimal technology lines. No motion, aria-hidden. -->
+    <!-- Ambient background — grid pattern, two pulsing glow blobs, and
+         a diagonal scan-line sweep. aria-hidden, decorative only. -->
     <div class="ambient-bg" aria-hidden="true">
       <div class="bg-grid"></div>
       <div class="glow-blob blob-a"></div>
       <div class="glow-blob blob-b"></div>
-      <div class="tech-line line-a"></div>
-      <div class="tech-line line-b"></div>
+      <div class="scan-line"></div>
     </div>
 
-    <div class="brand-header">
-      <h1 class="brand-title">Audit<span class="lens-accent">Lens</span></h1>
-      <p class="brand-subtitle">Intelligent Audit Verification</p>
+    <div class="brand-lockup">
+      <img src="logo.png" alt="AuditLens Logo" class="brand-mark" />
+      <span class="brand-wordmark">Audit<span class="lens-accent">Lens</span></span>
     </div>
 
-    <div class="logo-container">
-      <div class="logo-ring" aria-hidden="true"></div>
-      <div class="logo-glow" aria-hidden="true"></div>
-      <div class="logo-icon">
-        <img src="logo.png" alt="AuditLens Logo" class="real-logo" />
-      </div>
+    <div class="headline-block">
+      <p class="eyebrow">Command Center</p>
+      <h1 class="headline">AI-powered audit intelligence, from document to decision.</h1>
+      <p class="subhead">AuditLens analyzes, matches, and evaluates transactions — surfacing risks before final approval.</p>
     </div>
 
-    <div class="features-grid">
-      <div class="feature-card">
-        <span class="feature-icon"><i class="ph-duotone ph-magnifying-glass"></i></span>
-        <div class="feature-text">
-          <p class="feature-title">AI OCR &amp; Document Analysis</p>
-          <p class="feature-desc">Extract, understand, and verify documents with intelligent AI.</p>
+    <div class="pipeline">
+      <div class="pipeline-line" aria-hidden="true"></div>
+      <div class="pipeline-steps">
+        <div class="pipeline-step" *ngFor="let stage of pipelineStages; let i = index" [style.animation-delay.ms]="i * 150">
+          <div class="pipeline-icon"><i class="ph-duotone" [ngClass]="stage.icon"></i></div>
+          <p class="pipeline-label">{{ stage.label }}</p>
         </div>
       </div>
-      <div class="feature-card">
-        <span class="feature-icon"><i class="ph-duotone ph-arrows-left-right"></i></span>
-        <div class="feature-text">
-          <p class="feature-title">Three-way Matching</p>
-          <p class="feature-desc">Automatically match invoices, purchase orders, and goods receipts.</p>
-        </div>
-      </div>
-      <div class="feature-card">
-        <span class="feature-icon"><i class="ph-duotone ph-shield-warning"></i></span>
-        <div class="feature-text">
-          <p class="feature-title">Risk &amp; Exception Detection</p>
-          <p class="feature-desc">Identify anomalies and potential audit risks.</p>
+    </div>
+
+    <div class="capabilities-grid">
+      <div class="capability-card" *ngFor="let cap of capabilities">
+        <span class="capability-icon"><i class="ph-duotone" [ngClass]="cap.icon"></i></span>
+        <div class="capability-text">
+          <p class="capability-title">{{ cap.title }}</p>
+          <p class="capability-desc">{{ cap.desc }}</p>
         </div>
       </div>
     </div>

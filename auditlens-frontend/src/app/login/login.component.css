@@ -17,15 +17,14 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 26px;
-  padding: 36px 56px;
+  gap: 28px;
+  padding: 40px 56px;
   position: relative;
   overflow: hidden;
 }
 
-/* ── Static premium background: navy wash + faint grid + two soft
-   blue/purple blobs + a couple of thin technology lines. Nothing here
-   moves. ── */
+/* ── Ambient background: faint grid + two pulsing blue/purple blobs +
+   a slow diagonal scan-line sweep. ── */
 .ambient-bg {
   position: absolute;
   inset: 0;
@@ -50,6 +49,7 @@
   position: absolute;
   border-radius: 50%;
   filter: blur(70px);
+  animation: blobPulse 7s ease-in-out infinite;
 }
 
 .blob-a {
@@ -66,29 +66,53 @@
   width: 280px;
   height: 280px;
   background: color-mix(in srgb, var(--login-blue) 12%, transparent);
+  animation-delay: 2.5s;
 }
 
-.tech-line {
+@keyframes blobPulse {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.12); }
+}
+
+.scan-line {
   position: absolute;
-  width: 130%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--login-blue) 22%, transparent), transparent);
+  top: 0;
+  left: -30%;
+  width: 45%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--login-blue) 6%, transparent), transparent);
+  transform: rotate(8deg);
+  animation: scanSweep 9s ease-in-out infinite;
 }
 
-.line-a { top: 22%; left: -50%; transform: rotate(-16deg); }
-.line-b { top: 74%; left: -50%; transform: rotate(-16deg); }
+@keyframes scanSweep {
+  0%, 100% { left: -30%; }
+  50% { left: 110%; }
+}
 
-.brand-header {
+@media (prefers-reduced-motion: reduce) {
+  .glow-blob, .scan-line { animation: none !important; opacity: 0.7; }
+}
+
+.brand-lockup {
   position: relative;
   z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.brand-title {
-  font-size: 36px;
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+}
+
+.brand-wordmark {
+  font-size: 18px;
   font-weight: 800;
   color: var(--text-primary);
-  margin: 0 0 6px 0;
-  letter-spacing: -0.5px;
+  letter-spacing: -0.3px;
 }
 
 .lens-accent {
@@ -98,98 +122,148 @@
   color: transparent;
 }
 
-.brand-subtitle {
+.headline-block {
+  position: relative;
+  z-index: 1;
+  max-width: 520px;
+}
+
+.eyebrow {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--login-blue);
+  margin: 0 0 14px 0;
+}
+
+.headline {
+  font-size: 34px;
+  font-weight: 800;
+  line-height: 1.18;
+  letter-spacing: -0.5px;
+  margin: 0 0 14px 0;
+  background: linear-gradient(135deg, var(--text-primary) 45%, var(--accent-soft));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.subhead {
   font-size: 14.5px;
+  line-height: 1.5;
   color: var(--text-secondary);
   margin: 0;
 }
 
-/* ── Logo presentation — reduced slightly, static glow + tech ring,
-   transparent background preserved. ── */
-.logo-container {
+/* ── Pipeline visualization: 6 stages, animated dashed connector,
+   ending in a human Auditor Decision (never "AI approval"). ── */
+.pipeline {
   position: relative;
+  z-index: 1;
+}
+
+.pipeline-line {
+  height: 2px;
+  margin: 0 22px 18px;
+  background: repeating-linear-gradient(90deg, var(--login-blue) 0 8px, transparent 8px 16px);
+  background-size: 32px 2px;
+  animation: dashFlow 1.1s linear infinite;
+}
+
+@keyframes dashFlow { to { background-position: -32px 0; } }
+
+.pipeline-steps {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pipeline-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 88px;
+  text-align: center;
+  animation: floatTile 3.2s ease-in-out infinite;
+}
+
+.pipeline-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1;
-  height: 250px;
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  background: var(--accent-bg);
+  border: 1px solid color-mix(in srgb, var(--accent-soft) 30%, transparent);
+  color: var(--accent-soft);
+  font-size: 18px;
 }
 
-.logo-glow {
-  position: absolute;
-  width: 300px;
-  height: 300px;
-  border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 20%, transparent) 0%, transparent 68%);
-  pointer-events: none;
+.pipeline-label {
+  font-size: 10.5px;
+  line-height: 1.3;
+  color: var(--text-muted);
+  margin: 0;
 }
 
-.logo-ring {
-  position: absolute;
-  width: 240px;
-  height: 240px;
-  border-radius: 50%;
-  border: 1px solid color-mix(in srgb, var(--login-blue) 22%, transparent);
-  background: color-mix(in srgb, var(--bg-card) 25%, transparent);
-  pointer-events: none;
+@keyframes floatTile {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
 }
 
-.logo-icon {
+@media (prefers-reduced-motion: reduce) {
+  .pipeline-line, .pipeline-step { animation: none !important; }
+}
+
+/* ── Capability cards (3-column grid) ── */
+.capabilities-grid {
   position: relative;
   z-index: 1;
-}
-
-.real-logo {
-  display: block;
-  width: 190px;
-  height: 190px;
-  object-fit: contain;
-}
-
-/* ── Feature cards ── */
-.features-grid {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 10px;
 }
 
-.feature-card {
+.capability-card {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px 14px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
   background: color-mix(in srgb, var(--bg-card) 55%, transparent);
   backdrop-filter: blur(6px);
   border: 1px solid var(--border);
   border-radius: 12px;
 }
 
-.feature-icon {
+.capability-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
   background: var(--accent-bg);
   color: var(--accent-soft);
   flex-shrink: 0;
-  font-size: 16px;
+  font-size: 15px;
 }
 
-.feature-text { min-width: 0; }
+.capability-text { min-width: 0; }
 
-.feature-title {
-  font-size: 13px;
+.capability-title {
+  font-size: 12.5px;
   font-weight: 700;
   color: var(--text-primary);
   margin: 0 0 2px 0;
 }
 
-.feature-desc {
-  font-size: 11.5px;
+.capability-desc {
+  font-size: 11px;
   color: var(--text-muted);
   margin: 0;
   line-height: 1.4;
@@ -475,6 +549,7 @@
 /* ══════════════════ RESPONSIVE ══════════════════ */
 @media (max-width: 900px) {
   .left-panel, .right-panel { flex-basis: auto; }
+  .capabilities-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (max-width: 768px) {
@@ -482,8 +557,8 @@
   .left-panel { padding: 32px 24px; gap: 20px; }
   .right-panel { padding: 24px 20px 48px; }
   .login-card { padding: 32px 24px; }
-  .logo-container { height: 170px; }
-  .real-logo { width: 130px; height: 130px; }
-  .logo-glow { width: 210px; height: 210px; }
-  .logo-ring { width: 170px; height: 170px; }
+  .headline { font-size: 26px; }
+  .pipeline-line { display: none; }
+  .pipeline-steps { justify-content: flex-start; }
+  .capabilities-grid { grid-template-columns: repeat(2, 1fr); }
 }
