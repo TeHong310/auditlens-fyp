@@ -15156,3 +15156,124 @@ Rollback instructions:
   build) - the change is confined to 3 files in one component
   (login.component.html/.css/.ts), so reverting cleanly restores the
   exact prior login page with no data or schema implications.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-27
+What was changed:
+  Follow-up pass on the login page redesign (previous entry above),
+  fixing 4 specific details flagged after visual comparison against
+  the actual design source. This time the exact design source was
+  pulled directly from the user's claude.ai/design project (via the
+  DesignSync tool, project "AuditLens Premium Redesign") instead of
+  working from memory of an earlier chat attachment, so these values
+  are pixel-exact rather than approximated:
+  - auditlens-frontend/src/app/login/login.component.html /.css:
+    - Pipeline connector line: replaced the old CSS repeating-gradient
+      "flowing dash" trick (a flat --login-blue color) with an inline
+      SVG <line> whose stroke is a real linearGradient (#6366f1 ->
+      #a855f7), stroke-dasharray "6 6", animating stroke-dashoffset to
+      -40 over 2.5s linear infinite — matching the original design's
+      exact technique, not an approximation of it.
+    - Pipeline step float animation: was 3.2s / -5px amplitude with a
+      150ms-per-step stagger; corrected to the source's exact 4s
+      ease-in-out infinite, -8px amplitude (0% and 100% at 0px, 50% at
+      -8px), staggered by 0.25s per step (0s, 0.25s, 0.5s, 0.75s, 1s,
+      1.25s via [style.animation-delay.ms]="i * 250") — verified live
+      by sampling each tile's computed transform mid-cycle and
+      confirming all 6 are at different points in the oscillation
+      (genuinely staggered, not moving in unison).
+    - Icon tiles: both .pipeline-icon and .capability-icon changed
+      from a flat var(--accent-bg) fill to a dark-glass tile —
+      background: rgba(20,22,40,0.8), border: 1px solid
+      rgba(124,124,255,0.3), box-shadow: 0 0 18px rgba(99,102,241,
+      0.15), backdrop-filter: blur(6px) — replacing the flat colored
+      icon backgrounds from the first pass. (Note: the actual imported
+      source file styles capability-card icons more lightly than
+      pipeline icons — smaller, tinted-only, no border/shadow. Applied
+      the heavier dark-glass treatment to both per the user's explicit
+      instruction text for this fix, which takes precedence over the
+      source file's own capability-icon styling for this specific
+      property.)
+    - Logo: fetched the exact PNG the design references
+      (uploads/pasted-1785080802732-0.png in the design project, the
+      same image organized as design_handoff_login_page/assets/
+      auditlens-logo.png) via DesignSync's get_file, decoded from
+      base64, and saved as auditlens-frontend/public/auditlens-
+      logo.png — a new file, the pre-existing public/logo.png (used
+      elsewhere by both portal sidebars) is untouched. The login
+      header <img> now points at auditlens-logo.png instead of the
+      previous logo.png substitution, so the header renders the exact
+      original asset rather than a visually-similar stand-in.
+  - No changes to login.component.ts, no changes to the right panel
+    (login card), no changes to any other route/page/component.
+
+Why:
+  User comparison against the actual design source (now pulled via
+  the Claude Design MCP integration rather than reconstructed from an
+  earlier chat attachment) found the first pass's pipeline animation,
+  connector line, icon tile styling, and logo asset were close but not
+  exact matches — this pass corrects all 4 against the authoritative
+  source file (AuditLens Login.dc.html) and its referenced assets.
+
+Confirmed unchanged (safety rules for this phase):
+  - No backend file touched.
+  - No login logic touched — onLogin()/togglePassword()/goToRegister()
+    and all component state are unchanged from the prior phase.
+  - No other route, page, or shared component touched.
+  - Pre-existing public/logo.png (still used by both portal sidebars)
+    left in place and unmodified; auditlens-logo.png is an additional,
+    new file used only by the login page header.
+
+Test results:
+  - npx ng build --configuration production — succeeded (exit 0; same
+    pre-existing bundle-size warnings, unrelated to this change).
+  - Live-verified in a real browser (Playwright) — 15/15 checks
+    specific to this fix all pass:
+    - Logo <img> points at auditlens-logo.png and actually loaded
+      (naturalWidth > 0, not a broken image).
+    - Pipeline connector renders as a real SVG <line> with
+      stroke-dasharray "6 6", the flowDash animation applied (name
+      resolves with Angular's per-component style-scoping prefix),
+      and its gradient <stop> colors resolve to #6366f1 / #a855f7
+      (not a literal unresolved "url(#...)" reference).
+    - Pipeline icon and capability icon computed styles both resolve
+      to background rgba(20,22,40,0.8), border rgba(124,124,255,0.3),
+      and a box-shadow containing the 99,102,241 glow color.
+    - Pipeline step animation computed duration is 4s, timing function
+      ease-in-out, and the 6 steps' computed animation-delay values
+      are exactly 0s/0.25s/0.5s/0.75s/1s/1.25s.
+    - The floatTile keyframe rule's 50% frame is confirmed as
+      translateY(-8px) by reading the actual CSSKeyframesRule from the
+      live stylesheet (not just inferred from source), and live-
+      sampled mid-animation transforms showed all 6 tiles at 6
+      different translateY values simultaneously, confirming genuine
+      desync.
+  - Re-ran the full prior-phase regression suite (19 checks) after
+    these changes: same 17/19 pass as the previous entry, with the
+    same 2 pre-existing failures (invalid-login error banner never
+    rendering) already documented above as unrelated to any login
+    page visual work — no new regressions introduced by this pass.
+  - Dev server processes (Angular CLI + esbuild child, Flask + its
+    debug-reloader child) stopped afterward by exact PID.
+
+Build result:
+  Frontend: clean production build, exit 0. Live browser check: 15/15
+  new checks green, 17/19 full regression suite green (2 pre-existing,
+  previously-documented, unrelated failures only).
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false,
+     so Render should auto-deploy the frontend from this push with no
+     separate manual trigger needed on my end.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No database migration needed (no schema changes).
+
+Rollback instructions:
+  Revert this one commit (git revert, or redeploy the previous frontend
+  build) - confined to the login component's .html/.css and one new
+  image asset (public/auditlens-logo.png); reverting restores the
+  prior pass's login page with no data or schema implications.

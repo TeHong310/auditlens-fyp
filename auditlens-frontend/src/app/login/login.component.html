@@ -12,7 +12,7 @@
     </div>
 
     <div class="brand-lockup">
-      <img src="logo.png" alt="AuditLens Logo" class="brand-mark" />
+      <img src="auditlens-logo.png" alt="AuditLens Logo" class="brand-mark" />
       <span class="brand-wordmark">Audit<span class="lens-accent">Lens</span></span>
     </div>
 
@@ -23,9 +23,17 @@
     </div>
 
     <div class="pipeline">
-      <div class="pipeline-line" aria-hidden="true"></div>
+      <svg class="pipeline-line" width="100%" height="6" viewBox="0 0 460 6" preserveAspectRatio="none" aria-hidden="true">
+        <line x1="20" y1="3" x2="440" y2="3" stroke="url(#pipelineLineGrad)" stroke-width="1.5" stroke-dasharray="6 6" />
+        <defs>
+          <linearGradient id="pipelineLineGrad" x1="0" x2="1">
+            <stop offset="0" stop-color="#6366f1" />
+            <stop offset="1" stop-color="#a855f7" />
+          </linearGradient>
+        </defs>
+      </svg>
       <div class="pipeline-steps">
-        <div class="pipeline-step" *ngFor="let stage of pipelineStages; let i = index" [style.animation-delay.ms]="i * 150">
+        <div class="pipeline-step" *ngFor="let stage of pipelineStages; let i = index" [style.animation-delay.ms]="i * 250">
           <div class="pipeline-icon"><i class="ph-duotone" [ngClass]="stage.icon"></i></div>
           <p class="pipeline-label">{{ stage.label }}</p>
         </div>
