@@ -109,6 +109,28 @@
       </div>
     </div>
 
+    <!-- Risk Indicators — anomaly findings (weekend transaction, amount
+         anomaly, duplicate invoice, round amount, etc.) for THIS
+         document, from the SAME anomalies data the Document Workflow
+         Timeline's Anomaly Evaluation step already uses. Deliberately
+         compact — type + severity + review status only, no Evidence
+         Found / AI Assessment / Suggested Checks or Investigate/Review/
+         Dismiss actions, which stay on the full Anomaly Detection page
+         (Auditor > Anomaly Detection). Hidden entirely when there are no
+         anomalies for this document, same "hide when nothing to show"
+         pattern as Exception Summary above it. -->
+    <div class="risk-indicators-card" *ngIf="riskIndicators.length">
+      <p class="es-heading"><i class="ph-duotone ph-warning-octagon"></i> Risk Indicators</p>
+      <div class="ri-list">
+        <div class="ri-item" *ngFor="let a of riskIndicators">
+          <span class="severity-pill" [ngClass]="riskSeverityClass(a.severity)">{{ a.severity | uppercase }}</span>
+          <span class="ri-type"><i class="ph-duotone" [ngClass]="riskTypeIcon(a.anomaly_type)"></i> {{ riskTypeLabel(a.anomaly_type) }}</span>
+          <span class="ri-status" [ngClass]="'ri-status-' + a.status">{{ riskStatusLabel(a.status) }}</span>
+        </div>
+      </div>
+      <p class="ri-footnote">See Anomaly Detection for evidence, AI assessment and review actions.</p>
+    </div>
+
     <!-- Success / Error -->
     <div class="success-box" *ngIf="successMessage"><i class="ph-duotone ph-check-circle"></i> {{ successMessage }}</div>
     <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>

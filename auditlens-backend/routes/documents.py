@@ -1459,11 +1459,20 @@ def _build_timeline_events(context):
 
     # 5. Anomaly Evaluation — an 'informational' anomaly (already
     # reviewed/dismissed, or a low-risk pattern) never blocks this step;
-    # only a 'blocking' one does.
+    # only a 'blocking' one does. Previously this step said "No Blocking
+    # Issue" whenever nothing was BLOCKING, even if non-blocking
+    # (informational) anomalies actually existed — misleading an auditor
+    # into reading "No Blocking Issue" as "no anomalies at all". Now
+    # distinguishes "anomalies exist but none are blocking" from the
+    # genuinely clean "no anomalies detected" case; the status bucket
+    # (completed vs action_required) is unchanged either way — only the
+    # detail text.
     anomalies = context.get('anomalies') or []
     blocking_anomalies = [a for a in anomalies if a.get('classification') == 'blocking']
     if blocking_anomalies:
         an_status, an_detail = 'action_required', 'Status: Review Required'
+    elif anomalies:
+        an_status, an_detail = 'completed', 'Status: Non-blocking anomalies detected'
     else:
         an_status, an_detail = 'completed', 'Status: No Blocking Issue'
     events.append({
@@ -1583,7 +1592,16 @@ def get_document_timeline(document_id):
             return jsonify({'error': 'Invoice document not found'}), 404
 
         events = _build_timeline_events(context)
-        return jsonify({'document_id': document_id, 'events': events}), 200
+        # anomalies: already computed by _build_case_context() above (used
+        # internally for the Anomaly Evaluation step's blocking check) —
+        # surfaced here too so Record Detail's Risk Indicators section can
+        # show each finding's type/severity without a second anomaly
+        # lookup or a new endpoint. Same data, same 'classification'
+        # (blocking/informational) the timeline step itself just used.
+        return jsonify({
+            'document_id': document_id, 'events': events,
+            'anomalies': context.get('anomalies') or [],
+        }), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500

@@ -236,14 +236,25 @@ def run_case_blocking_anomaly_is_action_required():
 
 
 def run_case_informational_only_anomaly_does_not_block():
-    print('Case: an already-reviewed (informational) anomaly does NOT block Anomaly Evaluation')
+    print('Case: an already-reviewed (informational) anomaly does NOT block Anomaly Evaluation, but IS mentioned')
     context = _base_context(anomalies=[
         {'anomaly_type': 'duplicate', 'severity': 'medium', 'status': 'reviewed', 'classification': 'informational'}
     ])
     events = rd._build_timeline_events(context)
     an = _event(events, 'anomaly_evaluation')
     check('anomaly_evaluation stays completed despite the informational finding', an['status'] == 'completed', an)
-    check('detail says "No Blocking Issue"', an['detail'] == 'Status: No Blocking Issue', an)
+    check('detail distinguishes "non-blocking anomalies" from "no anomalies at all"',
+          an['detail'] == 'Status: Non-blocking anomalies detected', an)
+
+
+def run_case_no_anomalies_at_all_shows_clean_status():
+    print('Case: zero anomalies of any kind -> the genuinely clean "No Blocking Issue" status')
+    context = _base_context(anomalies=[])
+    events = rd._build_timeline_events(context)
+    an = _event(events, 'anomaly_evaluation')
+    check('anomaly_evaluation is completed', an['status'] == 'completed', an)
+    check('detail says "No Blocking Issue" only when there is truly nothing detected',
+          an['detail'] == 'Status: No Blocking Issue', an)
 
 
 def run_case_review_mismatch_is_action_required():
@@ -359,6 +370,7 @@ if __name__ == '__main__':
     run_case_authenticity_warning_is_action_required()
     run_case_blocking_anomaly_is_action_required()
     run_case_informational_only_anomaly_does_not_block()
+    run_case_no_anomalies_at_all_shows_clean_status()
     run_case_review_mismatch_is_action_required()
     run_case_need_review_auditor_action_is_action_required()
 

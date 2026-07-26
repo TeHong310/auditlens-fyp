@@ -13625,3 +13625,202 @@ Rollback instructions:
   Redeploy the previous frontend build - no data or schema changes
   were made this phase (all fixture rows used for verification were
   inserted and deleted entirely within this phase's own testing).
+
+
+----------------------------------------------------------------------
+
+Date: 2026-07-26
+What was changed:
+  Phase 41: added a "Risk Indicators" section to Auditor Record Detail
+  (below Exception Summary), made Exception Summary itself slightly more
+  compact, and fixed the Document Workflow Timeline's "Anomaly
+  Evaluation" step to stop calling non-blocking anomalies "No Blocking
+  Issue". One small, necessary backend change (surfacing already-
+  computed data + a text fix); everything else is frontend.
+
+  auditlens-backend/routes/documents.py:
+    - _build_timeline_events() step 5 (Anomaly Evaluation): previously
+      said "Status: No Blocking Issue" whenever nothing was BLOCKING,
+      even when non-blocking (informational) anomalies genuinely
+      existed for this document — indistinguishable from the truly
+      clean "no anomalies at all" case. Now: blocking anomaly -> "Status:
+      Review Required" (unchanged); non-blocking anomalies present ->
+      NEW "Status: Non-blocking anomalies detected"; zero anomalies of
+      any kind -> "Status: No Blocking Issue" (unchanged, still the
+      clean-record wording). The completed/action_required status
+      bucket for this step is untouched either way — only the detail
+      text changed, so nothing about the timeline's overall
+      completed/pending/action_required contract changes for any other
+      consumer.
+    - get_document_timeline() (GET /documents/<id>/timeline): now also
+      returns 'anomalies' (each already-classified anomaly: anomaly_
+      type, severity, detected_pattern, ai_explanation, status,
+      classification) alongside the existing 'events' list. This is the
+      one "necessary" backend change here — Record Detail's new Risk
+      Indicators section needs each finding's type + severity, and this
+      data was ALREADY being computed inside this same endpoint's
+      _build_case_context() call (used internally to decide the
+      Anomaly Evaluation step above) but discarded before the response
+      was built. No new query, no new endpoint — one more key on an
+      existing response.
+
+  auditlens-backend/tests/extraction/test_document_timeline.py:
+    - Updated run_case_informational_only_anomaly_does_not_block() to
+      expect the new "Non-blocking anomalies detected" wording.
+    - Added run_case_no_anomalies_at_all_shows_clean_status() — the
+      explicit regression check that a genuinely anomaly-free record
+      still gets the original "No Blocking Issue" text.
+
+  auditlens-frontend/src/app/auditor/record-detail/
+  auditor-record-detail.component.ts:
+    - New riskIndicators: any[] = [] property + loadRiskIndicators(),
+      called from ngOnInit alongside the page's other independent
+      loadXxx() calls. Fetches GET /documents/<id>/timeline (the SAME
+      endpoint the Document Workflow Timeline component below on this
+      page already calls on its own) and reads the new `anomalies`
+      field — a second, separate call to that endpoint rather than
+      restructuring the shared WorkflowTimelineComponent (also used by
+      Finance Correction Detail) to pass anomalies down as an @Input;
+      the endpoint is a lightweight DB-only read (no AI call), so the
+      duplicate GET is a non-issue. Non-blocking: a failure just leaves
+      the section hidden, matching every other advisory section on this
+      page (authenticity, transaction detail).
+    - New riskTypeIcon()/riskTypeLabel()/riskSeverityClass()/
+      riskStatusLabel() helpers — the icon/label/color mapping
+      deliberately MIRRORS auditor-anomalies.component.ts (the full
+      Anomaly Detection page) exactly, so the same finding reads
+      identically in both places.
+
+  auditlens-frontend/src/app/auditor/record-detail/
+  auditor-record-detail.component.html:
+    - New "Risk Indicators" card, positioned directly below Exception
+      Summary, *ngIf="riskIndicators.length" (hidden entirely when this
+      document has no anomalies — same "hide when nothing to show"
+      convention Exception Summary already uses). Deliberately compact:
+      each finding is one row (severity pill + type icon/label + review
+      status only) — no Evidence Found / AI Assessment / Suggested
+      Checks detail and no Investigate/Review/Dismiss actions, which
+      stay on the full Anomaly Detection page; a footnote links there by
+      name instead of duplicating it. Exception Summary's own Issue/
+      Risk/Impact/Missing Documents rows and the Control Impact/
+      Financial Impact/Recommended Action sections added last phase are
+      completely unchanged in content — only their CSS spacing shrank
+      (below).
+
+  auditlens-frontend/src/app/auditor/record-detail/
+  auditor-record-detail.component.css:
+    - Exception Summary made slightly more compact: card padding
+      16px 20px -> 13px 18px, heading font-size 13px -> 12.5px and
+      margin-bottom 10px -> 8px, row padding 4px 0 -> 3px 0, and the
+      reused Control Impact/Financial Impact/Recommended Action sub-box
+      padding/margin tightened a further notch (14px 16px -> 11px 14px,
+      margin-bottom 10px -> 8px) — spacing/sizing only, no font-size
+      change to the sub-box body text itself (readability).
+    - New .risk-indicators-card/.ri-list/.ri-item/.ri-type/.ri-status/
+      .ri-footnote/.severity-pill(.pill-high/medium/low) rules — the
+      severity colors are the EXACT same var(--danger)/var(--warning)
+      mapping already used on the Anomaly Detection page (high=danger,
+      medium/low=warning), so a finding never looks more or less severe
+      depending on which page it's viewed from. No new CSS custom
+      properties.
+
+Why:
+  Exception Summary already covers confirmed 3-way-matching/
+  authenticity/missing-document exceptions, but anomaly-detector
+  findings (weekend transaction, amount anomaly, duplicate invoice,
+  round amount) for the SAME document were invisible on Record Detail
+  entirely — an auditor had to separately remember to check the Anomaly
+  Detection page for this specific invoice_document_id. Risk Indicators
+  surfaces "does this document have anomalies, and how severe" at a
+  glance, without pulling the full investigation UI onto Record Detail
+  (that stays exception-summary-scoped, per the task's explicit "do not
+  duplicate the full Anomaly Detection detail page").
+
+  Separately, the Anomaly Evaluation timeline step's "No Blocking Issue"
+  text was factually misleading: it's only about the BLOCKING
+  distinction, but reads like "this document has no anomalies", which
+  is false whenever a lower-severity or already-reviewed anomaly exists.
+
+Confirmed unchanged:
+  - No database schema changes.
+  - No new backend endpoints — the one backend change is a single
+    extra field on GET /documents/<id>/timeline's existing response,
+    built from data that route already computes.
+  - _classify_anomaly()/_compute_audit_status() (routes/ai_assistant.py)
+    and run_anomaly_detection()/the 4 detector functions (helpers/
+    anomaly_detector.py) are completely untouched — this phase only
+    reads their already-computed output, never recomputes or
+    reinterprets it.
+  - WorkflowTimelineComponent (shared with Finance Correction Detail)
+    and its own timeline-events rendering are untouched — the text fix
+    is entirely inside the backend detail string it already displays
+    verbatim; Finance Correction Detail automatically gets the same
+    corrected wording with zero frontend changes on its side.
+  - Exception Summary's Issue/Risk/Impact/Missing Documents rows and
+    the Control Impact/Financial Impact/Recommended Action sections:
+    same data, same wording, same conditional-render guards — only
+    spacing shrank.
+  - The full Anomaly Detection page (auditor-anomalies.component.*),
+    its filters, review/dismiss actions, and GET/POST /anomalies* routes
+    are completely untouched.
+
+Test results:
+  - tests/extraction/test_document_timeline.py — updated + one new case,
+    all pass: blocking anomaly still shows "Review Required"; an
+    informational-only anomaly now shows "Non-blocking anomalies
+    detected" (previously incorrectly showed "No Blocking Issue"); zero
+    anomalies still correctly shows "No Blocking Issue".
+  - Full backend regression suite (python tests/extraction/run_all.py,
+    all 26 suites including the updated test_document_timeline.py) —
+    all PASS, zero regressions elsewhere.
+  - npx ng build --configuration production — succeeded (exit 0; same
+    pre-existing bundle-size warnings this file already had, no new
+    ones).
+  - Live-verified in a real browser (Playwright, throwaway auditor +
+    finance_executive accounts, cleaned up afterward) against 3
+    deliberately-inserted, fully-disposable fixture invoices:
+    - Non-blocking case (a reviewed 'duplicate' anomaly + a pending
+      low-severity 'weekend' anomaly, neither blocking): Risk
+      Indicators card showed both rows correctly — "MEDIUM Possible
+      Duplicate Invoice / Review Complete" and "LOW Weekend Transaction
+      / Pending Review" — and the Document Workflow Timeline's Anomaly
+      Evaluation step showed the new "Status: Non-blocking anomalies
+      detected" text (confirmed via screenshot).
+    - Blocking case (a pending high-severity 'amount' anomaly): Risk
+      Indicators showed "HIGH Amount Anomaly / Pending Review" in red;
+      timeline correctly still showed "Status: Review Required"
+      (regression check — unchanged from before this phase).
+    - Clean case (zero anomalies): Risk Indicators card was completely
+      absent from the page; timeline correctly showed "Status: No
+      Blocking Issue" (regression check for the genuinely clean case).
+    - Exception Summary card's computed CSS padding confirmed reduced
+      to 13px 18px (from 16px 20px) on all 3 pages.
+    - Zero console errors, zero page errors, zero horizontal overflow
+      on all 3 pages.
+    - All fixture rows (3 documents, 3 extracted_fields, 3 anomalies, 2
+      throwaway users, their audit_logs) deleted afterward and verified
+      gone (0 remaining) from the dev DB.
+    - Dev server processes (Flask debug reloader watcher + child,
+      Angular CLI + its esbuild service child) stopped afterward by
+      exact PID — none left running.
+
+Build result:
+  Backend: full extraction test suite (26/26 suites) green. Frontend:
+  clean production build, exit 0; live browser check clean (0 console/
+  page errors, correct Risk Indicators rendering for both anomaly
+  cases, correct complete-hide for the clean case, correct new timeline
+  wording, 0 horizontal overflow).
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false
+     on either service, so Render should auto-deploy both services from
+     this push with no separate manual trigger needed on my end.
+  2. No database migration needed (no schema changes).
+
+Rollback instructions:
+  Redeploy the previous backend + frontend build - no data or schema
+  changes were made this phase (all fixture rows used for verification
+  were inserted and deleted entirely within this phase's own testing).

@@ -127,23 +127,23 @@
 .exception-summary-card {
   background: var(--bg-card);
   border-radius: 12px;
-  padding: 16px 20px;
+  padding: 13px 18px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   border-left: 3px solid var(--border-hover);
 }
 
 .es-heading {
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 700;
   color: var(--text-primary);
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .es-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 4px 0;
+  padding: 3px 0;
 }
 
 .es-label {
@@ -209,7 +209,8 @@
 
 .exception-summary-card .audit-impact-box,
 .exception-summary-card .suggested-action-box {
-  margin-bottom: 10px;
+  padding: 11px 14px;
+  margin-bottom: 8px;
 }
 
 .exception-summary-card .audit-impact-box:last-child,
@@ -242,6 +243,75 @@
 }
 
 .fi-variance { color: var(--danger); }
+
+/* Risk Indicators — anomaly findings (weekend/amount/duplicate/round),
+   deliberately as compact as Exception Summary above it: a severity
+   pill + type + review status per row, nothing more. Severity colors
+   mirror auditor-anomalies.component.css exactly (high=danger,
+   medium/low=warning) so the same finding reads identically on both
+   pages — that page's own low/medium distinction is by TYPE and
+   evidence detail, not color, so this doesn't invent a 3rd color. */
+.risk-indicators-card {
+  background: var(--bg-card);
+  border-radius: 12px;
+  padding: 13px 18px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  border-left: 3px solid var(--warning);
+}
+
+.ri-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ri-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg-hover);
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.ri-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1 1 auto;
+}
+
+.ri-status {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.ri-status-pending { color: var(--warning); }
+
+.ri-footnote {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 8px;
+}
+
+.severity-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.severity-pill.pill-high   { background: var(--danger-bg);  color: var(--danger); }
+.severity-pill.pill-medium { background: var(--warning-bg); color: var(--warning); }
+.severity-pill.pill-low    { background: var(--warning-bg); color: var(--warning); }
 
 /* Main Content */
 .content-row {

@@ -108,6 +108,14 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   // the page looks and behaves exactly as before Phase 6 for those.
   transactionDetail: any = null;
   authenticity: any = null;
+
+  // Risk Indicators (below Exception Summary) — anomaly findings
+  // (weekend transaction, amount anomaly, duplicate invoice, round
+  // amount, etc.) for THIS document only, from the SAME anomalies data
+  // the Document Workflow Timeline's "Anomaly Evaluation" step already
+  // uses to decide blocking vs non-blocking (see loadRiskIndicators()
+  // below) — no new endpoint, no mock data.
+  riskIndicators: any[] = [];
   isLoading: boolean = false;
   isSubmitting: boolean = false;
   successMessage: string = '';
@@ -185,6 +193,7 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
         this.loadAuthenticity();
         this.loadCycles();
         this.loadReviewHistory();
+        this.loadRiskIndicators();
       }
     });
   }
@@ -294,6 +303,60 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     if (source === 'digital_native') return 'Digital Native';
     if (source === 'webcam') return 'Webcam';
     return 'Unknown';
+  }
+
+  // ── Risk Indicators (below Exception Summary) ───────────
+  // Reuses GET /documents/<id>/timeline — the SAME endpoint the
+  // Document Workflow Timeline component (below on this page) already
+  // calls independently for its own "Anomaly Evaluation" step; this
+  // page-level fetch is a second, separate call to that same lightweight
+  // (no-AI-call) endpoint rather than restructuring the shared
+  // WorkflowTimelineComponent (used by Finance Correction Detail too)
+  // just to pass anomalies down as an @Input. Non-blocking: a failure
+  // here just leaves the section hidden, matching every other advisory
+  // section on this page (authenticity, transaction detail).
+  loadRiskIndicators() {
+    if (!this.documentId) return;
+    this.http.get<any>(`${this.apiUrl}/documents/${this.documentId}/timeline`, {
+      headers: this.getHeaders()
+    }).subscribe({
+      next: (res) => { this.riskIndicators = res.anomalies || []; this.cdr.detectChanges(); },
+      error: () => { this.riskIndicators = []; }
+    });
+  }
+
+  // Icon/label/severity mapping deliberately mirrors auditor-anomalies.
+  // component.ts (the full Anomaly Detection page) exactly, so the same
+  // finding reads identically in both places — but this section only
+  // ever shows type + severity + review status, never the Evidence
+  // Found / AI Assessment / Suggested Checks detail or the Investigate/
+  // Review/Dismiss actions that make that page the "full" one.
+  riskTypeIcon(type: string): string {
+    if (type === 'amount') return 'ph-currency-circle-dollar';
+    if (type === 'round') return 'ph-target';
+    if (type === 'weekend') return 'ph-calendar-blank';
+    if (type === 'duplicate') return 'ph-repeat';
+    return 'ph-question';
+  }
+
+  riskTypeLabel(type: string): string {
+    if (type === 'amount') return 'Amount Anomaly';
+    if (type === 'round') return 'Round Amount';
+    if (type === 'weekend') return 'Weekend Transaction';
+    if (type === 'duplicate') return 'Possible Duplicate Invoice';
+    return 'Anomaly';
+  }
+
+  riskSeverityClass(severity: string): string {
+    if (severity === 'high') return 'pill-high';
+    if (severity === 'medium') return 'pill-medium';
+    return 'pill-low';
+  }
+
+  riskStatusLabel(status: string): string {
+    if (status === 'reviewed') return 'Review Complete';
+    if (status === 'dismissed') return 'False Positive';
+    return 'Pending Review';
   }
 
   // ── Send-Back cycles + review history (Features 4, 5) ───
