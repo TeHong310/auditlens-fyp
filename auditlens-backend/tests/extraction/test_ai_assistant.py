@@ -798,26 +798,26 @@ def run_case_clamp_approval_assessment_overrides_wrong_ai_verdict():
     print("Case: the AI's own approval_readiness guess is IGNORED — the deterministic verdict always wins")
     context = {'audit_status': 'PASS', 'audit_status_reasons': [], 'missing_documents': [],
                'authenticity': {}, 'anomalies': [], 'matching_status': 'PASS'}
-    ai_result = {'approval_readiness': 'Not Ready', 'blocking_factors': ['The AI made this up'],
-                 'evidence': ['x'], 'recommended_actions': ['y']}
+    ai_result = {'approval_readiness': 'Not Ready', 'blocking_issues': ['The AI made this up'],
+                 'passed_checks': ['x'], 'recommended_next_steps': ['y']}
     clamped = ra._clamp_approval_assessment_result(ai_result, context)
     check('approval_readiness is forced to the deterministic Ready, not the AI\'s guess',
           clamped['approval_readiness'] == 'Ready', clamped)
-    check('blocking_factors is forced empty for a Ready verdict, regardless of what the AI said',
-          clamped['blocking_factors'] == [], clamped)
+    check('blocking_issues is forced empty for a Ready verdict, regardless of what the AI said',
+          clamped['blocking_issues'] == [], clamped)
 
 
 def run_case_clamp_approval_assessment_fills_blank_fields():
-    print('Case: blank blocking_factors/evidence/recommended_actions from the AI get sensible defaults')
+    print('Case: blank blocking_issues/passed_checks/recommended_next_steps from the AI get sensible defaults')
     context = {'audit_status': 'REVIEW REQUIRED', 'audit_status_reasons': ['Missing: Purchase Order'],
                'missing_documents': ['Purchase Order'], 'authenticity': {}, 'anomalies': [], 'matching_status': 'PARTIAL'}
     clamped = ra._clamp_approval_assessment_result(
-        {'approval_readiness': 'Ready', 'blocking_factors': [], 'evidence': [], 'recommended_actions': []}, context)
-    check('blocking_factors falls back to audit_status_reasons', clamped['blocking_factors'] == ['Missing: Purchase Order'], clamped)
-    check('evidence is non-empty', bool(clamped['evidence']), clamped)
-    check('recommended_actions is non-empty', bool(clamped['recommended_actions']), clamped)
-    check('recommended_actions is not the PASS message for a Not Ready case',
-          'ready for approval' not in clamped['recommended_actions'][0].lower(), clamped)
+        {'approval_readiness': 'Ready', 'blocking_issues': [], 'passed_checks': [], 'recommended_next_steps': []}, context)
+    check('blocking_issues falls back to audit_status_reasons', clamped['blocking_issues'] == ['Missing: Purchase Order'], clamped)
+    check('passed_checks is non-empty', bool(clamped['passed_checks']), clamped)
+    check('recommended_next_steps is non-empty', bool(clamped['recommended_next_steps']), clamped)
+    check('recommended_next_steps is not the PASS message for a Not Ready case',
+          'ready for approval' not in clamped['recommended_next_steps'][0].lower(), clamped)
 
 
 def run_case_clamp_approval_assessment_handles_none_result():
@@ -826,21 +826,46 @@ def run_case_clamp_approval_assessment_handles_none_result():
                'missing_documents': ['Purchase Order'], 'authenticity': {}, 'anomalies': [], 'matching_status': 'PARTIAL'}
     clamped = ra._clamp_approval_assessment_result(None, context)
     check('approval_readiness still comes from context', clamped['approval_readiness'] == 'Not Ready', clamped)
-    check('blocking_factors is non-empty', bool(clamped['blocking_factors']), clamped)
-    check('evidence is non-empty', bool(clamped['evidence']), clamped)
-    check('recommended_actions is non-empty', bool(clamped['recommended_actions']), clamped)
+    check('blocking_issues is non-empty', bool(clamped['blocking_issues']), clamped)
+    check('passed_checks is non-empty', bool(clamped['passed_checks']), clamped)
+    check('recommended_next_steps is non-empty', bool(clamped['recommended_next_steps']), clamped)
 
 
 def run_case_clamp_approval_assessment_ignores_non_string_junk():
-    print('Case: non-string entries in blocking_factors/evidence/recommended_actions are filtered out, not crashed on')
+    print('Case: non-string entries in blocking_issues/passed_checks/recommended_next_steps are filtered out, not crashed on')
     context = {'audit_status': 'REVIEW REQUIRED', 'audit_status_reasons': ['Missing: Purchase Order'],
                'missing_documents': ['Purchase Order'], 'authenticity': {}, 'anomalies': [], 'matching_status': 'PARTIAL'}
-    ai_result = {'approval_readiness': 'Not Ready', 'blocking_factors': [123, None, 'A real blocking factor'],
-                 'evidence': [{}, 'Real evidence'], 'recommended_actions': [None, 'Do this']}
+    ai_result = {'approval_readiness': 'Not Ready', 'blocking_issues': [123, None, 'A real blocking issue'],
+                 'passed_checks': [{}, 'A real passed check'], 'recommended_next_steps': [None, 'Do this']}
     clamped = ra._clamp_approval_assessment_result(ai_result, context)
-    check('non-string blocking_factors entries filtered', clamped['blocking_factors'] == ['A real blocking factor'], clamped)
-    check('non-string evidence entries filtered', clamped['evidence'] == ['Real evidence'], clamped)
-    check('non-string recommended_actions entries filtered', clamped['recommended_actions'] == ['Do this'], clamped)
+    check('non-string blocking_issues entries filtered', clamped['blocking_issues'] == ['A real blocking issue'], clamped)
+    check('non-string passed_checks entries filtered', clamped['passed_checks'] == ['A real passed check'], clamped)
+    check('non-string recommended_next_steps entries filtered', clamped['recommended_next_steps'] == ['Do this'], clamped)
+
+
+def run_case_clamp_approval_assessment_caps_at_4_points_per_section():
+    print('Case: each section is capped at 4 points even if the AI returns more (defense in depth for the "3-4 key points" requirement)')
+    context = {'audit_status': 'REVIEW REQUIRED',
+               'audit_status_reasons': ['reason 1', 'reason 2', 'reason 3', 'reason 4', 'reason 5', 'reason 6'],
+               'missing_documents': ['Purchase Order'], 'authenticity': {}, 'anomalies': [], 'matching_status': 'PARTIAL'}
+    ai_result = {
+        'approval_readiness': 'Not Ready',
+        'blocking_issues': [f'issue {i}' for i in range(7)],
+        'passed_checks': [f'check {i}' for i in range(7)],
+        'recommended_next_steps': [f'step {i}' for i in range(7)],
+    }
+    clamped = ra._clamp_approval_assessment_result(ai_result, context)
+    check('blocking_issues capped at 4', len(clamped['blocking_issues']) == 4, clamped['blocking_issues'])
+    check('passed_checks capped at 4', len(clamped['passed_checks']) == 4, clamped['passed_checks'])
+    check('recommended_next_steps capped at 4', len(clamped['recommended_next_steps']) == 4, clamped['recommended_next_steps'])
+
+    # The audit_status_reasons FALLBACK path (AI returned nothing usable)
+    # must also be capped, not just the AI's own overlong list.
+    clamped_fallback = ra._clamp_approval_assessment_result(
+        {'approval_readiness': 'Not Ready', 'blocking_issues': [], 'passed_checks': [], 'recommended_next_steps': []},
+        context)
+    check('blocking_issues fallback (audit_status_reasons) is also capped at 4',
+          len(clamped_fallback['blocking_issues']) == 4, clamped_fallback['blocking_issues'])
 
 
 # ============================================================
@@ -848,24 +873,46 @@ def run_case_clamp_approval_assessment_ignores_non_string_junk():
 # ============================================================
 
 def run_case_approval_assessment_prompt_covers_full_context():
-    print('Case: approval_assessment instruction explicitly covers matching/missing-docs/authenticity/anomaly/financial context')
+    print('Case: approval_assessment instruction covers matching/missing-docs/authenticity/anomaly/financial context in plain language')
     captured = {}
 
     def fake_ask_claude_text(system_prompt, user_prompt, **k):
         captured['user_prompt'] = user_prompt
-        return ('{"approval_readiness": "Ready", "blocking_factors": [], '
-                 '"evidence": ["ok"], "recommended_actions": ["none"]}')
+        return ('{"approval_readiness": "Ready", "blocking_issues": [], '
+                 '"passed_checks": ["ok"], "recommended_next_steps": ["none"]}')
     with _Patched(haa, ask_claude_text=fake_ask_claude_text, call_gemini_sdk=lambda *a, **k: None):
         haa.ask_ai_assistant('approval_assessment', {'invoice_number': 'INV-1'})
     up = captured.get('user_prompt', '')
-    check('prompt references matching_details', 'matching_details' in up, up)
-    check('prompt references missing_documents', 'missing_documents' in up, up)
-    check('prompt references authenticity', 'authenticity' in up, up)
-    check('prompt tells the AI to name anomaly_type and severity', 'anomaly_type' in up and 'severity' in up, up)
-    check('prompt references financial figures (po_amount)', 'po_amount' in up, up)
-    check('prompt asks the 4 required questions', 'ready for approval' in up.lower(), up)
+    check('prompt covers the matching result', 'matching result' in up.lower(), up)
+    check('prompt covers missing documents', 'missing documents' in up.lower(), up)
+    check('prompt covers the authenticity result', 'authenticity' in up.lower(), up)
+    check('prompt covers anomaly/risk findings', 'anomaly' in up.lower() or 'risk finding' in up.lower(), up)
+    check('prompt asks about approval readiness', 'ready' in up.lower() or 'readiness' in up.lower(), up)
     check('prompt tells the AI it is not the final decision-maker',
           'not deciding' in up.lower() or 'informational only' in up.lower(), up)
+    check('prompt names all 4 required output sections',
+          all(k in up for k in ('blocking_issues', 'passed_checks', 'recommended_next_steps', 'approval_readiness')), up)
+
+
+def run_case_approval_assessment_prompt_bans_technical_field_names_and_caps_points():
+    print('Case: approval_assessment instruction explicitly bans raw field names in the output and caps each section at 4 points')
+    captured = {}
+
+    def fake_ask_claude_text(system_prompt, user_prompt, **k):
+        captured['user_prompt'] = user_prompt
+        return ('{"approval_readiness": "Ready", "blocking_issues": [], '
+                 '"passed_checks": ["ok"], "recommended_next_steps": ["none"]}')
+    with _Patched(haa, ask_claude_text=fake_ask_claude_text, call_gemini_sdk=lambda *a, **k: None):
+        haa.ask_ai_assistant('approval_assessment', {'invoice_number': 'INV-1'})
+    up = captured.get('user_prompt', '')
+    check('prompt explicitly forbids raw field/technical names in the output',
+          'never write raw field' in up.lower() or 'technical' in up.lower(), up)
+    check('prompt gives a plain-language translation for a duplicate anomaly',
+          'possible duplicate invoice' in up.lower(), up)
+    check('prompt tells the AI to state severity as risk level, not the word "severity"',
+          'risk' in up.lower() and 'never the word' in up.lower(), up)
+    check('prompt caps each section at 4 items', 'at most 4' in up.lower(), up)
+    check('prompt asks for short phrases, not paragraphs', 'not a paragraph' in up.lower() or 'never a paragraph' in up.lower(), up)
 
 
 def run_case_approval_assessment_round_trips_through_run_action():
@@ -877,8 +924,8 @@ def run_case_approval_assessment_round_trips_through_run_action():
 
     context = {'audit_status': 'PASS', 'audit_status_reasons': [], 'missing_documents': [],
                'authenticity': {}, 'anomalies': [], 'matching_status': 'PASS'}
-    ai_result = {'approval_readiness': 'Not Ready', 'blocking_factors': ['hallucinated'],
-                 'evidence': ['Vendor matches'], 'recommended_actions': ['none needed']}
+    ai_result = {'approval_readiness': 'Not Ready', 'blocking_issues': ['hallucinated'],
+                 'passed_checks': ['Vendor matches'], 'recommended_next_steps': ['none needed']}
 
     with _Patched(ra,
                   get_db_connection=lambda: _Conn(),
@@ -892,9 +939,9 @@ def run_case_approval_assessment_round_trips_through_run_action():
     check('status is 200', status == 200, status)
     check('approval_readiness is forced to the deterministic Ready despite the AI result',
           response['approval_readiness'] == 'Ready', response)
-    check('blocking_factors is forced empty for the deterministic Ready verdict',
-          response['blocking_factors'] == [], response)
-    check('evidence passed through from the AI result', response['evidence'] == ['Vendor matches'], response)
+    check('blocking_issues is forced empty for the deterministic Ready verdict',
+          response['blocking_issues'] == [], response)
+    check('passed_checks passed through from the AI result', response['passed_checks'] == ['Vendor matches'], response)
 
 
 # ============================================================
@@ -1044,8 +1091,10 @@ if __name__ == '__main__':
     run_case_clamp_approval_assessment_fills_blank_fields()
     run_case_clamp_approval_assessment_handles_none_result()
     run_case_clamp_approval_assessment_ignores_non_string_junk()
+    run_case_clamp_approval_assessment_caps_at_4_points_per_section()
 
     run_case_approval_assessment_prompt_covers_full_context()
+    run_case_approval_assessment_prompt_bans_technical_field_names_and_caps_points()
     run_case_approval_assessment_round_trips_through_run_action()
 
     run_case_run_action_cache_hit_never_calls_ai()

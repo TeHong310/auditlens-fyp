@@ -167,8 +167,8 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   // decision (the auditor still does that via the Approve/Send Back/
   // Need Review buttons below, unchanged).
   aiApprovalAssessment: {
-    approval_readiness: string; blocking_factors: string[];
-    evidence: string[]; recommended_actions: string[];
+    approval_readiness: string; blocking_issues: string[];
+    passed_checks: string[]; recommended_next_steps: string[];
   } | null = null;
   aiQuestion: string = '';
   aiConversation: { question: string; answer: string }[] = [];
@@ -711,9 +711,9 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
         this.aiActionLoading['approval_assessment'] = false;
         this.aiApprovalAssessment = {
           approval_readiness: res.approval_readiness || 'Requires Review',
-          blocking_factors: res.blocking_factors || [],
-          evidence: res.evidence || [],
-          recommended_actions: res.recommended_actions || []
+          blocking_issues: res.blocking_issues || [],
+          passed_checks: res.passed_checks || [],
+          recommended_next_steps: res.recommended_next_steps || []
         };
         this.cdr.detectChanges();
       },
@@ -733,6 +733,15 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     if (readiness === 'Ready') return 'risk-low';
     if (readiness === 'Not Ready') return 'risk-high';
     return 'risk-medium';
+  }
+
+  // Same icon set as getBannerIcon() above (PASS/FAIL/else -> check/x/
+  // warning) so Approval Readiness reads with the same at-a-glance
+  // visual language already established for the overall status banner.
+  approvalReadinessIcon(readiness: string): string {
+    if (readiness === 'Ready') return 'ph-check-circle';
+    if (readiness === 'Not Ready') return 'ph-x-circle';
+    return 'ph-warning';
   }
 
   generateAuditRemark() {

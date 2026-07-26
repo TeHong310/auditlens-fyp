@@ -808,6 +808,29 @@
 
 .ai-risk-reasons li { margin-top: 3px; }
 
+/* Approval Assessment — readiness icon+chip row, plus the 3 mini-cards
+   (Blocking Issues / Passed Checks / Recommended Next Steps) reusing
+   .audit-impact-box/.subsection-title verbatim (same classes Exception
+   Summary's Control Impact/Financial Impact boxes already use) so this
+   fits the existing dark theme with no new box styling — only sizing
+   here is scoped to fit inside the more compact .ai-answer-box. */
+.approval-readiness-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.approval-readiness-row i { font-size: 18px; }
+.approval-readiness-row i.risk-high   { color: var(--danger); }
+.approval-readiness-row i.risk-medium { color: var(--warning); }
+.approval-readiness-row i.risk-low    { color: var(--success); }
+
+.ai-answer-box .approval-mini-card {
+  padding: 10px 12px;
+  margin: 8px 0 0;
+}
+
 .ai-conversation { margin-top: 8px; }
 
 .ai-qa-pair {

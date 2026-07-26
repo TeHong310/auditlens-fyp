@@ -14265,3 +14265,189 @@ Rollback instructions:
   Redeploy the previous backend + frontend build - no data or schema
   changes were made this phase (all fixture rows used for verification
   were inserted and deleted entirely within this phase's own testing).
+
+
+----------------------------------------------------------------------
+
+Date: 2026-07-26
+What was changed:
+  Phase 44: reworked the Approval Assessment UI into scannable icon-led
+  mini-cards, and rewrote its AI prompt/response format for shorter,
+  auditor-friendly wording with no raw field names — WITHOUT touching
+  the deterministic readiness logic (_compute_approval_readiness is
+  byte-for-byte unchanged) or the underlying audit case data it reads.
+
+  auditlens-backend/routes/ai_assistant.py:
+    - _clamp_approval_assessment_result(): renamed the 3 list fields to
+      match the task's required section names — blocking_factors ->
+      blocking_issues, evidence -> passed_checks (now specifically the
+      POSITIVE facts, not a mixed pass/fail list), recommended_actions
+      -> recommended_next_steps. Every list is now capped at a new
+      _APPROVAL_ASSESSMENT_MAX_POINTS = 4 constant (defense in depth —
+      the prompt already asks for at most 4, this guarantees it even if
+      the AI ignores that), INCLUDING the audit_status_reasons fallback
+      path used when the AI returns nothing usable for blocking_issues.
+      _compute_approval_readiness() itself — the deterministic Ready/
+      Not Ready/Requires Review verdict and its "never let the AI
+      decide" guarantee — is completely untouched; only the labels/
+      shape/cap of the surrounding fields changed.
+
+  auditlens-backend/helpers/ai_assistant.py:
+    - Rewrote _ACTION_INSTRUCTIONS['approval_assessment'] top to
+      bottom: explicitly instructs the AI to NEVER write raw field/
+      technical names (matching_details, anomaly_type, severity,
+      audit_status_reasons, po_amount, amount_match) anywhere in its
+      output, with a concrete plain-language translation table (a
+      "duplicate" anomaly -> "possible duplicate invoice", "amount"/
+      "round" -> "unusual invoice amount", "weekend" -> "invoice dated
+      on a weekend", "severity" -> "high/medium/low risk"); caps each
+      of blocking_issues/passed_checks/recommended_next_steps at AT
+      MOST 4 short items (a phrase or one short sentence, never a
+      paragraph); and defines passed_checks as ONLY the checks that
+      genuinely passed (no longer a mixed pass/fail "evidence" list).
+      The "AI is not the final decision-maker, informational only"
+      instruction is preserved verbatim in intent.
+
+  auditlens-frontend/src/app/auditor/record-detail/
+  auditor-record-detail.component.ts:
+    - aiApprovalAssessment property and approvalAssessment()'s response
+      mapping updated to the new field names (blocking_issues/passed_
+      checks/recommended_next_steps).
+    - New approvalReadinessIcon(readiness) helper — reuses the EXACT
+      same check-circle/x-circle/warning icon set getBannerIcon() above
+      already uses for the page's overall status banner (PASS/FAIL/
+      else), so Approval Readiness reads with the same established
+      visual language rather than a new one-off icon choice.
+
+  auditlens-frontend/src/app/auditor/record-detail/
+  auditor-record-detail.component.html:
+    - Approval Assessment response redesigned from one long box with
+      stacked label+list pairs into: an icon+chip "Approval Readiness"
+      row at the top, then 3 independently-collapsing mini-cards —
+      Blocking Issues (ph-x-circle), Passed Checks (ph-check-circle),
+      Recommended Next Steps (ph-lightbulb, matching the icon this
+      page's own pre-existing "Suggested Action"/"Recommended Action"
+      boxes already use for the same concept) — each reusing the
+      EXISTING .audit-impact-box/.subsection-title classes verbatim
+      (same classes Exception Summary's Control Impact/Financial
+      Impact mini-cards already use), so the "short cards" look is
+      achieved with zero new box styling, just a different composition
+      of existing pieces. An empty section (e.g. no Blocking Issues for
+      a Ready record) simply doesn't render its card, keeping a clean
+      case from showing a clutter of empty headings.
+
+  auditlens-frontend/src/app/auditor/record-detail/
+  auditor-record-detail.component.css:
+    - New .approval-readiness-row (icon+label+chip flex row) and 3
+      color rules (.risk-high/.risk-medium/.risk-low scoped to that
+      row) reusing the SAME risk-high/medium/low class NAMES
+      approvalReadinessClass() already returns for the chip, so the
+      readiness icon and chip are always colored in lockstep from one
+      method — no risk of the two drifting out of sync.
+    - .ai-answer-box .approval-mini-card: scopes a smaller padding/
+      margin to .audit-impact-box specifically when reused inside the
+      AI Assistant's response box, so the 3 stacked mini-cards fit
+      compactly there without changing that class's appearance
+      anywhere else it's already used (Exception Summary, the Audit
+      Decision panel's Control Impact/Financial Impact boxes).
+
+Why:
+  Requested improvement: the previous single-paragraph-per-section
+  layout (Blocking Factors / Evidence Supporting the Assessment /
+  Recommended Actions Before Approval, each just a label + bullet list
+  inside one plain box) wasn't scannable enough, and the AI's own
+  output leaned on raw signal names ("anomaly_type", "severity") an
+  auditor shouldn't have to translate themselves, with no cap on how
+  many points a section might list.
+
+Confirmed unchanged (AI decision authority / underlying logic and
+data):
+  - _compute_approval_readiness(context) — the ONLY thing that decides
+    Ready/Not Ready/Requires Review — is byte-for-byte unchanged from
+    the previous phase: same missing-document/blocking-anomaly/
+    authenticity-warning/hard-matching-FAIL rules, same audit_status
+    source of truth.
+  - _clamp_approval_assessment_result() still ALWAYS substitutes that
+    deterministic verdict for whatever the AI returned, and still
+    forces blocking_issues empty for a 'Ready' verdict regardless of
+    what the AI said — the exact same "AI can inform, never decide"
+    guarantee, just applied to renamed/capped fields.
+  - approveDocument()/submitSendBack() and the Need Review/Send Back to
+    Finance/Approve buttons: completely untouched. Auditor remains the
+    only path to an actual decision.
+  - _build_case_context(), the shared _SYSTEM_PREAMBLE, and every other
+    AI action's own instruction (explain_exception/explain_risk/
+    generate_remark/prepare_send_back/ask/generate_finance_response/
+    recommended_steps): byte-for-byte unchanged. This phase only
+    touched approval_assessment's own instruction text and its clamp
+    function's field names/caps.
+
+Test results:
+  - tests/extraction/test_ai_assistant.py: updated every existing
+    Approval Assessment test (clamp override/blank-field/None-result/
+    non-string-junk cases) to the new field names, and added 3 new
+    cases: caps-at-4-points-per-section (both the AI's own overlong
+    list AND the audit_status_reasons fallback path are capped),
+    prompt-covers-full-context (now checks plain-language phrasing —
+    "matching result", "missing documents", "authenticity" — instead
+    of raw field-name substrings, since the prompt deliberately no
+    longer uses those in the "what to consider" framing), and prompt-
+    bans-technical-field-names-and-caps-points (confirms the explicit
+    ban instruction, the plain-language translation example, and the
+    "at most 4"/"never a paragraph" caps are actually present in the
+    prompt sent to the AI). All pass.
+  - Full backend regression suite (python tests/extraction/run_all.py,
+    all 26 suites) — all PASS.
+  - npx ng build --configuration production — succeeded (exit 0; same
+    category of pre-existing bundle-size warnings, marginally larger
+    only by the small amount of genuinely new CSS added).
+  - Live-verified in a real browser (Playwright, throwaway auditor +
+    finance_executive accounts, cleaned up afterward): logged in,
+    opened a fixture Record Detail page, and intercepted the approval-
+    assessment network call with a response shaped exactly like the
+    new (renamed, plain-language, capped) backend output — confirmed:
+    - The readiness row renders the correct icon+color pair (ph-x-
+      circle + risk-high red for "Not Ready") in lockstep with the chip.
+    - All 3 mini-cards render with the correct icon (ph-x-circle for
+      Blocking Issues, ph-check-circle for Passed Checks, ph-lightbulb
+      for Recommended Next Steps), correct heading text, and their
+      exact bullet content, with no technical field names visible
+      anywhere in the rendered text.
+    - Zero horizontal overflow; the only console message was the
+      already-known, unrelated 404 from GET /authenticity/<id> on a
+      fixture record with no real file bytes.
+    - Visually confirmed (screenshot) the mini-cards match the dark
+      theme and existing Exception Summary box styling exactly, with
+      no design inconsistency.
+    - All fixture rows (1 document, 1 extracted_fields, 2 throwaway
+      users, their audit_logs) deleted afterward and verified gone (0
+      remaining) from the dev DB. Dev server processes (Flask debug
+      reloader watcher + child, Angular CLI + its esbuild service
+      child) stopped afterward by exact PID — none left running.
+
+Build result:
+  Backend: full extraction test suite (26/26 suites) green, including
+  updated + 3 new Approval Assessment tests. Frontend: clean production
+  build, exit 0; live browser check clean (0 unrelated console errors,
+  correct icon/card rendering verified via a realistic intercepted
+  response, 0 horizontal overflow).
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false
+     on either service, so Render should auto-deploy both services from
+     this push with no separate manual trigger needed on my end.
+  2. No database migration needed (no schema changes).
+  3. As with prior AI Assistant phases, a working ANTHROPIC_API_KEY or
+     GEMINI_API_KEY is needed in Render's environment to see the new
+     wording in a real AI response (this dev environment has neither,
+     so only the intercepted-response UI rendering could be verified
+     live here — the prompt/clamp logic itself is covered by the
+     backend unit tests above).
+
+Rollback instructions:
+  Redeploy the previous backend + frontend build - no data or schema
+  changes were made this phase (all fixture rows used for verification
+  were inserted and deleted entirely within this phase's own testing).

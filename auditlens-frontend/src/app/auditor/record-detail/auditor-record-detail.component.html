@@ -713,31 +713,41 @@
                approval_assessment_result), never the AI's own guess, and
                is purely informational: the auditor's own Approve/Send
                Back/Need Review buttons below (unchanged) are still the
-               only way this record is actually decided. -->
-          <div class="ai-answer-box" *ngIf="aiApprovalAssessment">
+               only way this record is actually decided. Laid out as 3
+               short, independently-collapsing mini-cards (reusing the
+               EXISTING .audit-impact-box styling from Exception Summary)
+               instead of one long block, each capped server-side at 4
+               short points, so the whole assessment stays scannable at a
+               glance. -->
+          <div class="ai-answer-box approval-assessment-box" *ngIf="aiApprovalAssessment">
             <p class="ai-answer-label"><i class="ph-duotone ph-clipboard-text"></i> Approval Assessment</p>
-            <p class="ai-audit-status-row">
+
+            <div class="approval-readiness-row">
+              <i class="ph-duotone" [ngClass]="[approvalReadinessIcon(aiApprovalAssessment.approval_readiness), approvalReadinessClass(aiApprovalAssessment.approval_readiness)]"></i>
               <span class="es-label">Approval Readiness</span>
               <span class="risk-chip" [ngClass]="approvalReadinessClass(aiApprovalAssessment.approval_readiness)">{{ aiApprovalAssessment.approval_readiness }}</span>
-            </p>
-            <ng-container *ngIf="aiApprovalAssessment.blocking_factors.length">
-              <p class="frb-label">Blocking Factors</p>
+            </div>
+
+            <div class="audit-impact-box approval-mini-card" *ngIf="aiApprovalAssessment.blocking_issues.length">
+              <p class="subsection-title"><i class="ph-duotone ph-x-circle"></i> Blocking Issues</p>
               <ul class="ai-risk-reasons">
-                <li *ngFor="let b of aiApprovalAssessment.blocking_factors">{{ b }}</li>
+                <li *ngFor="let b of aiApprovalAssessment.blocking_issues">{{ b }}</li>
               </ul>
-            </ng-container>
-            <ng-container *ngIf="aiApprovalAssessment.evidence.length">
-              <p class="frb-label">Evidence Supporting the Assessment</p>
+            </div>
+
+            <div class="audit-impact-box approval-mini-card" *ngIf="aiApprovalAssessment.passed_checks.length">
+              <p class="subsection-title"><i class="ph-duotone ph-check-circle"></i> Passed Checks</p>
               <ul class="ai-risk-reasons">
-                <li *ngFor="let e of aiApprovalAssessment.evidence">{{ e }}</li>
+                <li *ngFor="let p of aiApprovalAssessment.passed_checks">{{ p }}</li>
               </ul>
-            </ng-container>
-            <ng-container *ngIf="aiApprovalAssessment.recommended_actions.length">
-              <p class="frb-label">Recommended Actions Before Approval</p>
+            </div>
+
+            <div class="audit-impact-box approval-mini-card" *ngIf="aiApprovalAssessment.recommended_next_steps.length">
+              <p class="subsection-title"><i class="ph-duotone ph-lightbulb"></i> Recommended Next Steps</p>
               <ul class="ai-risk-reasons">
-                <li *ngFor="let a of aiApprovalAssessment.recommended_actions">{{ a }}</li>
+                <li *ngFor="let s of aiApprovalAssessment.recommended_next_steps">{{ s }}</li>
               </ul>
-            </ng-container>
+            </div>
           </div>
 
           <div class="ai-conversation" *ngIf="aiConversation.length">

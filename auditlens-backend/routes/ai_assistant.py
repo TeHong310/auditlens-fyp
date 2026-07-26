@@ -419,41 +419,55 @@ def _compute_approval_readiness(context):
     return 'Requires Review', reasons
 
 
+_APPROVAL_ASSESSMENT_MAX_POINTS = 4
+
+
 def _clamp_approval_assessment_result(result, context):
     """Never trust the AI's own approval_readiness verdict — always use
     _compute_approval_readiness()'s deterministic value instead,
     regardless of what the AI narrated (same 'never let the AI make the
     actual call' guarantee _clamp_explain_exception_result gives
-    audit_status). blocking_factors falls back to audit_status_reasons
-    (the same authoritative list used everywhere else) when the AI
-    returns nothing usable, and is forced empty for a 'Ready' verdict no
-    matter what the AI said. evidence/recommended_actions fall back to a
-    minimal safe default rather than an empty list, so the response is
-    never blank."""
+    audit_status). The underlying readiness LOGIC is unchanged from the
+    previous phase — only the response shape/wording around it changed
+    (blocking_factors/evidence/recommended_actions renamed to blocking_
+    issues/passed_checks/recommended_next_steps, each capped at 4 short
+    points, to match the auditor-facing format this phase asks for).
+
+    blocking_issues falls back to audit_status_reasons (the same
+    authoritative list used everywhere else) when the AI returns
+    nothing usable, and is forced empty for a 'Ready' verdict no matter
+    what the AI said. passed_checks/recommended_next_steps fall back to
+    a minimal safe default rather than an empty list, so the response
+    is never blank. Every list is capped at _APPROVAL_ASSESSMENT_MAX_
+    POINTS items even if the AI ignores the prompt's own "at most 4"
+    instruction — defense in depth, not a substitute for it."""
     result = result or {}
     readiness, blocking_default = _compute_approval_readiness(context)
 
     if readiness == 'Ready':
-        blocking_factors = []
+        blocking_issues = []
     else:
-        blocking_factors = [b for b in (result.get('blocking_factors') or []) if isinstance(b, str) and b.strip()]
-        if not blocking_factors:
-            blocking_factors = blocking_default or ['See case details.']
+        blocking_issues = [b for b in (result.get('blocking_issues') or []) if isinstance(b, str) and b.strip()]
+        if not blocking_issues:
+            blocking_issues = blocking_default or ['See case details.']
+        blocking_issues = blocking_issues[:_APPROVAL_ASSESSMENT_MAX_POINTS]
 
-    evidence = [e for e in (result.get('evidence') or []) if isinstance(e, str) and e.strip()]
-    if not evidence:
-        evidence = ['No supporting evidence details were provided.']
+    passed_checks = [p for p in (result.get('passed_checks') or []) if isinstance(p, str) and p.strip()]
+    if not passed_checks:
+        passed_checks = ['No passed checks were identified for this case.']
+    passed_checks = passed_checks[:_APPROVAL_ASSESSMENT_MAX_POINTS]
 
-    recommended_actions = [a for a in (result.get('recommended_actions') or []) if isinstance(a, str) and a.strip()]
-    if not recommended_actions:
-        recommended_actions = (['No action required — ready for approval.'] if readiness == 'Ready'
-                                else ['Review the flagged items before approving.'])
+    recommended_next_steps = [s for s in (result.get('recommended_next_steps') or []) if isinstance(s, str) and s.strip()]
+    if not recommended_next_steps:
+        recommended_next_steps = (['No further action needed — ready for approval.'] if readiness == 'Ready'
+                                   else ['Review the flagged items before approving.'])
+    recommended_next_steps = recommended_next_steps[:_APPROVAL_ASSESSMENT_MAX_POINTS]
 
     return {
-        'approval_readiness':   readiness,
-        'blocking_factors':     blocking_factors,
-        'evidence':             evidence,
-        'recommended_actions':  recommended_actions,
+        'approval_readiness':      readiness,
+        'blocking_issues':         blocking_issues,
+        'passed_checks':           passed_checks,
+        'recommended_next_steps':  recommended_next_steps,
     }
 
 
