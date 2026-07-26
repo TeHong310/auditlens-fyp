@@ -731,6 +731,173 @@ def run_case_clamp_explain_exception_handles_none_result():
 
 
 # ============================================================
+# routes/ai_assistant.py — _compute_approval_readiness() (Approval
+# Assessment) — the deterministic Ready/Not Ready/Requires Review
+# verdict, never left for the AI to decide.
+# ============================================================
+
+def run_case_approval_readiness_pass_is_ready():
+    print('Case: audit_status PASS -> Ready, no blocking factors')
+    context = {'audit_status': 'PASS', 'audit_status_reasons': ['All core checks passed and no blocking findings']}
+    readiness, blocking = ra._compute_approval_readiness(context)
+    check('readiness is Ready', readiness == 'Ready', readiness)
+    check('no blocking factors for Ready', blocking == [], blocking)
+
+
+def run_case_approval_readiness_missing_document_is_not_ready():
+    print('Case: REVIEW REQUIRED with a missing document -> Not Ready (hard blocker)')
+    context = {'audit_status': 'REVIEW REQUIRED', 'audit_status_reasons': ['Missing: Purchase Order'],
+               'missing_documents': ['Purchase Order'], 'authenticity': {}, 'anomalies': [], 'matching_status': 'PARTIAL'}
+    readiness, blocking = ra._compute_approval_readiness(context)
+    check('readiness is Not Ready', readiness == 'Not Ready', readiness)
+    check('blocking factors mirror audit_status_reasons', blocking == ['Missing: Purchase Order'], blocking)
+
+
+def run_case_approval_readiness_blocking_anomaly_is_not_ready():
+    print('Case: REVIEW REQUIRED with a blocking anomaly (no missing docs) -> Not Ready')
+    context = {'audit_status': 'REVIEW REQUIRED', 'audit_status_reasons': ['Unresolved duplicate anomaly (high severity)'],
+               'missing_documents': [], 'authenticity': {'invoice': {'status': 'passed'}},
+               'anomalies': [{'anomaly_type': 'duplicate', 'severity': 'high', 'classification': 'blocking'}],
+               'matching_status': 'PASS'}
+    readiness, blocking = ra._compute_approval_readiness(context)
+    check('readiness is Not Ready', readiness == 'Not Ready', readiness)
+
+
+def run_case_approval_readiness_authenticity_warning_is_not_ready():
+    print('Case: REVIEW REQUIRED with an authenticity warning (no missing docs/anomalies) -> Not Ready')
+    context = {'audit_status': 'REVIEW REQUIRED', 'audit_status_reasons': ['Authenticity check flagged a warning'],
+               'missing_documents': [], 'authenticity': {'invoice': {'status': 'warning'}}, 'anomalies': [],
+               'matching_status': 'PASS'}
+    readiness, blocking = ra._compute_approval_readiness(context)
+    check('readiness is Not Ready', readiness == 'Not Ready', readiness)
+
+
+def run_case_approval_readiness_hard_matching_fail_is_not_ready():
+    print('Case: REVIEW REQUIRED with a hard (FAIL-level) matching mismatch -> Not Ready')
+    context = {'audit_status': 'REVIEW REQUIRED', 'audit_status_reasons': ['Three-way matching status is FAIL'],
+               'missing_documents': [], 'authenticity': {'invoice': {'status': 'passed'}}, 'anomalies': [],
+               'matching_status': 'FAIL'}
+    readiness, blocking = ra._compute_approval_readiness(context)
+    check('readiness is Not Ready', readiness == 'Not Ready', readiness)
+
+
+def run_case_approval_readiness_soft_review_only_requires_review():
+    print('Case: REVIEW REQUIRED with only a soft/REVIEW-level signal (no hard blocker) -> Requires Review, not Not Ready')
+    context = {'audit_status': 'REVIEW REQUIRED', 'audit_status_reasons': ['Three-way matching status is REVIEW'],
+               'missing_documents': [], 'authenticity': {'invoice': {'status': 'passed'}}, 'anomalies': [],
+               'matching_status': 'REVIEW'}
+    readiness, blocking = ra._compute_approval_readiness(context)
+    check('readiness is Requires Review, not Not Ready', readiness == 'Requires Review', readiness)
+
+
+# ============================================================
+# routes/ai_assistant.py — _clamp_approval_assessment_result()
+# ============================================================
+
+def run_case_clamp_approval_assessment_overrides_wrong_ai_verdict():
+    print("Case: the AI's own approval_readiness guess is IGNORED — the deterministic verdict always wins")
+    context = {'audit_status': 'PASS', 'audit_status_reasons': [], 'missing_documents': [],
+               'authenticity': {}, 'anomalies': [], 'matching_status': 'PASS'}
+    ai_result = {'approval_readiness': 'Not Ready', 'blocking_factors': ['The AI made this up'],
+                 'evidence': ['x'], 'recommended_actions': ['y']}
+    clamped = ra._clamp_approval_assessment_result(ai_result, context)
+    check('approval_readiness is forced to the deterministic Ready, not the AI\'s guess',
+          clamped['approval_readiness'] == 'Ready', clamped)
+    check('blocking_factors is forced empty for a Ready verdict, regardless of what the AI said',
+          clamped['blocking_factors'] == [], clamped)
+
+
+def run_case_clamp_approval_assessment_fills_blank_fields():
+    print('Case: blank blocking_factors/evidence/recommended_actions from the AI get sensible defaults')
+    context = {'audit_status': 'REVIEW REQUIRED', 'audit_status_reasons': ['Missing: Purchase Order'],
+               'missing_documents': ['Purchase Order'], 'authenticity': {}, 'anomalies': [], 'matching_status': 'PARTIAL'}
+    clamped = ra._clamp_approval_assessment_result(
+        {'approval_readiness': 'Ready', 'blocking_factors': [], 'evidence': [], 'recommended_actions': []}, context)
+    check('blocking_factors falls back to audit_status_reasons', clamped['blocking_factors'] == ['Missing: Purchase Order'], clamped)
+    check('evidence is non-empty', bool(clamped['evidence']), clamped)
+    check('recommended_actions is non-empty', bool(clamped['recommended_actions']), clamped)
+    check('recommended_actions is not the PASS message for a Not Ready case',
+          'ready for approval' not in clamped['recommended_actions'][0].lower(), clamped)
+
+
+def run_case_clamp_approval_assessment_handles_none_result():
+    print('Case: clamp never crashes even if the AI returned nothing usable at all')
+    context = {'audit_status': 'REVIEW REQUIRED', 'audit_status_reasons': ['Missing: Purchase Order'],
+               'missing_documents': ['Purchase Order'], 'authenticity': {}, 'anomalies': [], 'matching_status': 'PARTIAL'}
+    clamped = ra._clamp_approval_assessment_result(None, context)
+    check('approval_readiness still comes from context', clamped['approval_readiness'] == 'Not Ready', clamped)
+    check('blocking_factors is non-empty', bool(clamped['blocking_factors']), clamped)
+    check('evidence is non-empty', bool(clamped['evidence']), clamped)
+    check('recommended_actions is non-empty', bool(clamped['recommended_actions']), clamped)
+
+
+def run_case_clamp_approval_assessment_ignores_non_string_junk():
+    print('Case: non-string entries in blocking_factors/evidence/recommended_actions are filtered out, not crashed on')
+    context = {'audit_status': 'REVIEW REQUIRED', 'audit_status_reasons': ['Missing: Purchase Order'],
+               'missing_documents': ['Purchase Order'], 'authenticity': {}, 'anomalies': [], 'matching_status': 'PARTIAL'}
+    ai_result = {'approval_readiness': 'Not Ready', 'blocking_factors': [123, None, 'A real blocking factor'],
+                 'evidence': [{}, 'Real evidence'], 'recommended_actions': [None, 'Do this']}
+    clamped = ra._clamp_approval_assessment_result(ai_result, context)
+    check('non-string blocking_factors entries filtered', clamped['blocking_factors'] == ['A real blocking factor'], clamped)
+    check('non-string evidence entries filtered', clamped['evidence'] == ['Real evidence'], clamped)
+    check('non-string recommended_actions entries filtered', clamped['recommended_actions'] == ['Do this'], clamped)
+
+
+# ============================================================
+# helpers/ai_assistant.py — approval_assessment prompt coverage
+# ============================================================
+
+def run_case_approval_assessment_prompt_covers_full_context():
+    print('Case: approval_assessment instruction explicitly covers matching/missing-docs/authenticity/anomaly/financial context')
+    captured = {}
+
+    def fake_ask_claude_text(system_prompt, user_prompt, **k):
+        captured['user_prompt'] = user_prompt
+        return ('{"approval_readiness": "Ready", "blocking_factors": [], '
+                 '"evidence": ["ok"], "recommended_actions": ["none"]}')
+    with _Patched(haa, ask_claude_text=fake_ask_claude_text, call_gemini_sdk=lambda *a, **k: None):
+        haa.ask_ai_assistant('approval_assessment', {'invoice_number': 'INV-1'})
+    up = captured.get('user_prompt', '')
+    check('prompt references matching_details', 'matching_details' in up, up)
+    check('prompt references missing_documents', 'missing_documents' in up, up)
+    check('prompt references authenticity', 'authenticity' in up, up)
+    check('prompt tells the AI to name anomaly_type and severity', 'anomaly_type' in up and 'severity' in up, up)
+    check('prompt references financial figures (po_amount)', 'po_amount' in up, up)
+    check('prompt asks the 4 required questions', 'ready for approval' in up.lower(), up)
+    check('prompt tells the AI it is not the final decision-maker',
+          'not deciding' in up.lower() or 'informational only' in up.lower(), up)
+
+
+def run_case_approval_assessment_round_trips_through_run_action():
+    print('Case: approval_assessment round-trips through _run_action with the deterministic clamp applied')
+
+    class _Conn:
+        def cursor(self, **k): return None
+        def close(self): pass
+
+    context = {'audit_status': 'PASS', 'audit_status_reasons': [], 'missing_documents': [],
+               'authenticity': {}, 'anomalies': [], 'matching_status': 'PASS'}
+    ai_result = {'approval_readiness': 'Not Ready', 'blocking_factors': ['hallucinated'],
+                 'evidence': ['Vendor matches'], 'recommended_actions': ['none needed']}
+
+    with _Patched(ra,
+                  get_db_connection=lambda: _Conn(),
+                  _build_case_context=lambda c, d: context,
+                  _cache_key=lambda ctx, q: 'fixed-hash',
+                  _get_cached=lambda c, doc_id, action, h: None,
+                  _save_cache=lambda *a, **k: None,
+                  ask_ai_assistant=lambda action, ctx, question=None: (ai_result, 'claude')):
+        response, status = ra._run_action(1, 'approval_assessment')
+
+    check('status is 200', status == 200, status)
+    check('approval_readiness is forced to the deterministic Ready despite the AI result',
+          response['approval_readiness'] == 'Ready', response)
+    check('blocking_factors is forced empty for the deterministic Ready verdict',
+          response['blocking_factors'] == [], response)
+    check('evidence passed through from the AI result', response['evidence'] == ['Vendor matches'], response)
+
+
+# ============================================================
 # routes/ai_assistant.py — _run_action() cache hit/miss behaviour
 # ============================================================
 
@@ -865,6 +1032,21 @@ if __name__ == '__main__':
     run_case_clamp_explain_exception_overrides_wrong_ai_verdict()
     run_case_clamp_explain_exception_fills_blank_fields()
     run_case_clamp_explain_exception_handles_none_result()
+
+    run_case_approval_readiness_pass_is_ready()
+    run_case_approval_readiness_missing_document_is_not_ready()
+    run_case_approval_readiness_blocking_anomaly_is_not_ready()
+    run_case_approval_readiness_authenticity_warning_is_not_ready()
+    run_case_approval_readiness_hard_matching_fail_is_not_ready()
+    run_case_approval_readiness_soft_review_only_requires_review()
+
+    run_case_clamp_approval_assessment_overrides_wrong_ai_verdict()
+    run_case_clamp_approval_assessment_fills_blank_fields()
+    run_case_clamp_approval_assessment_handles_none_result()
+    run_case_clamp_approval_assessment_ignores_non_string_junk()
+
+    run_case_approval_assessment_prompt_covers_full_context()
+    run_case_approval_assessment_round_trips_through_run_action()
 
     run_case_run_action_cache_hit_never_calls_ai()
     run_case_run_action_cache_miss_calls_ai_and_saves()

@@ -144,6 +144,44 @@ _ACTION_INSTRUCTIONS = {
         'Return ONLY: {"risk_level": "Low" or "Medium" or "High", '
         '"reasons": ["string", ...], "potential_impact": "string"}'
     ),
+    'approval_assessment': (
+        'Assess this case\'s readiness for auditor approval, covering the '
+        'FULL audit context already computed for it — three-way '
+        'matching_details, missing_documents, the authenticity result, '
+        'every anomaly/risk-indicator finding, and the financial figures '
+        '(amount, po_amount, matching_details.amount_match) — answering '
+        'exactly these 4 questions: (1) is this transaction ready for '
+        'approval, (2) what unresolved issues prevent approval, (3) what '
+        'evidence or documents are required before approval, (4) what '
+        'checks should the auditor complete before deciding.\n'
+        'blocking_factors: every item from audit_status_reasons and any '
+        '"blocking" anomaly (name its anomaly_type and severity) that '
+        'ACTUALLY prevents approval right now — empty list only when '
+        'audit_status is "PASS". An "informational" anomaly alone is NOT '
+        'a blocking factor.\n'
+        'evidence: the SPECIFIC facts from the CASE DATA that support '
+        'this assessment either way — e.g. "Vendor name matches across '
+        'Invoice and PO", "Goods Receipt has not been uploaded", '
+        '"Invoice amount RM {amount} vs PO amount RM {po_amount}", "an '
+        'authenticity check flagged a warning on the invoice". Cite what '
+        'IS present and correct as well as what is missing or wrong — '
+        'not only problems.\n'
+        'recommended_actions: concrete checks/evidence the auditor should '
+        'complete BEFORE deciding — e.g. request a specific missing '
+        'document, verify a specific mismatched field with Finance/'
+        'vendor, review a specific anomaly, or confirm an authenticity '
+        'concern. If audit_status is "PASS", the only action is that no '
+        'further action is needed before approval.\n'
+        'You are assessing readiness, not deciding — approval_readiness '
+        'in your response is informational only and will be verified '
+        'against the CASE DATA\'s own audit_status before being shown to '
+        'the auditor; the human auditor makes the actual approval / send '
+        'back / need-review decision, never this assessment.\n'
+        'Return ONLY: {"approval_readiness": "Ready" or "Not Ready" or '
+        '"Requires Review", "blocking_factors": ["string", ...], '
+        '"evidence": ["string", ...], "recommended_actions": '
+        '["string", ...]}'
+    ),
     'generate_remark': (
         "Write a short, professional auditor remark (2-4 sentences) "
         "suitable to paste directly into this case's Remarks/Notes field. "
@@ -257,11 +295,12 @@ def ask_ai_assistant(action, context, question=None):
     into a 502.
 
     action: one of 'explain_exception' | 'explain_risk' |
-      'generate_remark' | 'ask' | 'prepare_send_back' (auditor-facing,
-      routes/ai_assistant.py's /explain-exception etc.) or
-      'generate_finance_response' | 'recommended_steps' (Finance-
-      facing, routes/ai_assistant.py's /finance/* endpoints — 'ask'
-      and 'explain_exception' are reused as-is by both sides).
+      'approval_assessment' | 'generate_remark' | 'ask' |
+      'prepare_send_back' (auditor-facing, routes/ai_assistant.py's
+      /explain-exception etc.) or 'generate_finance_response' |
+      'recommended_steps' (Finance-facing, routes/ai_assistant.py's
+      /finance/* endpoints — 'ask' and 'explain_exception' are reused
+      as-is by both sides).
     question: required (and only used) when action == 'ask'.
     """
     context_json = json.dumps(context, indent=2, default=str)

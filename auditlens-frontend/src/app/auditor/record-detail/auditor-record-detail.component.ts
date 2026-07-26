@@ -159,6 +159,17 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   aiError: string = '';
   aiCaseSummary: { audit_status: string; reason: string; recommended_action: string } | null = null;
   aiRisk: { risk_level: string; reasons: string[]; potential_impact: string } | null = null;
+  // approval_readiness is server-computed deterministically (never the
+  // AI's own guess — see routes/ai_assistant.py::_clamp_approval_
+  // assessment_result), same guarantee aiCaseSummary's audit_status
+  // already has — this label can never contradict the actual matching/
+  // authenticity/anomaly state, and never makes the actual approval
+  // decision (the auditor still does that via the Approve/Send Back/
+  // Need Review buttons below, unchanged).
+  aiApprovalAssessment: {
+    approval_readiness: string; blocking_factors: string[];
+    evidence: string[]; recommended_actions: string[];
+  } | null = null;
   aiQuestion: string = '';
   aiConversation: { question: string; answer: string }[] = [];
 
@@ -687,6 +698,41 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       }
     });
+  }
+
+  approvalAssessment() {
+    if (!this.documentId) return;
+    this.aiActionLoading['approval_assessment'] = true;
+    this.aiError = '';
+    this.http.post<any>(`${this.apiUrl}/ai-assistant/${this.documentId}/approval-assessment`, {},
+      { headers: this.getHeaders() }
+    ).subscribe({
+      next: (res) => {
+        this.aiActionLoading['approval_assessment'] = false;
+        this.aiApprovalAssessment = {
+          approval_readiness: res.approval_readiness || 'Requires Review',
+          blocking_factors: res.blocking_factors || [],
+          evidence: res.evidence || [],
+          recommended_actions: res.recommended_actions || []
+        };
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.aiActionLoading['approval_assessment'] = false;
+        this.aiError = err.error?.error || 'AI Assistant is unavailable right now.';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  // Reuses the SAME risk-chip color classes as exceptionRiskClass/
+  // auditStatusClass above — Ready reads as "low risk" (green), Not
+  // Ready as "high risk" (red), Requires Review as "needs attention"
+  // (amber) — no new CSS needed.
+  approvalReadinessClass(readiness: string): string {
+    if (readiness === 'Ready') return 'risk-low';
+    if (readiness === 'Not Ready') return 'risk-high';
+    return 'risk-medium';
   }
 
   generateAuditRemark() {

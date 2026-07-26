@@ -671,6 +671,10 @@
               <ng-container *ngIf="!aiActionLoading['explain_risk']"><i class="ph-duotone ph-warning-octagon"></i> Explain Risk</ng-container>
               <ng-container *ngIf="aiActionLoading['explain_risk']">Thinking…</ng-container>
             </button>
+            <button class="btn-ai-action" (click)="approvalAssessment()" [disabled]="aiActionLoading['approval_assessment']">
+              <ng-container *ngIf="!aiActionLoading['approval_assessment']"><i class="ph-duotone ph-clipboard-text"></i> Approval Assessment</ng-container>
+              <ng-container *ngIf="aiActionLoading['approval_assessment']">Thinking…</ng-container>
+            </button>
             <button class="btn-ai-action" (click)="generateAuditRemark()" [disabled]="aiActionLoading['generate_remark']">
               <ng-container *ngIf="!aiActionLoading['generate_remark']"><i class="ph-duotone ph-pencil-simple-line"></i> Generate Audit Remark</ng-container>
               <ng-container *ngIf="aiActionLoading['generate_remark']">Thinking…</ng-container>
@@ -702,6 +706,38 @@
               <li *ngFor="let r of aiRisk.reasons">{{ r }}</li>
             </ul>
             <p class="ai-answer-text" *ngIf="aiRisk.potential_impact"><strong>Potential impact:</strong> {{ aiRisk.potential_impact }}</p>
+          </div>
+
+          <!-- Approval Assessment — approval_readiness is server-computed
+               deterministically (see routes/ai_assistant.py::_clamp_
+               approval_assessment_result), never the AI's own guess, and
+               is purely informational: the auditor's own Approve/Send
+               Back/Need Review buttons below (unchanged) are still the
+               only way this record is actually decided. -->
+          <div class="ai-answer-box" *ngIf="aiApprovalAssessment">
+            <p class="ai-answer-label"><i class="ph-duotone ph-clipboard-text"></i> Approval Assessment</p>
+            <p class="ai-audit-status-row">
+              <span class="es-label">Approval Readiness</span>
+              <span class="risk-chip" [ngClass]="approvalReadinessClass(aiApprovalAssessment.approval_readiness)">{{ aiApprovalAssessment.approval_readiness }}</span>
+            </p>
+            <ng-container *ngIf="aiApprovalAssessment.blocking_factors.length">
+              <p class="frb-label">Blocking Factors</p>
+              <ul class="ai-risk-reasons">
+                <li *ngFor="let b of aiApprovalAssessment.blocking_factors">{{ b }}</li>
+              </ul>
+            </ng-container>
+            <ng-container *ngIf="aiApprovalAssessment.evidence.length">
+              <p class="frb-label">Evidence Supporting the Assessment</p>
+              <ul class="ai-risk-reasons">
+                <li *ngFor="let e of aiApprovalAssessment.evidence">{{ e }}</li>
+              </ul>
+            </ng-container>
+            <ng-container *ngIf="aiApprovalAssessment.recommended_actions.length">
+              <p class="frb-label">Recommended Actions Before Approval</p>
+              <ul class="ai-risk-reasons">
+                <li *ngFor="let a of aiApprovalAssessment.recommended_actions">{{ a }}</li>
+              </ul>
+            </ng-container>
           </div>
 
           <div class="ai-conversation" *ngIf="aiConversation.length">

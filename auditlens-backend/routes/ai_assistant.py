@@ -278,6 +278,16 @@ def _build_case_context(cursor, document_id):
         'invoice_number':     comparison['invoice']['invoice_no'],
         'vendor':             comparison['invoice']['vendor_name'],
         'amount':             comparison['invoice']['total_amount'],
+        # po_amount: the PO's own total (already computed by build_
+        # comparison(), nothing new calculated here) — financial-impact
+        # context for the AI (e.g. Approval Assessment). Deliberately the
+        # RAW PO total, not an allocation-aware figure — the existing
+        # transaction_context.allocation_summary below already carries
+        # the correct allocated amount for a v2/enterprise package
+        # invoice, and the system preamble already tells the AI to defer
+        # to that when present, so this stays a plain, non-duplicated
+        # read for the common standalone-invoice case.
+        'po_amount':          (comparison['po'] or {}).get('total_amount'),
         'currency':           comparison['invoice']['currency'],
         'invoice_date':       comparison['invoice']['invoice_date'],
         'uploaded_at':        comparison['invoice']['uploaded_at'],
@@ -366,6 +376,87 @@ def _clamp_explain_exception_result(result, context):
     }
 
 
+def _compute_approval_readiness(context):
+    """Deterministic Ready / Not Ready / Requires Review verdict for
+    'Approval Assessment', computed here in Python — NEVER left for the
+    AI to decide, same guarantee _clamp_explain_exception_result already
+    gives audit_status. This is what actually prevents the AI from
+    declaring a record ready for approval when it isn't (or the reverse).
+
+    'Ready' only when context['audit_status'] is already 'PASS' (the
+    same deterministic verdict every other AI action already treats as
+    authoritative — see _compute_audit_status). Otherwise splits
+    'REVIEW REQUIRED' into two auditor-facing readings:
+      - 'Not Ready': at least one HARD blocker exists — a missing
+        document, a 'blocking' anomaly, an authenticity warning, or a
+        hard (FAIL-level) three-way matching mismatch — none of which
+        an auditor can judgment-call past without Finance/vendor
+        action first.
+      - 'Requires Review': audit_status is REVIEW REQUIRED but none of
+        the above hard blockers apply (e.g. only a soft/REVIEW-level
+        matching signal) — needs the auditor's judgment, not
+        necessarily a hard stop.
+
+    Returns (readiness: str, blocking_factors: list[str]) — the second
+    value is audit_status_reasons verbatim (already the authoritative,
+    itemized list every other action already trusts), empty when
+    readiness is 'Ready'.
+    """
+    audit_status = context.get('audit_status', 'REVIEW REQUIRED')
+    reasons = context.get('audit_status_reasons') or []
+
+    if audit_status == 'PASS':
+        return 'Ready', []
+
+    missing_documents = context.get('missing_documents') or []
+    authenticity = context.get('authenticity') or {}
+    authenticity_warning = any((v or {}).get('status') == 'warning' for v in authenticity.values())
+    blocking_anomalies = [a for a in (context.get('anomalies') or []) if a.get('classification') == 'blocking']
+    hard_matching_fail = context.get('matching_status') == 'FAIL'
+
+    if missing_documents or authenticity_warning or blocking_anomalies or hard_matching_fail:
+        return 'Not Ready', reasons
+    return 'Requires Review', reasons
+
+
+def _clamp_approval_assessment_result(result, context):
+    """Never trust the AI's own approval_readiness verdict — always use
+    _compute_approval_readiness()'s deterministic value instead,
+    regardless of what the AI narrated (same 'never let the AI make the
+    actual call' guarantee _clamp_explain_exception_result gives
+    audit_status). blocking_factors falls back to audit_status_reasons
+    (the same authoritative list used everywhere else) when the AI
+    returns nothing usable, and is forced empty for a 'Ready' verdict no
+    matter what the AI said. evidence/recommended_actions fall back to a
+    minimal safe default rather than an empty list, so the response is
+    never blank."""
+    result = result or {}
+    readiness, blocking_default = _compute_approval_readiness(context)
+
+    if readiness == 'Ready':
+        blocking_factors = []
+    else:
+        blocking_factors = [b for b in (result.get('blocking_factors') or []) if isinstance(b, str) and b.strip()]
+        if not blocking_factors:
+            blocking_factors = blocking_default or ['See case details.']
+
+    evidence = [e for e in (result.get('evidence') or []) if isinstance(e, str) and e.strip()]
+    if not evidence:
+        evidence = ['No supporting evidence details were provided.']
+
+    recommended_actions = [a for a in (result.get('recommended_actions') or []) if isinstance(a, str) and a.strip()]
+    if not recommended_actions:
+        recommended_actions = (['No action required — ready for approval.'] if readiness == 'Ready'
+                                else ['Review the flagged items before approving.'])
+
+    return {
+        'approval_readiness':   readiness,
+        'blocking_factors':     blocking_factors,
+        'evidence':             evidence,
+        'recommended_actions':  recommended_actions,
+    }
+
+
 def _cache_key(context, question):
     payload = json.dumps({'context': context, 'question': question}, sort_keys=True, default=str)
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()
@@ -428,6 +519,8 @@ def _run_action(document_id, action, question=None):
         result = _clamp_send_back_result(result, context.get('exception'))
     elif action == 'explain_exception':
         result = _clamp_explain_exception_result(result, context)
+    elif action == 'approval_assessment':
+        result = _clamp_approval_assessment_result(result, context)
 
     response = {**result, 'provider': provider, 'cached': False}
     _save_cache(document_id, action, context_hash, response)
@@ -495,6 +588,27 @@ def explain_risk(document_id):
         return err
     try:
         response, status = _run_action(document_id, 'explain_risk')
+        return jsonify(response), status
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# POST /ai-assistant/<document_id>/approval-assessment
+# Never makes the final approval decision — approval_readiness is
+# ALWAYS the deterministic verdict from _compute_approval_readiness(),
+# never the AI's own guess (see _clamp_approval_assessment_result). The
+# human auditor still clicks Approve / Send Back / Need Review below;
+# this only informs that decision, exactly like every other AI action.
+# ------------------------------------------------------------
+@ai_assistant_bp.route('/<int:document_id>/approval-assessment', methods=['POST'])
+@jwt_required()
+def approval_assessment(document_id):
+    _, err = _require_auditor()
+    if err:
+        return err
+    try:
+        response, status = _run_action(document_id, 'approval_assessment')
         return jsonify(response), status
     except Exception as e:
         return jsonify({'error': str(e)}), 500

@@ -14016,3 +14016,252 @@ Rollback instructions:
   Redeploy the previous backend build - no data or schema changes were
   made this phase (all fixture rows used for verification were
   inserted and deleted entirely within this phase's own testing).
+
+
+----------------------------------------------------------------------
+
+Date: 2026-07-26
+What was changed:
+  Phase 43: added a 5th AI Audit Assistant action, "Approval
+  Assessment", answering the 4 approval-readiness questions the task
+  named — is this ready for approval, what unresolved issues prevent
+  it, what evidence/documents are required, what checks should the
+  auditor complete first — using the SAME context/validation/API
+  infrastructure the existing 4 actions already share. No separate AI
+  module, no new AI provider, no schema change.
+
+  Root cause / design note (inspected before writing code): every
+  existing action already goes through ONE shared pipeline —
+  routes/ai_assistant.py::_build_case_context() (assembles matching/
+  missing-docs/authenticity/anomalies/audit_status once) ->
+  _run_action() (cache lookup, calls ask_ai_assistant(), applies an
+  action-specific clamp when one exists, saves to cache) ->
+  helpers/ai_assistant.py::ask_ai_assistant() (Claude-primary/Gemini-
+  fallback, one shared system preamble + one per-action instruction).
+  Approval Assessment is implemented as one more entry in that SAME
+  pipeline — a new _ACTION_INSTRUCTIONS key, a new _clamp_* function
+  following the EXACT pattern _clamp_explain_exception_result already
+  established, and one more route calling the SAME _run_action() every
+  other endpoint calls. Nothing about the shared plumbing changed.
+
+  auditlens-backend/routes/ai_assistant.py:
+    - _build_case_context(): added ONE new field, 'po_amount' (the
+      PO's own total_amount, already computed by build_comparison() —
+      nothing new calculated), so the AI can cite concrete financial
+      figures for Approval Assessment's "financial impact" dimension.
+      Deliberately the raw PO total, not an allocation-aware figure —
+      the pre-existing transaction_context.allocation_summary field
+      (added in an earlier phase) already carries the correct allocated
+      amount for a v2/enterprise package invoice, and the system
+      preamble already tells the AI to defer to that when present, so
+      this stays a plain, non-duplicated read rather than re-deriving
+      the frontend's allocation-aware amountCompareBasis logic on the
+      backend too (the task explicitly said not to create duplicate
+      logic).
+    - New _compute_approval_readiness(context): the DETERMINISTIC
+      Ready / Not Ready / Requires Review verdict, computed in Python —
+      never left for the AI to decide, the same guarantee
+      _compute_audit_status/_clamp_explain_exception_result already
+      give every other action. 'Ready' only when audit_status is
+      already 'PASS'. Otherwise splits 'REVIEW REQUIRED' into 'Not
+      Ready' (a missing document, a 'blocking' anomaly, an authenticity
+      warning, or a hard FAIL-level matching mismatch — any of which
+      genuinely blocks approval) vs 'Requires Review' (REVIEW REQUIRED
+      but none of those hard blockers apply — a softer signal needing
+      the auditor's own judgment, not a hard stop). Built entirely from
+      fields _build_case_context() already computes.
+    - New _clamp_approval_assessment_result(result, context): mirrors
+      _clamp_explain_exception_result exactly — approval_readiness is
+      ALWAYS the deterministic value above, never the AI's guess;
+      blocking_factors is forced empty for a 'Ready' verdict regardless
+      of what the AI said, and falls back to audit_status_reasons
+      (already-trusted elsewhere) when the AI returns nothing usable;
+      evidence/recommended_actions get safe non-empty defaults; every
+      list is filtered to non-empty strings only (never crashes on a
+      malformed/non-string AI entry).
+    - _run_action(): one new elif branch applying the clamp above for
+      action == 'approval_assessment' — identical shape to the existing
+      prepare_send_back/explain_exception branches.
+    - New route: POST /ai-assistant/<document_id>/approval-assessment
+      — same _require_auditor() gate, same _run_action() call, same
+      try/except-500 shape as every other auditor-facing endpoint in
+      this file.
+
+  auditlens-backend/helpers/ai_assistant.py:
+    - New _ACTION_INSTRUCTIONS['approval_assessment']: explicitly
+      answers the 4 named questions and directs the AI to matching_
+      details/missing_documents/authenticity/every anomaly finding/
+      amount+po_amount, to name a blocking anomaly's type+severity
+      explicitly, and states outright that approval_readiness is
+      "informational only" and "will be verified against the CASE
+      DATA's own audit_status before being shown" — reinforcing the
+      clamp above at the prompt level too, and that "the human auditor
+      makes the actual approval / send back / need-review decision,
+      never this assessment." Returns the exact 4-field JSON shape the
+      task specified: approval_readiness, blocking_factors, evidence,
+      recommended_actions.
+    - ask_ai_assistant()'s docstring: added 'approval_assessment' to
+      the enumerated auditor-facing action list (was already precisely
+      enumerated for the other 4; kept accurate).
+    - No changes to _SYSTEM_PREAMBLE, _call_provider(), or any other
+      action's instruction — the new action is purely additive.
+
+  auditlens-frontend/src/app/auditor/record-detail/
+  auditor-record-detail.component.ts:
+    - New aiApprovalAssessment property (same shape as the backend
+      clamp's output) and approvalAssessment() method — byte-for-byte
+      the same pattern as the existing explainRisk()/generateAuditRemark()
+      methods (loading flag, POST call, response mapped in, aiError on
+      failure, cdr.detectChanges()).
+    - New approvalReadinessClass(readiness) helper reusing the EXISTING
+      risk-chip color classes (risk-high/risk-medium/risk-low) already
+      defined for exceptionRiskClass/auditStatusClass — Ready reads
+      green, Not Ready red, Requires Review amber; no new CSS classes.
+
+  auditlens-frontend/src/app/auditor/record-detail/
+  auditor-record-detail.component.html:
+    - New "Approval Assessment" button in .ai-assistant-actions,
+      positioned between Explain Risk and Generate Audit Remark
+      (matching the backend route ordering) — same .btn-ai-action
+      markup/Thinking-state pattern as every other AI button.
+    - New response block reusing the EXISTING .ai-answer-box/
+      .ai-answer-label/.ai-audit-status-row/.es-label/.risk-chip/
+      .frb-label/.ai-risk-reasons classes verbatim (same classes
+      aiCaseSummary's Audit Status row and aiRisk's reasons list
+      already use) — zero new CSS needed. Shows Approval Readiness as
+      a chip, then Blocking Factors / Evidence Supporting the
+      Assessment / Recommended Actions Before Approval as 3
+      independently-conditional bullet lists (a 'Ready' record simply
+      renders no Blocking Factors list, since blocking_factors is
+      always empty for that verdict).
+    - Every existing AI action button, the Audit Note textarea, and the
+      Need Review / Send Back to Finance / Approve buttons (the ONLY
+      way this record is actually decided) are completely untouched.
+
+  No CSS file changes this phase (confirmed by the production build:
+  auditor-record-detail.component.css's budget-warning size is
+  byte-identical to the previous phase's).
+
+Why:
+  Requested feature: a 5th AI Assistant action giving the auditor a
+  single, structured "am I ready to approve this?" read — covering
+  matching, missing documents, exceptions, risk indicators/anomalies,
+  authenticity, and financial impact together — without the AI ever
+  making that decision itself, and without introducing a second AI
+  system alongside the existing one.
+
+Confirmed unchanged (AI decision authority / human approval / no
+duplicate logic):
+  - approval_readiness can NEVER be the AI's own free-text verdict —
+    _clamp_approval_assessment_result always substitutes the
+    deterministic value from _compute_approval_readiness(), which is
+    itself built entirely from audit_status/missing_documents/
+    authenticity/anomalies/matching_status — fields every other action
+    already treats as authoritative. This mirrors, not duplicates,
+    _clamp_explain_exception_result's existing audit_status guarantee.
+  - approveDocument()/submitSendBack() (routes/reviews.py) and the
+    Need Review/Send Back to Finance/Approve buttons are completely
+    untouched — Approval Assessment is read-only advisory output, the
+    same "draft/explain only, never auto-act" contract every other AI
+    action already has.
+  - No new AI provider, no new endpoint pattern, no new caching
+    mechanism — reuses the exact existing Claude-primary/Gemini-
+    fallback _call_provider() and the exact existing ai_assistant_cache
+    table/key shape (action is just a new string value in that key).
+  - No database schema change — po_amount is a computed context field,
+    not a new column; ai_assistant_cache already keys on an arbitrary
+    action string.
+  - explain_exception/explain_risk/generate_remark/prepare_send_back/
+    ask/generate_finance_response/recommended_steps and their prompts
+    are byte-for-byte unchanged.
+
+Test results:
+  - 16 new regression tests added to tests/extraction/test_ai_assistant.py:
+    6 for _compute_approval_readiness (PASS -> Ready; missing document,
+    blocking anomaly, authenticity warning, and hard matching FAIL each
+    independently -> Not Ready; a soft/REVIEW-only signal with no hard
+    blocker -> Requires Review, not Not Ready), 4 for
+    _clamp_approval_assessment_result (AI's own readiness guess is
+    always overridden; blank fields get safe defaults; None result
+    never crashes; non-string junk entries are filtered out safely), 2
+    for the approval_assessment prompt (references matching_details/
+    missing_documents/authenticity/anomaly_type/severity/po_amount,
+    asks the 4 required questions, states it is not the final
+    decision-maker), and 1 full round-trip through _run_action()
+    confirming the deterministic clamp actually overrides a
+    hallucinated AI verdict end-to-end. All pass, plus every pre-
+    existing test in this file (provider fallback, cache behavior,
+    other actions' clamp logic, _build_case_context field mapping) —
+    confirmed the new po_amount field's use of .get('total_amount')
+    (not a direct key access) doesn't break existing test fixtures that
+    use a minimal fake po dict without that key.
+  - Full backend regression suite (python tests/extraction/run_all.py,
+    all 26 suites) — all PASS.
+  - npx ng build --configuration production — succeeded (exit 0; CSS
+    budget warning size unchanged from last phase, confirming zero new
+    CSS was needed — every new UI element reuses existing classes).
+  - Live-verified in a real browser (Playwright, throwaway auditor +
+    finance_executive accounts, cleaned up afterward) against a
+    deliberately-inserted, fully-disposable fixture invoice exercising
+    every audit dimension at once (PO amount mismatch, missing GR,
+    authenticity warning, blocking high-severity duplicate anomaly):
+    - Confirmed all 5 AI action buttons render in the correct order
+      ("Explain Exception", "Explain Risk", "Approval Assessment",
+      "Generate Audit Remark", "Prepare Send Back Instruction") with
+      the new button visually identical to the other 4.
+    - Clicked Approval Assessment against the real backend: correctly
+      hit the new endpoint, went through the real context-building/
+      cache/provider-fallback path, and (this dev environment's known
+      missing/broken AI keys, unrelated to this change) returned a
+      clean "AI Assistant is unavailable right now" error with no
+      console/page error and no stuck loading state — confirming the
+      full request/response wiring is correct even without a working
+      AI key.
+    - Separately intercepted the same network call with a realistic
+      response shaped exactly like the real clamped backend output
+      (Not Ready + 4 blocking factors + 4 evidence items + 4
+      recommended actions) to verify the Angular template itself:
+      confirmed the readiness chip rendered "Not Ready" in the correct
+      risk-high (red) styling, and all 3 section labels ("Blocking
+      Factors", "Evidence Supporting the Assessment", "Recommended
+      Actions Before Approval") and their bullet lists rendered with
+      the exact content provided, using the existing dark theme
+      styling with no visual regressions.
+    - Confirmed the Need Review / Send Back to Finance / Approve
+      buttons remained present and unchanged throughout — the human
+      decision workflow is untouched.
+    - Zero console errors, zero page errors, zero horizontal overflow
+      in both checks.
+    - All fixture rows (1 document, 1 extracted_fields, 1
+      purchase_orders, 1 authenticity_checks, 1 anomalies, 2 throwaway
+      users, their audit_logs) deleted afterward and verified gone (0
+      remaining) from the dev DB. Dev server processes (Flask debug
+      reloader watcher + child, Angular CLI + its esbuild service
+      child) stopped afterward by exact PID — none left running.
+
+Build result:
+  Backend: full extraction test suite (26/26 suites) green, including
+  16 new Approval Assessment regression tests. Frontend: clean
+  production build, exit 0; live browser check clean (0 console/page
+  errors, correct button placement, correct error handling given this
+  environment's AI-key limitation, correct response rendering verified
+  via a realistic intercepted response, 0 horizontal overflow, human
+  decision buttons unchanged).
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false
+     on either service, so Render should auto-deploy both services from
+     this push with no separate manual trigger needed on my end.
+  2. No database migration needed (no schema changes).
+  3. As with the previous AI Assistant phase, Approval Assessment needs
+     a working ANTHROPIC_API_KEY or GEMINI_API_KEY in Render's
+     environment to produce a real response — verify it isn't 502ing
+     after deploy if either key is missing/invalid there too.
+
+Rollback instructions:
+  Redeploy the previous backend + frontend build - no data or schema
+  changes were made this phase (all fixture rows used for verification
+  were inserted and deleted entirely within this phase's own testing).
