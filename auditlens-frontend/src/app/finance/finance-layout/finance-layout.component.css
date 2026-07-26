@@ -10,7 +10,6 @@
   background: var(--bg-card);
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
   padding: 24px 0;
   box-shadow: 1px 0 0 var(--border);
   flex-shrink: 0;
@@ -22,6 +21,16 @@
 }
 
 .sidebar-top { display: flex; flex-direction: column; gap: 24px; }
+
+/* Sits in the empty space between the nav list and the profile section.
+   margin-top: auto (rather than justify-content: space-between on
+   .sidebar, which used to do this job for exactly 2 children) pushes
+   this — and everything after it — down to the bottom, without moving
+   .sidebar-top or changing its own spacing. */
+.sidebar-manual {
+  margin-top: auto;
+  padding: 0 12px;
+}
 
 .sidebar-logo {
   padding: 0 20px;

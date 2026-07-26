@@ -14807,3 +14807,209 @@ Rollback instructions:
   build) - db.py is the only file changed, get_db_connection()'s
   interface is unchanged, so reverting instantly restores the exact
   prior (unpooled) behavior with no data or schema implications.
+
+
+----------------------------------------------------------------------
+
+Date: 2026-07-26
+What was changed:
+  Phase 47: added an in-system, role-based User Manual page. Frontend
+  only — no backend, authentication, role-management, database, OCR,
+  matching, anomaly-detection, authenticity, AI Assistant, or workflow
+  logic touched at all.
+
+  New files:
+  - auditlens-frontend/src/app/user-manual/user-manual.component.ts/
+    .html/.css — the manual page itself. Reads role from the SAME
+    localStorage 'user' record every layout component already reads
+    (no new auth/session mechanism) to decide, client-side only,
+    whether to show the Finance or Auditor content — never a role
+    selection page. Content is hand-written per role (not a generic
+    data-driven system) since each section's internal layout genuinely
+    differs — a workflow diagram here, a field list there, a severity
+    legend elsewhere.
+    - Finance: Upload Document (with the Upload -> OCR Extraction ->
+      Data Validation -> Audit Processing workflow diagram), Transaction
+      Package (Invoice/PO/GR relationship chips + 3 examples), OCR
+      Review (field list + reviewer actions), Correction Center, Reports
+      — each an accordion card with an "Open X" button linking to the
+      REAL existing page (/finance/upload, /finance/transactions,
+      /finance/ocr-review, /finance/corrections, /finance/report).
+    - Auditor: Review Queue, Exception Handling, Authenticity
+      Verification, Anomaly Detection (with a High/Medium/Low severity
+      legend), AI Audit Assistant (all 5 actions explained, plus an
+      explicit "AI does NOT automatically approve transactions" notice),
+      Approval Workflow (the AI Assessment -> Auditor Review -> Final
+      Decision diagram + Ready/Not Ready/Requires Review explanation,
+      no button — matching the spec, which lists a button for every
+      other section but not this one) — each linking to its real page
+      (/auditor/review-queue, /auditor/exceptions, /auditor/authenticity,
+      /auditor/anomalies); AI Audit Assistant's button opens Review
+      Queue with a note underneath, since the Assistant itself lives
+      inside a record's Audit Decision panel, not a standalone page.
+    - A role-appropriate FAQ accordion at the bottom (2 Finance
+      questions, 3 Auditor questions, exactly as specified).
+    - A "Search manual..." bar that filters which section/FAQ cards are
+      visible by a case-insensitive substring match against each
+      section's own keyword text.
+    - Severity/readiness color coding (High=danger/red, Medium=warning/
+      amber, Low=success/green) reuses the EXACT SAME var(--danger)/
+      var(--warning)/var(--success) tokens the rest of the app already
+      uses for risk chips and status banners — a "High Risk" here looks
+      identical to a "High Risk" anywhere else in AuditLens.
+  - auditlens-frontend/src/app/shared/screenshot-placeholder/
+    screenshot-placeholder.component.ts — small reusable component (a
+    dashed-border box + "[ Screenshot Placeholder ]" + a caption) used
+    everywhere a real screenshot is expected later. No fake or AI-
+    generated image anywhere — used for Finance's Upload Document/
+    Transaction Package/OCR Review sections and Auditor's Review Queue/
+    Exception Detail/AI Audit Assistant/Approval Assessment sections,
+    exactly the 7 places the task named.
+  - auditlens-frontend/src/app/user-manual/user-manual-redirect.
+    component.ts — tiny (empty-template) component for the bare
+    /user-manual path. See routing note below for why this exists.
+
+  Modified files (all additive — no existing line removed or altered
+  beyond the two noted CSS tweaks):
+  - auditlens-frontend/src/app/app.routes.ts — 3 new route entries
+    (bare /user-manual redirect, /finance/user-manual, /auditor/user-
+    manual); every existing route entry is untouched.
+  - .../finance/finance-layout/finance-layout.component.html and
+    .../auditor/auditor-layout/auditor-layout.component.html — one new
+    sidebar link each ("User Manual", ph-book-open icon, same nav-item
+    class as every existing item so hover/active states match exactly),
+    placed as its own element between the nav list and the profile
+    section — NOT inside the nav list itself, so it's not "directly
+    under Report". No existing nav item touched, moved, or reordered.
+  - .../finance/finance-layout/finance-layout.component.css and
+    .../auditor/auditor-layout/auditor-layout.component.css — removed
+    justify-content: space-between from .sidebar (it was only there to
+    push the 2 previous children, .sidebar-top and .sidebar-bottom, to
+    opposite ends) and added a new .sidebar-manual rule with margin-top:
+    auto — the standard flexbox technique for "push this element (and
+    everything after it) down to the bottom" — so the new link sits
+    exactly in the empty space directly above the profile section,
+    without moving .sidebar-top or changing its spacing at all.
+  - Neither layout's .ts file needed any change — both already expose a
+    public isActive(route) method the new link calls directly from the
+    template with a literal route string.
+
+  Routing note (worth restating): the task named the bare path
+  /user-manual, but every other page in this app is nested under its
+  portal's layout (/finance/upload, /auditor/exceptions, etc.) so the
+  sidebar stays mounted and active-state highlighting works. Registering
+  /user-manual as a true top-level route would have meant clicking it
+  loses the sidebar entirely — inconsistent with "same active state
+  style" and with how every other sidebar item already behaves. Instead,
+  the REAL content lives at /finance/user-manual and /auditor/user-
+  manual (consistent with the rest of the app's own routing convention),
+  and a lightweight bare /user-manual route just forwards to whichever
+  matches the logged-in user's role, so a bookmarked/typed /user-manual
+  URL still resolves correctly.
+
+  One other interpretation note: the task's 📘/🔴🟡🟢 are emoji, but this
+  app uses Phosphor icon glyphs everywhere and has never used a literal
+  emoji in its UI — used ph-book-open for the manual icon and colored
+  dots (the app's own existing danger/warning/success tokens) for
+  severity instead, to stay visually consistent with "follow existing
+  dark theme" rather than introduce the app's first emoji.
+
+Why:
+  Requested feature: an in-system, role-based help page so Finance and
+  Auditor users can understand AuditLens' workflow without leaving the
+  app, automatically showing the right content for whoever is logged
+  in — no role-selection step, no separate module to maintain role
+  detection logic (it reuses the exact same localStorage read every
+  layout already performs).
+
+Confirmed unchanged (safety rules for this phase):
+  - No backend file touched — git diff --stat shows only frontend
+    files (routes, 2 layout .html/.css pairs) plus new files under
+    user-manual/ and shared/screenshot-placeholder/.
+  - No authentication logic touched — the manual page only READS the
+    same localStorage 'user' record every layout component already
+    reads; it never writes to it, never calls a login/logout/token
+    endpoint, and has no role-management capability of its own.
+  - No database, OCR, transaction-processing, matching, anomaly-
+    detection, authenticity-verification, AI Assistant, or approval-
+    workflow logic touched — the manual only LINKS to and describes
+    those existing pages/features; it doesn't call any of their
+    underlying logic itself.
+  - No existing nav item moved, renamed, or restyled — every pre-
+    existing sidebar link keeps its exact same position, route, icon,
+    and CSS class.
+  - No existing route changed — only 3 new route entries added.
+
+Test results:
+  - No Angular unit-test suite exists in this project (no .spec.ts
+    files for any component) — verification follows this session's
+    own established methodology of live Playwright checks against the
+    running app, same as every previous phase.
+  - Backend regression suite (python tests/extraction/run_all.py, all
+    26 suites) — run as a sanity check even though no backend file was
+    touched; all PASS, confirming zero incidental impact.
+  - npx ng build --configuration production — succeeded (exit 0; same
+    category of pre-existing bundle-size warnings, record-detail's own
+    CSS budget warning size unchanged since that file wasn't touched).
+  - Live-verified in a real browser (Playwright, throwaway
+    finance_executive + auditor accounts, cleaned up afterward) — 36
+    checks across both roles, ALL PASS:
+    - Sidebar DOM order confirmed as sidebar-top -> sidebar-manual ->
+      sidebar-bottom for both layouts (the exact "empty space above
+      User Profile" placement), and confirmed the link is NOT inside
+      the regular nav list (not "directly under Report").
+    - Correct label ("User Manual"), correct icon (ph-book-open).
+    - Clicking the sidebar link navigates to the correct portal-nested
+      route and shows the active state.
+    - Finance login: "Finance User Manual" title shown, Finance-only
+      sections (e.g. "Upload Document") present, Auditor-only sections
+      (e.g. "Review Queue") absent from the DOM entirely.
+    - Auditor login: "Auditor User Manual" title shown, Auditor-only
+      sections present, Finance-only sections absent from the DOM
+      entirely.
+    - Accordion sections expand on click; screenshot placeholders
+      render inside them; each section's "Open X" button navigates to
+      the real target page (verified /finance/upload and /auditor/
+      review-queue specifically).
+    - Search bar narrows the visible section list for a role-specific
+      query in both roles.
+    - FAQ shows exactly 2 questions for Finance and exactly 3 for
+      Auditor, and its own accordion expands on click.
+    - Existing /finance/home and /auditor/home pages still load with
+      their sidebar fully intact (regression check for the CSS
+      justify-content change).
+    - Zero uncaught page errors and zero non-404 console errors across
+      both roles.
+    - Visually confirmed via full-page screenshots: professional,
+      scannable layout, cards, icons, accordions, correct severity
+      color-coding, zero horizontal overflow at 1440px width, and full
+      visual consistency with the rest of AuditLens' dark theme.
+    - All fixture accounts (2 throwaway users, their audit_logs)
+      deleted afterward and verified gone (0 remaining) from the dev
+      DB. Dev server processes (Flask debug reloader watcher + child,
+      Angular CLI + its esbuild service child) stopped afterward by
+      exact PID — none left running.
+
+Build result:
+  Frontend: clean production build, exit 0. Backend: full extraction
+  test suite (26/26 suites) green (sanity check only, no backend files
+  changed). Live browser check: 36/36 checks green across both roles,
+  0 console/page errors, 0 horizontal overflow, full role-based content
+  isolation confirmed, all existing pages/sidebar items unaffected.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false,
+     so Render should auto-deploy the frontend from this push with no
+     separate manual trigger needed on my end.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No database migration needed (no schema changes).
+
+Rollback instructions:
+  Revert this one commit (git revert, or redeploy the previous frontend
+  build) - every change this phase is additive (new files, new route
+  entries, one new sidebar link per layout, one CSS rule swap per
+  layout), so reverting cleanly restores the exact prior sidebar/
+  routing behavior with no data or schema implications.

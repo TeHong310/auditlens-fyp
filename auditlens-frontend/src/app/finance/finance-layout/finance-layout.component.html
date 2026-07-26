@@ -47,6 +47,21 @@
       </nav>
     </div>
 
+    <!-- User Manual — deliberately its own item, not part of navItems,
+         so it sits in the empty flexible space just above the profile
+         section instead of inside the main nav list (see .sidebar-manual
+         in the stylesheet). Same nav-item styling/hover/active state as
+         every item above. -->
+    <div class="sidebar-manual">
+      <a routerLink="/finance/user-manual"
+         class="nav-item"
+         [class.active]="isActive('/finance/user-manual')"
+         (click)="closeSidebar()">
+        <i class="ph-duotone ph-book-open"></i>
+        <span>User Manual</span>
+      </a>
+    </div>
+
     <!-- Sidebar Bottom: User + Logout Dropdown -->
     <div class="sidebar-bottom">
       <div class="user-menu-wrapper">

@@ -1,0 +1,410 @@
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="manual-header">
+    <h1 class="manual-title">
+      <i class="ph-duotone ph-book-open"></i>
+      {{ isFinance ? 'Finance' : 'Auditor' }} User Manual
+    </h1>
+    <p class="manual-subtitle" *ngIf="isFinance">
+      A quick guide to submitting, tracking, and correcting documents in AuditLens.
+    </p>
+    <p class="manual-subtitle" *ngIf="!isFinance">
+      A quick guide to reviewing, investigating, and deciding on transactions in AuditLens.
+    </p>
+
+    <div class="manual-search-bar">
+      <i class="ph-duotone ph-magnifying-glass"></i>
+      <input type="text" placeholder="Search manual..." [(ngModel)]="searchQuery" />
+      <button class="manual-search-clear" *ngIf="searchQuery" (click)="searchQuery = ''" aria-label="Clear search">
+        <i class="ph-duotone ph-x"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- FINANCE USER MANUAL -->
+  <!-- ============================================================ -->
+  <ng-container *ngIf="isFinance">
+
+    <!-- 1. Upload Document -->
+    <div class="manual-card" *ngIf="matches('upload document invoice ocr extraction data validation audit processing submit')">
+      <button class="manual-card-header" (click)="toggleSection('f-upload')" [class.expanded]="isExpanded('f-upload')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-upload-simple"></i>
+          <span class="manual-card-title">1. Upload Document</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('f-upload')">
+        <p class="manual-purpose"><strong>Purpose:</strong> submit invoice documents to AuditLens for OCR extraction and audit review.</p>
+
+        <p class="manual-label">Workflow</p>
+        <div class="workflow-row">
+          <ng-container *ngFor="let step of uploadWorkflowSteps; let last = last">
+            <div class="workflow-step">{{ step }}</div>
+            <i *ngIf="!last" class="ph-duotone ph-arrow-down workflow-arrow"></i>
+          </ng-container>
+        </div>
+
+        <ul class="manual-list">
+          <li>Go to <strong>Upload Document</strong> and choose a PDF or image (JPG/PNG) of the invoice.</li>
+          <li>AuditLens accepts a scanned copy, a phone photo, or a digitally-generated PDF — no special formatting needed.</li>
+          <li>After upload, the document is automatically OCR/AI-extracted, then moves to <strong>OCR Review</strong> for you to confirm, and finally becomes visible to auditors for three-way matching and audit processing.</li>
+        </ul>
+
+        <app-screenshot-placeholder label="Add real system screenshot here — Upload Document page"></app-screenshot-placeholder>
+
+        <a class="manual-open-btn" routerLink="/finance/upload">
+          <i class="ph-duotone ph-arrow-square-out"></i> Open Upload Document
+        </a>
+      </div>
+    </div>
+
+    <!-- 2. Transaction Package -->
+    <div class="manual-card" *ngIf="matches('transaction package invoice purchase order po goods receipt gr group')">
+      <button class="manual-card-header" (click)="toggleSection('f-package')" [class.expanded]="isExpanded('f-package')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-package"></i>
+          <span class="manual-card-title">2. Transaction Package</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('f-package')">
+        <p>A <strong>Transaction Package</strong> groups documents that belong to the same procurement case, so an auditor sees them together instead of as separate, disconnected uploads. A package can contain more than one invoice — e.g. when a single Purchase Order is billed across several invoices.</p>
+
+        <p class="manual-label">Document relationships</p>
+        <div class="doc-relationship-row">
+          <span class="doc-chip"><i class="ph-duotone ph-file-text"></i> Invoice</span>
+          <span class="doc-chip"><i class="ph-duotone ph-clipboard-text"></i> Purchase Order (PO)</span>
+          <span class="doc-chip"><i class="ph-duotone ph-truck"></i> Goods Receipt (GR)</span>
+        </div>
+
+        <p class="manual-label">Examples</p>
+        <ul class="manual-list">
+          <li><strong>Single invoice package</strong> — one invoice grouped on its own.</li>
+          <li><strong>Multiple invoice package</strong> — several invoices billed against the same order, grouped together.</li>
+          <li><strong>Invoice + PO + GR package</strong> — the full three-way set for one procurement case.</li>
+        </ul>
+
+        <app-screenshot-placeholder label="Add real system screenshot here — Transaction Package page"></app-screenshot-placeholder>
+
+        <a class="manual-open-btn" routerLink="/finance/transactions">
+          <i class="ph-duotone ph-arrow-square-out"></i> Open Transactions
+        </a>
+      </div>
+    </div>
+
+    <!-- 3. OCR Review -->
+    <div class="manual-card" *ngIf="matches('ocr review vendor invoice number date amount line items correct confirm')">
+      <button class="manual-card-header" (click)="toggleSection('f-ocr')" [class.expanded]="isExpanded('f-ocr')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-scan"></i>
+          <span class="manual-card-title">3. OCR Review</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('f-ocr')">
+        <p class="manual-purpose"><strong>Purpose:</strong> review the invoice information AuditLens extracted automatically before it goes to audit.</p>
+
+        <p class="manual-label">Fields to check</p>
+        <ul class="manual-fields-list">
+          <li><i class="ph-duotone ph-storefront"></i> Vendor</li>
+          <li><i class="ph-duotone ph-hash"></i> Invoice number</li>
+          <li><i class="ph-duotone ph-calendar-blank"></i> Invoice date</li>
+          <li><i class="ph-duotone ph-currency-circle-dollar"></i> Amount</li>
+          <li><i class="ph-duotone ph-list-bullets"></i> Line items</li>
+        </ul>
+
+        <p class="manual-label">What to do</p>
+        <ul class="manual-list">
+          <li>Review each extracted field against the original document.</li>
+          <li>Correct any value OCR read incorrectly.</li>
+          <li>Confirm the information once it's accurate.</li>
+        </ul>
+
+        <app-screenshot-placeholder label="Add real system screenshot here — OCR Review page"></app-screenshot-placeholder>
+
+        <a class="manual-open-btn" routerLink="/finance/ocr-review">
+          <i class="ph-duotone ph-arrow-square-out"></i> Open OCR Review
+        </a>
+      </div>
+    </div>
+
+    <!-- 4. Correction Center -->
+    <div class="manual-card" *ngIf="matches('correction center auditor request missing information respond')">
+      <button class="manual-card-header" (click)="toggleSection('f-correction')" [class.expanded]="isExpanded('f-correction')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-arrow-u-up-left"></i>
+          <span class="manual-card-title">4. Correction Center</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('f-correction')">
+        <ul class="manual-list">
+          <li>An auditor sends a document back here when something needs your attention — a missing document, an unclear field, or a value that needs verifying.</li>
+          <li>Open the case to see the auditor's exact reason and requested action.</li>
+          <li>Upload the missing document or correct the flagged information, then respond so the auditor can review it again.</li>
+        </ul>
+
+        <a class="manual-open-btn" routerLink="/finance/corrections">
+          <i class="ph-duotone ph-arrow-square-out"></i> Open Correction Center
+        </a>
+      </div>
+    </div>
+
+    <!-- 5. Reports -->
+    <div class="manual-card" *ngIf="matches('reports monitoring follow-up')">
+      <button class="manual-card-header" (click)="toggleSection('f-reports')" [class.expanded]="isExpanded('f-reports')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-file-text"></i>
+          <span class="manual-card-title">5. Reports</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('f-reports')">
+        <ul class="manual-list">
+          <li>Reports summarize your submitted documents and their current status at a glance.</li>
+          <li>Use them to monitor what's pending, what was sent back, and what still needs follow-up, without opening every record individually.</li>
+        </ul>
+
+        <a class="manual-open-btn" routerLink="/finance/report">
+          <i class="ph-duotone ph-arrow-square-out"></i> Open Reports
+        </a>
+      </div>
+    </div>
+
+  </ng-container>
+
+  <!-- ============================================================ -->
+  <!-- AUDITOR USER MANUAL -->
+  <!-- ============================================================ -->
+  <ng-container *ngIf="!isFinance">
+
+    <!-- 1. Review Queue -->
+    <div class="manual-card" *ngIf="matches('review queue prioritization status filtering risk filtering transaction details')">
+      <button class="manual-card-header" (click)="toggleSection('a-queue')" [class.expanded]="isExpanded('a-queue')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-list-checks"></i>
+          <span class="manual-card-title">1. Review Queue</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('a-queue')">
+        <p class="manual-purpose"><strong>Purpose:</strong> see every transaction assigned for your review in one prioritized list.</p>
+        <ul class="manual-list">
+          <li><strong>Prioritization</strong> — cases needing attention surface first, instead of a plain chronological list.</li>
+          <li><strong>Status filtering</strong> — narrow the queue to a specific stage of review.</li>
+          <li><strong>Risk filtering</strong> — narrow the queue to a specific risk level.</li>
+          <li>Click any row to open its full transaction detail.</li>
+        </ul>
+
+        <app-screenshot-placeholder label="Add real system screenshot here — Review Queue page"></app-screenshot-placeholder>
+
+        <a class="manual-open-btn" routerLink="/auditor/review-queue">
+          <i class="ph-duotone ph-arrow-square-out"></i> Open Review Queue
+        </a>
+      </div>
+    </div>
+
+    <!-- 2. Exception Handling -->
+    <div class="manual-card" *ngIf="matches('exception handling missing documents matching issues risk findings investigate document findings')">
+      <button class="manual-card-header" (click)="toggleSection('a-exceptions')" [class.expanded]="isExpanded('a-exceptions')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-warning-circle"></i>
+          <span class="manual-card-title">2. Exception Handling</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('a-exceptions')">
+        <p class="manual-label">Common exceptions</p>
+        <ul class="manual-list">
+          <li><strong>Missing documents</strong> — the PO or GR hasn't been uploaded yet.</li>
+          <li><strong>Matching issues</strong> — a field (vendor, amount, PO reference, line items) doesn't agree across documents.</li>
+          <li><strong>Risk findings</strong> — an anomaly or authenticity concern was detected.</li>
+        </ul>
+        <ul class="manual-list">
+          <li>Open the exception to see exactly what's wrong and why, using the record's Exception Summary and Field Comparison.</li>
+          <li>Document your findings in the Remarks/Notes field before approving or sending the case back.</li>
+        </ul>
+
+        <app-screenshot-placeholder label="Add real system screenshot here — Exception Detail page"></app-screenshot-placeholder>
+
+        <a class="manual-open-btn" routerLink="/auditor/exceptions">
+          <i class="ph-duotone ph-arrow-square-out"></i> Open Exceptions
+        </a>
+      </div>
+    </div>
+
+    <!-- 3. Authenticity Verification -->
+    <div class="manual-card" *ngIf="matches('authenticity verification results risk interpretation genuine tampering')">
+      <button class="manual-card-header" (click)="toggleSection('a-authenticity')" [class.expanded]="isExpanded('a-authenticity')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-shield-check"></i>
+          <span class="manual-card-title">3. Authenticity Verification</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('a-authenticity')">
+        <ul class="manual-list">
+          <li><strong>Purpose:</strong> check whether a document's visual evidence (logo, company name, stamp, signature) matches what a genuine document from that vendor should show.</li>
+          <li><strong>Verification results</strong> — each check returns Passed or Warning, with the specific evidence it found or couldn't find.</li>
+          <li><strong>Risk interpretation</strong> — a Warning is advisory, not a verdict of fraud — use it alongside the rest of the case to decide whether to verify further with the vendor.</li>
+        </ul>
+
+        <a class="manual-open-btn" routerLink="/auditor/authenticity">
+          <i class="ph-duotone ph-arrow-square-out"></i> Open Authenticity
+        </a>
+      </div>
+    </div>
+
+    <!-- 4. Anomaly Detection -->
+    <div class="manual-card" *ngIf="matches('anomaly detection amount anomaly weekend transaction duplicate invoice severity high medium low risk')">
+      <button class="manual-card-header" (click)="toggleSection('a-anomaly')" [class.expanded]="isExpanded('a-anomaly')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-sparkle"></i>
+          <span class="manual-card-title">4. Anomaly Detection</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('a-anomaly')">
+        <p class="manual-label">Common anomaly types</p>
+        <ul class="manual-list">
+          <li><strong>Amount anomaly</strong> — the invoice amount is unusually high compared to this vendor's history.</li>
+          <li><strong>Weekend transaction</strong> — the invoice is dated on a weekend, unusual for typical business activity.</li>
+          <li><strong>Duplicate invoice</strong> — this invoice closely matches another already in the system.</li>
+        </ul>
+
+        <p class="manual-label">Severity</p>
+        <div class="severity-row severity-high">
+          <span class="severity-dot"></span>
+          <div>
+            <p class="severity-label">High Risk</p>
+            <p class="severity-desc">Requires investigation.</p>
+          </div>
+        </div>
+        <div class="severity-row severity-medium">
+          <span class="severity-dot"></span>
+          <div>
+            <p class="severity-label">Medium Risk</p>
+            <p class="severity-desc">Requires verification.</p>
+          </div>
+        </div>
+        <div class="severity-row severity-low">
+          <span class="severity-dot"></span>
+          <div>
+            <p class="severity-label">Low Risk</p>
+            <p class="severity-desc">Informational context.</p>
+          </div>
+        </div>
+
+        <a class="manual-open-btn" routerLink="/auditor/anomalies">
+          <i class="ph-duotone ph-arrow-square-out"></i> Open Anomaly Detection
+        </a>
+      </div>
+    </div>
+
+    <!-- 5. AI Audit Assistant -->
+    <div class="manual-card" *ngIf="matches('ai audit assistant explain exception explain risk approval assessment generate audit remark prepare send back instruction')">
+      <button class="manual-card-header" (click)="toggleSection('a-ai')" [class.expanded]="isExpanded('a-ai')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-robot"></i>
+          <span class="manual-card-title">5. AI Audit Assistant</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('a-ai')">
+        <ul class="manual-list">
+          <li><strong>Explain Exception</strong> — understand detected issues in plain language.</li>
+          <li><strong>Explain Risk</strong> — understand the risk impact of this case.</li>
+          <li><strong>Approval Assessment</strong> — evaluate approval readiness before the auditor decides.</li>
+          <li><strong>Generate Audit Remark</strong> — assist with audit documentation.</li>
+          <li><strong>Prepare Send Back Instruction</strong> — help communicate required corrections to Finance.</li>
+        </ul>
+
+        <div class="manual-important">
+          <i class="ph-duotone ph-shield-warning"></i>
+          <p>AI supports auditor judgement. AI does <strong>NOT</strong> automatically approve transactions.</p>
+        </div>
+
+        <app-screenshot-placeholder label="Add real system screenshot here — AI Audit Assistant panel"></app-screenshot-placeholder>
+        <app-screenshot-placeholder label="Add real system screenshot here — Approval Assessment result"></app-screenshot-placeholder>
+
+        <a class="manual-open-btn" routerLink="/auditor/review-queue">
+          <i class="ph-duotone ph-arrow-square-out"></i> Open AI Audit Assistant
+        </a>
+        <p class="manual-note">Available inside each record's Audit Decision panel — open any record from the queue to reach it.</p>
+      </div>
+    </div>
+
+    <!-- 6. Approval Workflow -->
+    <div class="manual-card" *ngIf="matches('approval workflow ai assessment auditor review final decision ready not ready requires review')">
+      <button class="manual-card-header" (click)="toggleSection('a-workflow')" [class.expanded]="isExpanded('a-workflow')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-flow-arrow"></i>
+          <span class="manual-card-title">6. Approval Workflow</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('a-workflow')">
+        <div class="workflow-row">
+          <ng-container *ngFor="let step of approvalWorkflowSteps; let last = last">
+            <div class="workflow-step">{{ step }}</div>
+            <i *ngIf="!last" class="ph-duotone ph-arrow-down workflow-arrow"></i>
+          </ng-container>
+        </div>
+
+        <div class="severity-row severity-low">
+          <span class="severity-dot"></span>
+          <div>
+            <p class="severity-label">Ready</p>
+            <p class="severity-desc">Evidence is sufficient.</p>
+          </div>
+        </div>
+        <div class="severity-row severity-high">
+          <span class="severity-dot"></span>
+          <div>
+            <p class="severity-label">Not Ready</p>
+            <p class="severity-desc">Important evidence is missing.</p>
+          </div>
+        </div>
+        <div class="severity-row severity-medium">
+          <span class="severity-dot"></span>
+          <div>
+            <p class="severity-label">Requires Review</p>
+            <p class="severity-desc">Further investigation required.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </ng-container>
+
+  <!-- ============================================================ -->
+  <!-- FAQ -->
+  <!-- ============================================================ -->
+  <div class="manual-faq-section">
+    <h2 class="manual-faq-title"><i class="ph-duotone ph-question"></i> Frequently Asked Questions</h2>
+
+    <ng-container *ngIf="isFinance">
+      <div class="faq-item" *ngFor="let faq of financeFaqs" [hidden]="!matches(faq.question + ' ' + faq.answer)">
+        <button class="faq-question" (click)="toggleSection(faq.id)" [class.expanded]="isExpanded(faq.id)">
+          <span>{{ faq.question }}</span>
+          <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+        </button>
+        <p class="faq-answer" *ngIf="isExpanded(faq.id)">{{ faq.answer }}</p>
+      </div>
+    </ng-container>
+
+    <ng-container *ngIf="!isFinance">
+      <div class="faq-item" *ngFor="let faq of auditorFaqs" [hidden]="!matches(faq.question + ' ' + faq.answer)">
+        <button class="faq-question" (click)="toggleSection(faq.id)" [class.expanded]="isExpanded(faq.id)">
+          <span>{{ faq.question }}</span>
+          <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+        </button>
+        <p class="faq-answer" *ngIf="isExpanded(faq.id)">{{ faq.answer }}</p>
+      </div>
+    </ng-container>
+  </div>
+
+</div>

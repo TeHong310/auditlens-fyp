@@ -26,10 +26,16 @@ import { AdminLayoutComponent } from './admin/admin-layout/admin-layout.componen
 import { AdminDashboardComponent } from './admin/dashboard/admin-dashboard.component';
 import { AdminUsersComponent } from './admin/users/admin-users.component';
 import { AdminDocumentsComponent } from './admin/documents/admin-documents.component';
+import { UserManualComponent } from './user-manual/user-manual.component';
+import { UserManualRedirectComponent } from './user-manual/user-manual-redirect.component';
 export const routes: Routes = [
   { path: '', redirectTo: 'login', pathMatch: 'full' },
   { path: 'login', component: LoginComponent },
   { path: 'register', component: RegisterComponent },
+  // Bare /user-manual (e.g. a bookmarked/typed URL) forwards to whichever
+  // of the two portal-nested routes below matches the logged-in user's
+  // role, so the sidebar-integrated page is always what's actually shown.
+  { path: 'user-manual', component: UserManualRedirectComponent },
   {
     path: 'finance',
     component: FinanceLayoutComponent,
@@ -45,6 +51,7 @@ export const routes: Routes = [
       { path: 'transactions/create', component: FinanceTransactionCreateComponent },
       { path: 'transactions/detail', component: FinanceTransactionDetailComponent },
       { path: 'profile', component: FinanceProfileComponent },
+      { path: 'user-manual', component: UserManualComponent },
       { path: '', redirectTo: 'home', pathMatch: 'full' }
     ]
   },
@@ -61,6 +68,7 @@ export const routes: Routes = [
       { path: 'authenticity/:documentId', component: AuditorAuthenticityDetailComponent },
       { path: 'calendar', component: CalendarComponent },
       { path: 'report', component: AuditorReportComponent },
+      { path: 'user-manual', component: UserManualComponent },
       { path: '', redirectTo: 'home', pathMatch: 'full' }
     ]
   },

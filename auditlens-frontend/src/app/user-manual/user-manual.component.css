@@ -1,0 +1,365 @@
+* { box-sizing: border-box; }
+
+.page-wrapper {
+  padding: 20px 28px 60px;
+  background: var(--bg-app);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+  max-width: 900px;
+}
+
+/* Header */
+.manual-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.manual-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.manual-title i { color: var(--accent-soft); font-size: 26px; }
+
+.manual-subtitle {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.manual-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-top: 4px;
+}
+
+.manual-search-bar i { color: var(--text-muted); font-size: 16px; }
+
+.manual-search-bar input {
+  flex: 1;
+  border: none;
+  background: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 13.5px;
+}
+
+.manual-search-bar input::placeholder { color: var(--text-muted); }
+
+.manual-search-clear {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+}
+
+.manual-search-clear:hover { color: var(--text-primary); }
+
+/* Accordion cards */
+.manual-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.manual-card-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background .18s ease;
+}
+
+.manual-card-header:hover { background: var(--bg-hover); }
+
+.manual-card-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.manual-card-header-left i {
+  font-size: 20px;
+  color: var(--accent-soft);
+  flex-shrink: 0;
+}
+
+.manual-card-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.manual-card-chevron {
+  color: var(--text-muted);
+  font-size: 16px;
+  transition: transform .2s ease;
+  flex-shrink: 0;
+}
+
+.manual-card-header.expanded .manual-card-chevron { transform: rotate(180deg); }
+
+.manual-card-body {
+  padding: 0 18px 20px;
+  border-top: 1px solid var(--bg-hover);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.manual-purpose { font-size: 13.5px; color: var(--text-primary); margin: 0; }
+
+.manual-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 4px 0 -4px;
+}
+
+.manual-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.manual-list strong { color: var(--text-primary); }
+
+.manual-fields-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.manual-fields-list li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-hover);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.manual-fields-list i { color: var(--accent-soft); font-size: 15px; }
+
+/* Workflow diagram */
+.workflow-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.workflow-step {
+  background: var(--accent-bg);
+  color: var(--accent-soft);
+  border: 1px solid var(--accent-soft);
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.workflow-arrow {
+  color: var(--text-muted);
+  font-size: 16px;
+  margin-left: 16px;
+}
+
+/* Document relationship chips */
+.doc-relationship-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.doc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-hover);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.doc-chip i { color: var(--accent-soft); font-size: 15px; }
+
+/* Severity / readiness legend rows — reuse the SAME danger/warning/
+   success tokens the app's own risk-chip/status-banner styling already
+   uses, so a "High Risk" here looks identical to one anywhere else. */
+.severity-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--bg-hover);
+}
+
+.severity-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.severity-high .severity-dot   { background: var(--danger); }
+.severity-medium .severity-dot { background: var(--warning); }
+.severity-low .severity-dot    { background: var(--success); }
+
+.severity-label {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.severity-high .severity-label   { color: var(--danger); }
+.severity-medium .severity-label { color: var(--warning); }
+.severity-low .severity-label    { color: var(--success); }
+
+.severity-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 1px 0 0;
+}
+
+.manual-important {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.manual-important i { color: var(--warning); font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+.manual-important p { font-size: 13px; color: var(--text-primary); margin: 0; }
+
+.manual-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  background: var(--accent);
+  color: var(--text-primary);
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: opacity .18s ease;
+}
+
+.manual-open-btn:hover { opacity: 0.88; }
+
+.manual-note {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin: -4px 0 0;
+}
+
+/* FAQ */
+.manual-faq-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.manual-faq-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 4px;
+}
+
+.manual-faq-title i { color: var(--accent-soft); font-size: 18px; }
+
+.faq-item {
+  border-top: 1px solid var(--bg-hover);
+  padding-top: 10px;
+}
+
+.faq-item:first-of-type { border-top: none; padding-top: 0; }
+
+.faq-question {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 4px 0;
+}
+
+.faq-question .manual-card-chevron { color: var(--text-muted); font-size: 15px; }
+.faq-question.expanded .manual-card-chevron { transform: rotate(180deg); }
+
+.faq-answer {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 8px 0 4px;
+  line-height: 1.55;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .page-wrapper { padding: 16px 14px 40px; }
+  .manual-title { font-size: 19px; }
+  .manual-fields-list { flex-direction: column; align-items: flex-start; }
+}
