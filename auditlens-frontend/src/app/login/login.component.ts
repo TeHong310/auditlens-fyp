@@ -22,7 +22,7 @@ export class LoginComponent {
   private apiUrl = environment.apiUrl;
 
   pipelineStages = [
-    { label: 'Document Upload', icon: 'ph-cloud-arrow-up' },
+    { label: 'Document Upload', icon: 'ph-file-arrow-up' },
     { label: 'AI OCR Extraction', icon: 'ph-sparkle' },
     { label: 'Validation & Three-way Matching', icon: 'ph-arrows-clockwise' },
     { label: 'Risk & Anomaly Detection', icon: 'ph-shield-warning' },

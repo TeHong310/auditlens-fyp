@@ -24,7 +24,7 @@
     <div class="pipeline">
       <div class="pipeline-steps">
         <div class="pipeline-step" *ngFor="let stage of pipelineStages; let i = index" [style.animation-delay.ms]="i * 250">
-          <div class="pipeline-icon"><i class="ph-duotone" [ngClass]="stage.icon"></i></div>
+          <div class="pipeline-icon"><i class="ph" [ngClass]="stage.icon"></i></div>
           <p class="pipeline-label">{{ stage.label }}</p>
         </div>
       </div>
@@ -32,7 +32,7 @@
 
     <div class="capabilities-grid">
       <div class="capability-card" *ngFor="let cap of capabilities">
-        <span class="capability-icon"><i class="ph-duotone" [ngClass]="cap.icon"></i></span>
+        <span class="capability-icon"><i class="ph" [ngClass]="cap.icon"></i></span>
         <div class="capability-text">
           <p class="capability-title">{{ cap.title }}</p>
           <p class="capability-desc">{{ cap.desc }}</p>

@@ -15766,3 +15766,131 @@ Rollback instructions:
   one SVG block, its now-unused CSS rules, and 6 icon string values);
   reverting restores the prior connector-line/icon set with no data
   or schema implications.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-27
+What was changed:
+  Premium/consistency pass on the pipeline and capability card icons
+  (visual-only, same scope as the prior two icon-focused entries).
+  - auditlens-frontend/src/app/login/login.component.html: changed
+    the icon <i> base class from "ph-duotone" to plain "ph" for both
+    .pipeline-icon and .capability-icon (every other ph-duotone usage
+    on this page - the email/password field icons, eye toggle,
+    workspace badge, security checklist, error icon, button arrow -
+    is untouched, out of this task's scope). "ph" is Phosphor's
+    Regular weight: a single-color, consistent-stroke line-icon style
+    (~1.75px-equivalent stroke at their standard grid) as opposed to
+    duotone's two-tone filled style, which is what was producing the
+    "mixed thin/bold" look. No new icon library was introduced - the
+    Regular weight's stylesheet (@phosphor-icons/web/src/regular) was
+    already loaded globally in angular.json alongside duotone, so
+    this reuses an existing, already-bundled asset rather than adding
+    a dependency (the task's "Lucide or Phosphor" suggestion is
+    satisfied by staying on Phosphor, consistent with every other
+    icon on this page and the rest of the app).
+  - auditlens-frontend/src/app/login/login.component.css:
+    - .pipeline-icon and .capability-icon are now driven by one
+      shared rule (previously two separate, differently-sized rules)
+      so the two truly cannot drift apart: 32x32px tile (was 36px for
+      pipeline, 26px for capability - now identical), 9px radius,
+      18px icon size (was 16px/13px), color #a5b4fc (was
+      var(--accent-soft), i.e. #8B72FF), background changed from a
+      flat rgba(20,22,40,0.8) fill to linear-gradient(135deg,
+      rgba(99,102,241,0.15), rgba(168,85,247,0.1)) per the requested
+      indigo-to-purple inner glow. Border and box-shadow glow are
+      unchanged (they already matched the "polished chip" brief).
+  - auditlens-frontend/src/app/login/login.component.ts: Document
+    Upload's icon changed from ph-cloud-arrow-up to ph-file-arrow-up
+    - a closer literal match to the requested "upload/file-up icon"
+      concept (a document with an up-arrow, vs. a cloud). Every other
+      icon already matched its requested concept exactly (OCR =
+      sparkle, matching = arrows-clockwise, risk = shield-warning,
+      assistant = chat-circle-dots, auditor decision = user-check,
+      authenticity = shield-check, approval = check-circle) from the
+      prior icon-refinement pass, so those were left unchanged.
+
+Why:
+  Requested: the icons looked inconsistent in weight (duotone's
+  mixed-fill style read as uneven next to itself at different sizes)
+  and the two grids (pipeline vs. capability) used different tile/
+  icon sizes, undermining the "one consistent icon system" goal.
+
+Confirmed unchanged (safety rules for this phase):
+  - No backend file touched.
+  - No login logic touched.
+  - No routing touched.
+  - No layout sizing/spacing/viewport-fit work touched beyond the
+    icon tiles themselves - re-verified 0px vertical/horizontal
+    overflow at both 1366x768 and 1440x900 after this change (the
+    32px unified tile size nets out close to neutral: pipeline tiles
+    shrank 36px->32px while capability tiles grew 26px->32px).
+  - No content removed - all 6 pipeline step labels and 6 capability
+    card titles/descriptions unchanged.
+  - No animation touched - floatTile, blobPulse, scanSweep all
+    confirmed still present and animating.
+  - Every ph-duotone icon OUTSIDE the pipeline/capability grids
+    (right panel, sidebars, every other page in the app) is
+    untouched - this was scoped exactly to "pipeline steps and
+    capability cards" as instructed.
+
+Test results:
+  - Confirmed all 9 distinct Phosphor Regular icon names used here
+    (file-arrow-up, sparkle, arrows-clockwise, shield-warning,
+    chat-circle-dots, user-check, magnifying-glass, shield-check,
+    check-circle) exist in the already-loaded
+    @phosphor-icons/web/src/regular/style.css before using them, via
+    direct grep of the installed package - not just runtime hope.
+  - npx ng build --configuration production - succeeded (exit 0; new
+    main-*.js bundle hash; same pre-existing bundle-size warnings,
+    unrelated to this change).
+  - Live-verified in a real browser (Playwright):
+    - .pipeline-icon and .capability-icon computed styles confirmed
+      identical: 32x32px, same gradient background-image string,
+      same border color, same #a5b4fc (rgb(165,180,252)) icon color.
+    - All 12 icon <i> elements confirmed font-family "Phosphor" (not
+      "Phosphor-Duotone"), font-size 18px, color rgb(165,180,252),
+      and each resolves to a distinct, non-empty Private Use Area
+      glyph via computed ::before content - including
+      ph-file-arrow-up, the one newly-introduced icon this pass.
+    - Re-confirmed 0px vertical and horizontal overflow at both
+      1366x768 and 1440x900.
+    - Visually confirmed via zoomed screenshots of both the pipeline
+      row and capability grid: consistent single-stroke icons,
+      visually centered in their tiles, uniform size between the two
+      grids, gradient "chip" tiles instead of flat fill.
+  - Re-ran the full prior-phase regression suite (19 checks) at
+    1366x768: 17/19 pass, same 2 pre-existing, already-documented,
+    unrelated failures (invalid-login error banner never rendering) -
+    no new regressions.
+  - Authentication re-verified: a real login with the seeded admin
+    account (loylth910@gmail.com) redirects correctly to /admin/home.
+  - Zero page errors, zero non-404 console errors.
+  - Dev server processes (Angular CLI + esbuild child, Flask + its
+    debug-reloader child) stopped afterward by exact PID.
+
+Build result:
+  Frontend: clean production build, exit 0 (new main-*.js bundle
+  hash). Live browser check: icon tiles confirmed pixel-identical
+  between pipeline and capability grids, all 12 icons confirmed
+  rendering as real Phosphor Regular glyphs in the requested lavender
+  color and gradient tile, 0px viewport overflow unchanged at both
+  target resolutions, 17/19 full regression suite green (2
+  pre-existing, previously-documented, unrelated failures only),
+  authentication confirmed working, zero console/page errors.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false,
+     so Render should auto-deploy the frontend from this push with no
+     separate manual trigger needed on my end.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No database migration needed (no schema changes).
+
+Rollback instructions:
+  Revert this one commit (git revert, or redeploy the previous frontend
+  build) - confined to icon class names/CSS values and one icon string
+  in the login component; reverting restores the prior duotone/mixed-
+  size icon treatment with no data or schema implications.
