@@ -15416,3 +15416,89 @@ Rollback instructions:
   build) - confined to the login component's .html/.css; reverting
   restores the prior pass's login page with no data or schema
   implications.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-27
+What was changed:
+  Fixed a real, previously-undetected bug in the login page's pipeline
+  connector line: the animated indigo-to-purple dashed line above the
+  6 pipeline icons was invisible in every browser, despite the two
+  prior "fix" passes both showing the SVG's computed styles as
+  correct (stroke correctly referencing the gradient, gradient stops
+  correctly resolving to #6366f1/#a855f7). Root cause: the
+  <linearGradient> used the SVG default gradientUnits="objectBoundingBox",
+  and the <line> it painted (x1=20,y1=3 to x2=440,y2=3 - perfectly
+  horizontal) has a bounding box with zero height. A bounding-box-
+  relative gradient can't compute a valid transform against a
+  zero-size dimension, so the browser silently painted nothing -
+  the stroke reference and gradient stops were both technically
+  "correct" (which is why prior getComputedStyle-based checks passed)
+  but nothing ever actually reached the screen.
+  - auditlens-frontend/src/app/login/login.component.html: the
+    <linearGradient id="pipelineLineGrad"> gained
+    gradientUnits="userSpaceOnUse" and explicit x1="20" y1="3" x2="440"
+    y2="3" coordinates (matching the <line>'s own endpoints in the
+    SVG's viewBox space) instead of the default fractional 0-to-1
+    objectBoundingBox coordinates. userSpaceOnUse maps the gradient
+    directly onto the SVG's coordinate system rather than the shape's
+    (degenerate) bounding box, sidestepping the zero-height issue
+    entirely. No other change - same colors, same dasharray, same
+    flowDash animation.
+
+Why:
+  User provided a fresh screenshot of the live (correctly-deployed,
+  cache-confirmed-fresh) page and pointed out the connector line
+  genuinely wasn't there - not a caching issue this time, an actual
+  rendering bug. A closer investigation (zoomed screenshot at the
+  exact pipeline-line region) confirmed zero visible line, prompting
+  the objectBoundingBox/zero-height-bbox root-cause analysis above.
+
+Confirmed unchanged (safety rules for this phase):
+  - No backend file touched.
+  - No login logic touched.
+  - No other route, page, or shared component touched.
+  - Every other element of the pipeline/capability/background work
+    from the two prior passes re-verified unaffected by this change.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; new
+    main-*.js hash confirms the fix is actually captured in the
+    build, same pre-existing bundle-size warnings as before).
+  - Live-verified in a real browser (Playwright):
+    - Zoomed, high-DPI screenshot of the exact connector-line region
+      now shows a clearly visible dashed indigo-to-purple line running
+      the full width above the 6 icons (previously: nothing visible
+      in the same crop, confirmed by a before/after screenshot
+      comparison at 2x device scale).
+    - stroke-dashoffset sampled 3 times over 2 seconds
+      (-13.33 / -29.60 / -5.60), confirming the flowDash animation is
+      still actively running post-fix, not just statically visible.
+  - Re-ran the full prior-phase regression suite (19 checks): 17/19
+    pass, same 2 pre-existing, already-documented, unrelated failures
+    (invalid-login error banner never rendering) - no new regressions.
+  - Dev server processes (Angular CLI + esbuild child, Flask + its
+    debug-reloader child) stopped afterward by exact PID.
+
+Build result:
+  Frontend: clean production build, exit 0 (new bundle hash
+  main-E23TYJFJ.js). Live browser check: connector line now visibly
+  renders and its flow animation is confirmed active; 17/19 full
+  regression suite green (2 pre-existing, previously-documented,
+  unrelated failures only).
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false,
+     so Render should auto-deploy the frontend from this push with no
+     separate manual trigger needed on my end.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No database migration needed (no schema changes).
+
+Rollback instructions:
+  Revert this one commit (git revert, or redeploy the previous frontend
+  build) - a single-attribute-set change to one SVG element in
+  login.component.html; reverting restores the (invisible-line) prior
+  state with no data or schema implications.
