@@ -21,10 +21,11 @@
   padding: 40px 56px;
   position: relative;
   overflow: hidden;
+  background: radial-gradient(120% 100% at 15% 10%, #131a33 0%, #0a0c14 55%), #0a0c14;
 }
 
-/* ── Ambient background: faint grid + two pulsing blue/purple blobs +
-   a slow diagonal scan-line sweep. ── */
+/* ── Ambient background: faint grid + two pulsing indigo/purple glow
+   orbs + a slow diagonal scan-line sweep. ── */
 .ambient-bg {
   position: absolute;
   inset: 0;
@@ -37,41 +38,40 @@
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(color-mix(in srgb, var(--accent-soft) 10%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 10%, transparent) 1px, transparent 1px);
+    linear-gradient(rgba(140, 140, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(140, 140, 255, 0.06) 1px, transparent 1px);
   background-size: 44px 44px;
-  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 32% 38%, #000 0%, transparent 72%);
-  mask-image: radial-gradient(ellipse 70% 60% at 32% 38%, #000 0%, transparent 72%);
-  opacity: 0.6;
+  -webkit-mask-image: radial-gradient(90% 80% at 30% 20%, #000 30%, transparent 80%);
+  mask-image: radial-gradient(90% 80% at 30% 20%, #000 30%, transparent 80%);
 }
 
 .glow-blob {
   position: absolute;
   border-radius: 50%;
-  filter: blur(70px);
-  animation: blobPulse 7s ease-in-out infinite;
+  filter: blur(20px);
 }
 
 .blob-a {
-  top: -120px;
-  right: -100px;
-  width: 360px;
-  height: 360px;
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  top: -160px;
+  left: -120px;
+  width: 520px;
+  height: 520px;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.35), transparent 70%);
+  animation: blobPulse 6s ease-in-out infinite;
 }
 
 .blob-b {
-  bottom: -90px;
-  left: -90px;
-  width: 280px;
-  height: 280px;
-  background: color-mix(in srgb, var(--login-blue) 12%, transparent);
-  animation-delay: 2.5s;
+  bottom: -200px;
+  right: -100px;
+  width: 460px;
+  height: 460px;
+  background: radial-gradient(circle, rgba(168, 85, 247, 0.28), transparent 70%);
+  animation: blobPulse 7s ease-in-out infinite 1.5s;
 }
 
 @keyframes blobPulse {
-  0%, 100% { opacity: 0.55; transform: scale(1); }
-  50% { opacity: 1; transform: scale(1.12); }
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
 }
 
 .scan-line {
@@ -99,27 +99,12 @@
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: 10px;
 }
 
 .brand-mark {
-  width: 34px;
-  height: 34px;
+  width: 140px;
+  height: auto;
   object-fit: contain;
-}
-
-.brand-wordmark {
-  font-size: 18px;
-  font-weight: 800;
-  color: var(--text-primary);
-  letter-spacing: -0.3px;
-}
-
-.lens-accent {
-  background: linear-gradient(135deg, var(--login-blue), var(--accent-soft));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
 }
 
 .headline-block {
@@ -237,9 +222,9 @@
   flex-direction: column;
   gap: 8px;
   padding: 14px;
-  background: color-mix(in srgb, var(--bg-card) 55%, transparent);
-  backdrop-filter: blur(6px);
-  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015));
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
 }
 

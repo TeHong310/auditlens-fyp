@@ -15277,3 +15277,142 @@ Rollback instructions:
   build) - confined to the login component's .html/.css and one new
   image asset (public/auditlens-logo.png); reverting restores the
   prior pass's login page with no data or schema implications.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-27
+What was changed:
+  Second follow-up pass on the login page (previous two entries
+  above), fixing background/logo/card-styling details the user
+  reported as still not matching the reference after the prior pass.
+  Root cause of the mismatch: the prior pass only fixed icon tiles,
+  the connector line, and float timing — it left the left panel's
+  background (still flat, no radial wash/orb-position mismatch) and
+  the capability card container backgrounds (still an opaque dark
+  fill) untouched, and still showed a separate "AuditLens" text label
+  next to the logo. This pass uses the exact literal values from the
+  same authoritative design source (AuditLens Login.dc.html, already
+  fetched via DesignSync in the prior pass and still available) to
+  fix all of it in one go:
+  - auditlens-frontend/src/app/login/login.component.css:
+    - .left-panel: added the exact radial-gradient background wash —
+      radial-gradient(120% 100% at 15% 10%, #131a33 0%, #0a0c14 55%),
+      #0a0c14 — replacing the flat var(--bg-app) it inherited before
+      (right panel keeps the flat background, unchanged, per the
+      user's explicit "right login card: keep as is").
+    - .bg-grid: swapped the color-mix()-based grid lines for the
+      source's exact rgba(140,140,255,0.06) lines at the same 44px
+      spacing, masked with the source's exact radial-gradient(90% 80%
+      at 30% 20%, ...) instead of the previous ellipse mask.
+    - .blob-a / .blob-b (the two glow orbs): were positioned top-right
+      (indigo-tinted) and bottom-left (blue-tinted) in the prior pass
+      — swapped to the source's actual corners and colors: blob-a is
+      now top-left, 520px, radial-gradient(circle, rgba(99,102,241,
+      0.35), transparent 70%), 6s pulse; blob-b is now bottom-right,
+      460px, radial-gradient(circle, rgba(168,85,247,0.28), transparent
+      70%), 7s pulse with a 1.5s delay offset — matching "indigo top-
+      left, purple bottom-right" exactly. Also switched blur(70px) to
+      the source's blur(20px), and the pulse keyframe from an opacity+
+      scale combo to opacity-only (0.55 -> 1 -> 0.55), matching the
+      source's pulseGlow keyframe precisely.
+    - .brand-mark: resized from 34px (icon-only sizing, meant to sit
+      next to a separate text label) to 140px, height auto — within
+      the user's requested ~120-150px range and matching the source's
+      148px.
+    - .brand-wordmark / .lens-accent: removed. At 34px the logo image
+      reads as icon-only, so the prior pass assumed it needed a
+      separate "AuditLens" text label next to it: it doesn't — at the
+      correct 140px display size the image itself clearly shows
+      "AuditLens" stacked under the icon mark (confirmed visually in
+      this pass's screenshot), so the standalone text span was
+      redundant and has been removed, along with its now-orphaned
+      .lens-accent gradient-text rule (grepped first to confirm it
+      was not referenced anywhere else in the app).
+    - .capability-card: background changed from
+      color-mix(in srgb, var(--bg-card) 55%, transparent) (an opaque-
+      looking dark fill) to the source's actual glass treatment —
+      linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,
+      255,0.015)) with a rgba(255,255,255,0.08) border and
+      backdrop-filter: blur(10px) (up from blur(6px), matching the
+      source's card-level blur specifically, distinct from the 6px
+      used on the icon tiles inside the cards).
+  - auditlens-frontend/src/app/login/login.component.html: removed
+    the <span class="brand-wordmark"> element next to the logo <img>;
+    the <img> itself is unchanged (still auditlens-logo.png from the
+    prior pass, just rendered larger via the CSS change above).
+  - Icon tiles (.pipeline-icon / .capability-icon), the SVG connector
+    line, and the float animation timing were already correct from
+    the prior pass (verified, not re-touched this pass).
+
+Why:
+  User reported the page still didn't visually match the reference
+  after the prior fix pass. Investigation (comparing the live render's
+  computed styles against the exact values in the already-fetched
+  design source file) found the prior pass had correctly fixed the
+  4 things it targeted (icon tiles, connector line, float animation,
+  logo asset) but had missed 3 things the user's restated request
+  called out again: the background glow/grid treatment, the
+  redundant text wordmark, and the capability card's opaque-looking
+  background — all now corrected against the same authoritative
+  source.
+
+Confirmed unchanged (safety rules for this phase):
+  - No backend file touched.
+  - No login logic touched.
+  - No other route, page, or shared component touched.
+  - Right panel (login card) untouched, per explicit instruction.
+  - Icon tiles, connector line, and float animation from the prior
+    pass re-verified correct and left as-is.
+
+Test results:
+  - npx ng build --configuration production — succeeded (exit 0; same
+    pre-existing bundle-size warnings, unrelated to this change).
+  - Live-verified in a real browser (Playwright):
+    - No page errors on load.
+    - Logo renders at 140px computed width, naturalWidth 365 (real
+      image loaded, not broken), no .brand-wordmark element in the
+      DOM at all.
+    - .left-panel's computed background-image includes a
+      radial-gradient (confirms the wash is actually applied, not
+      just present in source CSS that got overridden).
+    - blob-a computed position confirmed top:-160px/left:-120px with
+      the indigo radial-gradient color; blob-b confirmed bottom:
+      -200px/right:-100px with the purple radial-gradient color —
+      i.e. actually rendering in the corners the user asked for, not
+      just declared in CSS.
+    - capability-card computed background-image is the white-alpha
+      linear-gradient (not the old opaque dark fill), border color is
+      rgba(255,255,255,0.08), backdrop-filter is blur(10px).
+  - Re-ran the full prior-phase regression suite (19 checks): 17/19
+    pass, same 2 pre-existing, already-documented, unrelated failures
+    (invalid-login error banner never rendering) — no new regressions.
+  - Visually confirmed via full-page screenshot: indigo glow visible
+    top-left, purple glow visible bottom-right, faint grid pattern
+    visible across the panel, capability cards now read as translucent
+    glass instead of flat black, logo renders large with its own
+    baked-in wordmark text, right panel (login card) visually
+    unchanged from before.
+  - Dev server processes (Angular CLI + esbuild child, Flask + its
+    debug-reloader child) stopped afterward by exact PID.
+
+Build result:
+  Frontend: clean production build, exit 0. Live browser check: all
+  background/logo/card computed-style assertions pass; 17/19 full
+  regression suite green (2 pre-existing, previously-documented,
+  unrelated failures only).
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false,
+     so Render should auto-deploy the frontend from this push with no
+     separate manual trigger needed on my end.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No database migration needed (no schema changes).
+
+Rollback instructions:
+  Revert this one commit (git revert, or redeploy the previous frontend
+  build) - confined to the login component's .html/.css; reverting
+  restores the prior pass's login page with no data or schema
+  implications.
