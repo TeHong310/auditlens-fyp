@@ -15627,3 +15627,142 @@ Rollback instructions:
   build) - confined to spacing/sizing values in the login component's
   .css plus a one-line global body-margin reset; reverting restores
   the prior (scrolling) layout with no data or schema implications.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-27
+What was changed:
+  Visual-only refinement of the login page: removed the dashed
+  connector line above the workflow pipeline, and swapped several
+  pipeline/capability icons for softer, friendlier alternatives. No
+  layout sizing, spacing values, animations (other than the removed
+  line's own), auth logic, API calls, role detection, or routing
+  touched - the prior viewport-fit work is untouched.
+  - auditlens-frontend/src/app/login/login.component.html: removed
+    the entire <svg class="pipeline-line">...</svg> block (the line
+    element, its gradient defs, and stops) from above the pipeline
+    steps row. The 6 pipeline-step tiles, their labels, and their
+    *ngFor loop are otherwise unchanged.
+  - auditlens-frontend/src/app/login/login.component.css: removed
+    .pipeline-line, .pipeline-line line, and @keyframes flowDash (the
+    rules that only existed to style/animate the now-removed line),
+    removed the .pipeline-line reference from both the
+    prefers-reduced-motion guard and the 768px responsive block. No
+    other spacing, sizing, or animation rule touched -
+    .pipeline-step's floatTile animation, .pipeline-icon's dark-glass
+    styling, and the capabilities-grid layout are all byte-for-byte
+    unchanged.
+  - auditlens-frontend/src/app/login/login.component.ts: updated the
+    `icon` field on 4 of the 6 pipelineStages entries and 2 of the 6
+    capabilities entries (kept the other icons where they already
+    read as soft/friendly, per the task's explicit "only improve what
+    needs it" framing):
+    - Document Upload: ph-upload-simple -> ph-cloud-arrow-up (a
+      rounded cloud+arrow, the standard modern-SaaS "upload" glyph,
+      instead of a flat arrow-into-tray icon).
+    - AI OCR Extraction: ph-scan -> ph-sparkle (a soft AI-magic
+      sparkle instead of a rigid viewfinder/scanner-frame icon).
+    - Validation & Three-way Matching (both the pipeline step AND the
+      matching capability card, kept consistent with each other):
+      ph-arrows-left-right -> ph-arrows-clockwise (a rounded sync/
+      reconcile loop instead of two straight opposing arrows).
+    - AI Audit Assistant (both the pipeline step AND the matching
+      capability card): ph-robot -> ph-chat-circle-dots (a friendly
+      chat bubble, matching this feature's actual conversational
+      nature, instead of a mechanical robot-head glyph).
+    - Auditor Decision: ph-gavel -> ph-user-check (a person with a
+      checkmark - reads as approachable human approval rather than a
+      literal courtroom gavel, and reinforces this app's existing
+      "AI never decides, a human auditor does" framing even more
+      directly than before).
+    - Left unchanged (already read as soft/rounded/friendly, matched
+      the task's own per-item guidance, or would have caused
+      duplicate icons between two now-adjacent glyphs): Risk &
+      Anomaly/Exception Detection (ph-shield-warning, explicitly
+      requested to keep this concept), AI Document Analysis
+      (ph-magnifying-glass), Authenticity Verification
+      (ph-shield-check), Approval Intelligence (ph-check-circle).
+
+Why:
+  Requested: the dashed connector line felt too "technical," and
+  several icons (gavel, robot, viewfinder-scan, plain upload arrow)
+  read as rigid/serious rather than the "modern AI SaaS, friendly,
+  professional enterprise" tone wanted - a visual-only icon and
+  connector cleanup, explicitly not a redesign of layout, spacing,
+  animations, or the login card itself.
+
+Confirmed unchanged (safety rules for this phase):
+  - No backend file touched.
+  - No login logic touched - onLogin()/togglePassword()/
+    goToRegister() and all component state are byte-for-byte
+    unchanged; only the `icon` string values inside the
+    pipelineStages/capabilities data arrays changed.
+  - No routing touched.
+  - No layout sizing/spacing/viewport-fit work touched - re-verified
+    0px vertical/horizontal overflow at both 1366x768 and 1440x900,
+    matching the prior phase's result exactly.
+  - No content removed - all 6 pipeline step labels and all 6
+    capability card titles/descriptions unchanged, same text as
+    before.
+  - No animation removed beyond the connector line's own flowDash
+    (which only existed to animate that line) - floatTile (pipeline
+    icon float), blobPulse (background glow), scanSweep (light
+    sweep) all confirmed still present and still animating.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; new
+    main-*.js bundle hash confirms the change is captured; same
+    pre-existing bundle-size warnings, unrelated to this change).
+  - Live-verified in a real browser (Playwright):
+    - .pipeline-line element count is 0 (fully removed, not just
+      hidden).
+    - All 12 pipeline/capability icons (including the 5 newly-
+      applied ones: ph-cloud-arrow-up, ph-sparkle, ph-arrows-
+      clockwise x2, ph-chat-circle-dots x2, ph-user-check) resolve to
+      distinct, non-empty Private Use Area glyphs via computed
+      ::before content - not blank/missing icon placeholders.
+      ph-user-check, ph-sparkle, and ph-chat-circle-dots were already
+      confirmed rendering correctly elsewhere in this app (admin
+      dashboard, calendar, auditor record-detail); ph-cloud-arrow-up
+      and ph-arrows-clockwise were newly verified via this codepoint
+      check specifically since they weren't used anywhere else yet.
+    - Exactly 6 pipeline steps and 6 capability cards present, same
+      label/title text as before.
+    - Re-confirmed 0px vertical and horizontal overflow at both
+      1366x768 and 1440x900 (the viewport-fit work from the prior
+      phase is intact).
+    - Zero page errors, zero non-404 console errors.
+  - Re-ran the full prior-phase regression suite (19 checks) at
+    1366x768: 17/19 pass, same 2 pre-existing, already-documented,
+    unrelated failures (invalid-login error banner never rendering) -
+    no new regressions.
+  - Authentication re-verified: a real login with the seeded admin
+    account (loylth910@gmail.com) redirects correctly to /admin/home.
+  - Dev server processes (Angular CLI + esbuild child, Flask + its
+    debug-reloader child) stopped afterward by exact PID.
+
+Build result:
+  Frontend: clean production build, exit 0 (new main-*.js bundle
+  hash). Live browser check: connector line fully removed, all 12
+  icons (5 newly changed) confirmed rendering as real glyphs, 0px
+  viewport overflow unchanged at both target resolutions, 17/19 full
+  regression suite green (2 pre-existing, previously-documented,
+  unrelated failures only), authentication confirmed working, zero
+  console/page errors.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false,
+     so Render should auto-deploy the frontend from this push with no
+     separate manual trigger needed on my end.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No database migration needed (no schema changes).
+
+Rollback instructions:
+  Revert this one commit (git revert, or redeploy the previous frontend
+  build) - confined to the login component's .html/.css/.ts (removing
+  one SVG block, its now-unused CSS rules, and 6 icon string values);
+  reverting restores the prior connector-line/icon set with no data
+  or schema implications.
