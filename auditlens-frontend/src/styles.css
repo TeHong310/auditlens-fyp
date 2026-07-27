@@ -30,6 +30,7 @@
 }
 
 html, body {
+  margin: 0;
   touch-action: none;
   background: var(--bg-app);
 }

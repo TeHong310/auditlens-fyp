@@ -15502,3 +15502,128 @@ Rollback instructions:
   build) - a single-attribute-set change to one SVG element in
   login.component.html; reverting restores the (invisible-line) prior
   state with no data or schema implications.
+
+----------------------------------------------------------------------
+
+Date: 2026-07-27
+What was changed:
+  Login page layout tightened to fit entirely within one viewport at
+  desktop resolutions (1366x768, 1440x900) with zero vertical
+  scrolling - no content removed, no logic/routing touched.
+  - auditlens-frontend/src/app/login/login.component.css: reduced
+    spacing (not content) across the left panel:
+    - .left-panel: padding 40px 56px -> 28px 48px, gap 28px -> 20px.
+    - .brand-mark (logo): 140px -> 122px wide (still comfortably
+      within the 120-150px range requested in an earlier pass).
+    - .eyebrow / .headline / .subhead: margins tightened (14px ->
+      8-10px), headline font-size 34px -> 28px, subhead line-height
+      1.5 -> 1.4 - text content itself is completely unchanged, only
+      its size/spacing.
+    - .pipeline-line margin, .pipeline-step gap/width, .pipeline-icon
+      size (40px -> 36px), .pipeline-label size: all trimmed
+      slightly. All 6 stages (Document Upload -> Auditor Decision)
+      and their floatTile/flowDash animations are unchanged in logic,
+      only in tile size.
+    - .capabilities-grid gap, .capability-card padding/gap,
+      .capability-icon size (30px -> 26px), .capability-title/desc
+      sizing: all trimmed. All 6 cards and their full copy are
+      unchanged, only their footprint.
+  - auditlens-frontend/src/styles.css: added `margin: 0` to the
+    existing global `html, body` rule. Root cause investigation found
+    the real remaining blocker wasn't the login page's own content at
+    all - the browser's default 8px `body` margin (never reset by
+    this app) was adding a flat 16px (8px top + 8px bottom) to every
+    page's total height, invisible on every other page in this app
+    because they scroll internally or use fixed-position sidebars,
+    but directly causing the login page's forced-no-scroll layout to
+    overflow by exactly 16px even after every other spacing reduction
+    was applied. This is a one-line, standard, app-wide-safe reset
+    (not scoped to login) since no page in this app relies on that
+    default browser margin for its layout.
+
+Why:
+  Requested: the login page must display fully within one desktop
+  viewport (1366x768 and 1440x900 specifically) with no vertical
+  scrollbar, without removing any of the 6 workflow steps or 6
+  feature cards, without touching auth logic or routing.
+
+Confirmed unchanged (safety rules for this phase):
+  - No backend file touched.
+  - No login logic touched - onLogin()/togglePassword()/
+    goToRegister(), pipelineStages/capabilities data arrays, and all
+    component state are byte-for-byte unchanged.
+  - No routing touched.
+  - No content removed - measured and confirmed all 6 pipeline step
+    labels and all 6 capability card titles/descriptions are present,
+    same text as before, only resized/re-spaced.
+  - No animation removed - floatTile (pipeline icon float), flowDash
+    (connector line flow), blobPulse (background glow), scanSweep
+    (light sweep) all confirmed still present and still animating.
+  - html,body margin reset is the only change outside the login
+    component itself; grepped for any page relying on the default 8px
+    body margin (none do - every portal layout uses position:fixed
+    sidebars + independently scrollable main-content).
+
+Test results:
+  - Measured actual overflow before fixing (Playwright,
+    document.documentElement.scrollHeight vs clientHeight): 38px at
+    1366x768, 16px at 1440x900.
+  - After the login.component.css spacing reductions alone: 16px
+    overflow remained at BOTH resolutions identically - the exact
+    match to a flat 8px+8px body margin is what led to finding the
+    real root cause (checked getComputedStyle(document.body).margin
+    directly - confirmed "8px", never reset).
+  - After the styles.css html,body margin fix: 0px overflow at both
+    1366x768 and 1440x900, confirmed via
+    document.documentElement.scrollHeight === clientHeight exactly.
+  - npx ng build --configuration production - succeeded (exit 0; new
+    bundle hashes for both main-*.js and styles-*.css, confirming
+    both the component and global style changes are captured; same
+    pre-existing bundle-size warnings, unrelated to this change).
+  - Live-verified in a real browser (Playwright) at both target
+    resolutions:
+    - Exactly 6 pipeline steps and exactly 6 capability cards present,
+      with their exact original label/title text, at both sizes.
+    - document.documentElement.scrollHeight <= clientHeight (no
+      vertical scrollbar) and no horizontal scrollbar, at both sizes.
+    - Login card fully visible, sign-in button's full bounding box
+      confirmed within the viewport (not just technically "visible"
+      but fully on-screen, not clipped) at both sizes.
+    - Visually confirmed via full-page screenshots at both
+      resolutions: professional, uncramped appearance maintained,
+      text still legible, no overlapping elements.
+  - Re-ran the full prior-phase regression suite (19 checks) at
+    1366x768 specifically (the primary target resolution): 17/19
+    pass, same 2 pre-existing, already-documented, unrelated failures
+    (invalid-login error banner never rendering) - no new
+    regressions.
+  - Authentication explicitly re-verified at 1366x768: a real login
+    with the seeded admin account (loylth910@gmail.com) redirects
+    correctly to /admin/home at this exact resolution.
+  - Dev server processes (Angular CLI + esbuild child, Flask + its
+    debug-reloader child) stopped afterward by exact PID.
+
+Build result:
+  Frontend: clean production build, exit 0 (new main-*.js and
+  styles-*.css bundle hashes). Live browser check: 0px vertical
+  overflow at both 1366x768 and 1440x900 (down from 38px/16px before
+  this phase), all 6 pipeline steps and 6 capability cards confirmed
+  present with unchanged text, 17/19 full regression suite green at
+  1366x768 (2 pre-existing, previously-documented, unrelated failures
+  only), authentication confirmed working at the target resolution.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false,
+     so Render should auto-deploy the frontend from this push with no
+     separate manual trigger needed on my end.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No database migration needed (no schema changes).
+
+Rollback instructions:
+  Revert this one commit (git revert, or redeploy the previous frontend
+  build) - confined to spacing/sizing values in the login component's
+  .css plus a one-line global body-margin reset; reverting restores
+  the prior (scrolling) layout with no data or schema implications.
