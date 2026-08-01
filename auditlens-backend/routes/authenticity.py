@@ -541,7 +541,10 @@ def get_authenticity_image(document_id):
     if document_type not in VALID_DOC_TYPES:
         return jsonify({'error': f'document_type must be one of {VALID_DOC_TYPES}'}), 400
 
-    rendered_path = os.path.join(AUTHENTICITY_IMAGE_DIR, f'{document_id}_{document_type}.png')
+    # v7 spec: filename carries an explicit page number — this is the one
+    # canonical page image, also what Vision OCR (helpers/
+    # vision_evidence_boxes.py) analyzed for this check's evidence boxes.
+    rendered_path = os.path.join(AUTHENTICITY_IMAGE_DIR, f'{document_id}_{document_type}_page_1.png')
     if os.path.exists(rendered_path):
         return send_file(rendered_path, mimetype='image/png')
 

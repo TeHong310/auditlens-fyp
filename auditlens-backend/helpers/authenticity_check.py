@@ -16,6 +16,7 @@ from helpers.claude_extractor import (
 from helpers.auth_rules import AUTH_RULES, _normalize_doc_type
 from helpers.entity_normalizer import is_same_company, log_entity_match_debug
 from helpers.authenticity_cache import get_cached_authenticity_result, save_authenticity_result_to_cache
+from helpers.vision_evidence_boxes import build_vision_evidence_boxes
 
 # Where a PDF's rendered first page (the same image sent to Gemini vision)
 # gets saved so the frontend can display it and draw the overlay markers —
@@ -696,7 +697,13 @@ def save_rendered_authenticity_image(document_id, document_type, file_bytes, fil
     try:
         mime_type, image_bytes = prepare_gemini_image_payload(file_bytes, file_name)
         os.makedirs(AUTHENTICITY_IMAGE_DIR, exist_ok=True)
-        out_path = os.path.join(AUTHENTICITY_IMAGE_DIR, f'{document_id}_{document_type}.png')
+        # v7 spec: filename carries an explicit page number — this IS the
+        # one canonical page image (fixed render, PDF_RENDER_ZOOM) used for
+        # both the Claude/Gemini vision call above and the preview this
+        # file serves; Vision OCR (helpers/vision_evidence_boxes.py) is run
+        # against these exact same bytes further down in
+        # run_authenticity_check(), never a separately-rendered copy.
+        out_path = os.path.join(AUTHENTICITY_IMAGE_DIR, f'{document_id}_{document_type}_page_1.png')
         with open(out_path, 'wb') as f:
             f.write(image_bytes)
         print(f"DEBUG Authenticity: saved rendered PDF page image to {out_path}")
@@ -812,6 +819,18 @@ def run_authenticity_check(document_id, file_bytes, file_name, document_type, do
             'has_company_name': name, 'has_company_chop': chop, 'has_signature': sig,
         })
         boxes = _flatten_boxes(evidence)
+
+        # v7 spec: accurate, Google-Vision-derived polygon regions for
+        # supplier name/address and stamp text, matched against real OCR
+        # word boxes rather than AI-estimated — appended alongside the
+        # existing AI-vision boxes above (image[1] is the exact same
+        # canonical PNG bytes Claude/Gemini just analyzed and
+        # save_rendered_authenticity_image() cached for the preview, so
+        # OCR and the displayed image are always identical pixels).
+        # Never raises and returns [] on any failure — a Vision outage
+        # degrades to "no accurate highlight" for these 3 categories,
+        # it never breaks the authenticity check itself.
+        boxes = boxes + build_vision_evidence_boxes(document_id, document_type, image[1], extracted_vendor_name)
 
         conn = get_db_connection()
         cursor = conn.cursor()

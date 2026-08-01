@@ -60,31 +60,20 @@
       <!-- Left: sticky document preview -->
       <div class="image-panel">
 
-        <div class="image-controls" *ngIf="imageLoadState === 'image' && hasAnyBoxes">
-          <button type="button" class="toggle-pill" [class.toggle-pill-on]="showHighlights"
-                  [attr.aria-pressed]="showHighlights" (click)="toggleShowHighlights()">
-            <i class="ph-duotone ph-selection"></i> Show Highlights
-          </button>
-          <button type="button" class="toggle-pill" [class.toggle-pill-on]="showAllBoxes"
-                  [disabled]="!showHighlights" [attr.aria-pressed]="showAllBoxes" (click)="toggleShowAll()">
-            <i class="ph-duotone ph-squares-four"></i> Show All
-          </button>
+        <div class="document-stage" *ngIf="imageLoadState === 'image'">
+          <img [src]="imageBlobUrl" class="document-image" alt="Document" />
+          <svg *ngIf="selectedBox as box" class="document-overlay"
+               [attr.viewBox]="'0 0 ' + box.source_width + ' ' + box.source_height"
+               preserveAspectRatio="none" aria-hidden="true">
+            <polygon class="evidence-polygon" [attr.points]="polygonPoints(box)"></polygon>
+            <circle class="evidence-marker-circle" [attr.cx]="markerPosition(box).x" [attr.cy]="markerPosition(box).y" r="17"></circle>
+            <text class="evidence-marker-text" [attr.x]="markerPosition(box).x" [attr.y]="markerPosition(box).y">{{ selectedNumber }}</text>
+          </svg>
         </div>
 
-        <div class="document-image-wrapper" *ngIf="imageLoadState === 'image'">
-          <img [src]="imageBlobUrl" class="doc-image" alt="Document" />
-          <div class="annotation-overlay" *ngIf="showHighlights" aria-hidden="true">
-            <div class="evidence-box" *ngFor="let h of visibleHighlightBoxes; trackBy: trackByKey"
-                 [ngClass]="['box-' + h.state, h.active ? 'box-active' : '']"
-                 [class.box-approximate]="h.box.localization_quality === 'approximate'"
-                 [style.left.%]="h.box.x * 100"
-                 [style.top.%]="h.box.y * 100"
-                 [style.width.%]="h.box.width * 100"
-                 [style.height.%]="h.box.height * 100">
-              <span class="evidence-box-tag">{{ h.tagLabel }}</span>
-            </div>
-          </div>
-        </div>
+        <p class="stage-hint" *ngIf="imageLoadState === 'image' && hasLocatableEvidence && !selectedKey">
+          <i class="ph-duotone ph-cursor-click"></i> Click an item in Supporting Evidence or Full Analysis to highlight its location here.
+        </p>
 
         <div class="image-fallback" *ngIf="imageLoadState === 'loading'">
           <div class="spinner"></div>
@@ -122,23 +111,23 @@
           </div>
 
           <!-- 2. Supporting Evidence — up to 3 concise items. Clickable
-               (hover or click) when a reliable box exists for that item;
-               plain, non-interactive text otherwise. -->
+               when a reliable Google-Vision-sourced location exists for
+               that item; a plain "Location unavailable" note otherwise. -->
           <div class="checklist-box evidence-card" *ngIf="supportingEvidenceItems.length">
             <p class="section-label"><i class="ph-duotone ph-check-circle"></i> Supporting Evidence</p>
             <div class="attention-row"
                  *ngFor="let item of supportingEvidenceItems; trackBy: trackByLabel"
-                 [class.attention-row-clickable]="!!boxForKey(item.key)"
+                 [class.attention-row-clickable]="!!visionBoxForKey(item.key)"
                  [class.attention-row-active]="isRowActive(item.key)"
-                 [attr.role]="boxForKey(item.key) ? 'button' : null"
-                 [attr.tabindex]="boxForKey(item.key) ? 0 : null"
-                 [attr.aria-pressed]="boxForKey(item.key) ? isRowActive(item.key) : null"
-                 (mouseenter)="onRowEnter(item.key)" (mouseleave)="onRowLeave(item.key)"
+                 [attr.role]="visionBoxForKey(item.key) ? 'button' : null"
+                 [attr.tabindex]="visionBoxForKey(item.key) ? 0 : null"
+                 [attr.aria-pressed]="visionBoxForKey(item.key) ? isRowActive(item.key) : null"
                  (click)="onRowActivate(item.key)"
                  (keydown.enter)="onRowActivate(item.key)"
                  (keydown.space)="onRowActivate(item.key); $event.preventDefault()">
               <span class="checklist-icon icon-yes"><i class="ph-duotone ph-check"></i></span>
               <span class="checklist-label">{{ item.label }}</span>
+              <span class="location-note" *ngIf="item.locationUnavailable">Location unavailable</span>
             </div>
           </div>
 
@@ -153,12 +142,11 @@
               <p class="subsection-label">Supplier Identity</p>
               <p class="match-note" *ngIf="vendorMatchNote" [ngClass]="vendorMatchStatus() === 'yes' ? 'match-note-ok' : 'match-note-warn'">{{ vendorMatchNote }}</p>
               <div class="checklist-row"
-                   [class.checklist-row-clickable]="!!boxForKey('company_name')"
+                   [class.checklist-row-clickable]="!!visionBoxForKey('company_name')"
                    [class.checklist-row-active]="isRowActive('company_name')"
-                   [attr.role]="boxForKey('company_name') ? 'button' : null"
-                   [attr.tabindex]="boxForKey('company_name') ? 0 : null"
-                   [attr.aria-pressed]="boxForKey('company_name') ? isRowActive('company_name') : null"
-                   (mouseenter)="onRowEnter('company_name')" (mouseleave)="onRowLeave('company_name')"
+                   [attr.role]="visionBoxForKey('company_name') ? 'button' : null"
+                   [attr.tabindex]="visionBoxForKey('company_name') ? 0 : null"
+                   [attr.aria-pressed]="visionBoxForKey('company_name') ? isRowActive('company_name') : null"
                    (click)="onRowActivate('company_name')"
                    (keydown.enter)="onRowActivate('company_name')"
                    (keydown.space)="onRowActivate('company_name'); $event.preventDefault()">
@@ -166,14 +154,14 @@
                   <i class="ph-duotone" [ngClass]="rowIcon(supplierNameStatus())"></i>
                 </span>
                 <span class="checklist-label">Supplier Name Detected</span>
+                <span class="location-note" *ngIf="supplierNameStatus() === 'yes' && !visionBoxForKey('company_name')">Location unavailable</span>
               </div>
               <div class="checklist-row"
-                   [class.checklist-row-clickable]="!!boxForKey('supplier_address')"
+                   [class.checklist-row-clickable]="!!visionBoxForKey('supplier_address')"
                    [class.checklist-row-active]="isRowActive('supplier_address')"
-                   [attr.role]="boxForKey('supplier_address') ? 'button' : null"
-                   [attr.tabindex]="boxForKey('supplier_address') ? 0 : null"
-                   [attr.aria-pressed]="boxForKey('supplier_address') ? isRowActive('supplier_address') : null"
-                   (mouseenter)="onRowEnter('supplier_address')" (mouseleave)="onRowLeave('supplier_address')"
+                   [attr.role]="visionBoxForKey('supplier_address') ? 'button' : null"
+                   [attr.tabindex]="visionBoxForKey('supplier_address') ? 0 : null"
+                   [attr.aria-pressed]="visionBoxForKey('supplier_address') ? isRowActive('supplier_address') : null"
                    (click)="onRowActivate('supplier_address')"
                    (keydown.enter)="onRowActivate('supplier_address')"
                    (keydown.space)="onRowActivate('supplier_address'); $event.preventDefault()">
@@ -181,6 +169,7 @@
                   <i class="ph-duotone" [ngClass]="rowIcon(supplierAddressStatus())"></i>
                 </span>
                 <span class="checklist-label">Supplier Address Detected</span>
+                <span class="location-note" *ngIf="supplierAddressStatus() === 'yes' && !visionBoxForKey('supplier_address')">Location unavailable</span>
               </div>
               <div class="checklist-row">
                 <span class="checklist-icon" [ngClass]="rowIconClass(vendorMatchStatus())">
@@ -200,12 +189,11 @@
               <p class="subsection-label">Document Evidence</p>
               <div class="evidence-item" *ngFor="let row of documentEvidenceRows; trackBy: trackByLabel">
                 <div class="checklist-row"
-                     [class.checklist-row-clickable]="!!boxForKey(row.key)"
+                     [class.checklist-row-clickable]="!!visionBoxForKey(row.key)"
                      [class.checklist-row-active]="isRowActive(row.key)"
-                     [attr.role]="boxForKey(row.key) ? 'button' : null"
-                     [attr.tabindex]="boxForKey(row.key) ? 0 : null"
-                     [attr.aria-pressed]="boxForKey(row.key) ? isRowActive(row.key) : null"
-                     (mouseenter)="onRowEnter(row.key)" (mouseleave)="onRowLeave(row.key)"
+                     [attr.role]="visionBoxForKey(row.key) ? 'button' : null"
+                     [attr.tabindex]="visionBoxForKey(row.key) ? 0 : null"
+                     [attr.aria-pressed]="visionBoxForKey(row.key) ? isRowActive(row.key) : null"
                      (click)="onRowActivate(row.key)"
                      (keydown.enter)="onRowActivate(row.key)"
                      (keydown.space)="onRowActivate(row.key); $event.preventDefault()">
@@ -213,7 +201,7 @@
                     <i class="ph-duotone" [ngClass]="rowIcon(row.status)"></i>
                   </span>
                   <span class="checklist-label">{{ row.label }}</span>
-                  <span class="checklist-located" [ngClass]="{'located-na': row.status === 'na'}">{{ row.statusLabel }}</span>
+                  <span class="checklist-located" [ngClass]="{'located-na': row.status === 'na'}">{{ row.statusLabel }}<span class="location-note" *ngIf="row.status === 'yes' && !visionBoxForKey(row.key)"> · Location unavailable</span></span>
                 </div>
                 <p class="evidence-reason" *ngIf="row.reason">{{ row.reason }}</p>
               </div>

@@ -35,58 +35,55 @@ export interface IntegrityFinding {
   level: 'MEDIUM' | 'HIGH';
 }
 
-// A location box from check.boxes, exactly as
-// helpers/authenticity_check.py's _flatten_boxes/_normalize_box_to_unit_space
-// already return it — coordinate_space is always "normalized_0_1" (x/y/
-// width/height are fractions of the source image, 0-1), so the frontend
-// never has to guess a coordinate space or convert pixels itself.
-export interface EvidenceBox {
+// A real Google Vision OCR bounding polygon for one evidence region,
+// exactly as helpers/vision_evidence_boxes.py's build_vision_evidence_boxes()
+// returns it (mixed into check.boxes alongside the older AI-vision-
+// estimated rectangles). source_width/source_height are the canonical
+// rendered PDF page image's own pixel dimensions — the SAME image this
+// page displays — so polygon coordinates need no conversion: the SVG
+// overlay's viewBox is set directly from these two fields and the
+// polygon points are used as-is.
+export interface VisionEvidenceBox {
+  id: string;
   type: string;
   label: string;
-  reason: string;
+  page: number;
+  source_width: number;
+  source_height: number;
+  polygon: { x: number; y: number }[];
   confidence: number;
-  coordinate_space: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  localization_quality: 'exact' | 'approximate' | 'unreliable';
-}
-
-export interface HighlightBox {
-  key: string;
-  tagLabel: string;
-  box: EvidenceBox;
-  state: 'good' | 'warn' | 'bad';
-  active: boolean;
+  coordinate_source: string;
 }
 
 export interface SupportingEvidenceItem {
   label: string;
   key: string | null;
+  // True when this item is a detected/positive finding but has no
+  // reliable Google-Vision-sourced location — rendered as plain
+  // "Location unavailable" text instead of a clickable row.
+  locationUnavailable: boolean;
 }
 
-// The 5 evidence categories that can ever carry a real, reliably-located
-// bounding box (helpers/authenticity_check.py's _BOX_TYPES) — mapped to
-// the short on-image tag label the task asked for, and to the stable
-// `type` string check.boxes[].type uses. Visual-integrity axes (font/
-// alignment/copy-paste/alteration risk) are deliberately absent: they
-// are global, page-wide observations with no single physical location,
-// so this page never invents a box for them.
-const BOX_TAG_LABEL: Record<string, string> = {
-  company_name:     'Supplier',
-  supplier_address: 'Supplier',
-  company_logo:     'Logo',
-  stamp:             'Stamp',
-  signature:          'Signature',
+// The only 3 evidence categories this page can point at with a real,
+// OCR-measured location — helpers/vision_evidence_boxes.py only matches
+// supplier name/address text and stamp keywords against Google Vision
+// word boxes. company_logo and signature have no reliable detector, so
+// per the task spec they always render as "Detected · Location
+// unavailable" instead of a guessed box.
+const KEY_TO_VISION_TYPE: Record<string, string> = {
+  company_name:     'supplier_name',
+  supplier_address: 'supplier_address',
+  stamp:             'stamp_text',
 };
 
-const KEY_TO_BOX_TYPE: Record<string, string> = {
-  company_name:     'company_name',
-  supplier_address: 'supplier_address',
-  company_logo:     'supplier_logo',
-  stamp:             'company_stamp',
-  signature:          'signature',
+// Stable numbering for the on-image marker badge — fixed regardless of
+// which UI element (Supporting Evidence card vs. accordion row)
+// triggered the highlight, so the same evidence type always shows the
+// same number.
+const EVIDENCE_NUMBER: Record<string, number> = {
+  company_name:     1,
+  supplier_address: 2,
+  stamp:             3,
 };
 
 @Component({
@@ -120,12 +117,11 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   // Single "View Full Analysis" section — collapsed by default.
   fullAnalysisOpen = false;
 
-  // ── Evidence highlighting — document stays clean until the auditor
-  // opts in. showAllBoxes only ever matters while showHighlights is on. ──
-  showHighlights = false;
-  showAllBoxes = false;
-  private hoveredKey: string | null = null;
-  private selectedKey: string | null = null;
+  // ── Evidence highlighting — single-selection only. Clicking a row
+  // highlights its region; clicking the same row again, or a different
+  // row, replaces/clears it. No "Show All", no hover — the document
+  // stays clean until the auditor deliberately clicks an item. ──
+  selectedKey: string | null = null;
 
   private rawBlobUrl: string | null = null;
   private apiUrl = environment.apiUrl;
@@ -351,112 +347,69 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return 'PARTIAL';
   }
 
-  // ── Evidence highlighting — cross-references check.boxes (already
-  // normalized server-side to 0-1 fractions of the source image, see
-  // helpers/authenticity_check.py's _normalize_box_to_unit_space) against
-  // whichever evidence key a row/section represents. A box with
-  // localization_quality "unreliable" is treated the same as no box at
-  // all — never rendered — since the task is only to highlight evidence
-  // with a reliably physical location, not every AI guess. ──
+  // ── Evidence highlighting — cross-references check.boxes for a v7
+  // Google-Vision-sourced polygon matching this evidence key. Per the
+  // task's validation rules: only a box with coordinate_source
+  // "google_vision", a real 4-point polygon, valid positive source
+  // dimensions, and a page number matching the single page this preview
+  // ever shows (page 1) is trusted — an old AI-vision-estimated
+  // rectangle (coordinate_space "normalized_0_1", no coordinate_source)
+  // living in the same array is never used for highlighting. ──
 
-  private boxForType(type: string): EvidenceBox | null {
-    const box = (this.check?.boxes || []).find((b: any) => b?.type === type);
-    if (!box || box.localization_quality === 'unreliable') return null;
-    return box as EvidenceBox;
-  }
-
-  // Public: whether this key (company_name/supplier_address/company_logo/
-  // stamp/signature) has a real, reliable box to highlight. Every
-  // clickable row on this page gates its interactivity on this — a row
-  // with no box stays visible but plain, per the task's explicit rule.
-  boxForKey(key: string | null | undefined): EvidenceBox | null {
+  visionBoxForKey(key: string | null | undefined): VisionEvidenceBox | null {
     if (!key) return null;
-    const type = KEY_TO_BOX_TYPE[key];
-    return type ? this.boxForType(type) : null;
+    const type = KEY_TO_VISION_TYPE[key];
+    if (!type) return null;
+    const box = (this.check?.boxes || []).find((b: any) =>
+      b?.type === type &&
+      b?.coordinate_source === 'google_vision' &&
+      b?.page === 1 &&
+      typeof b?.source_width === 'number' && b.source_width > 0 &&
+      typeof b?.source_height === 'number' && b.source_height > 0 &&
+      Array.isArray(b?.polygon) && b.polygon.length === 4 &&
+      b.polygon.every((p: any) =>
+        typeof p?.x === 'number' && typeof p?.y === 'number' &&
+        p.x >= 0 && p.x <= b.source_width && p.y >= 0 && p.y <= b.source_height
+      ) &&
+      typeof b?.confidence === 'number' && b.confidence >= 0.5
+    );
+    return (box as VisionEvidenceBox) || null;
   }
 
-  get hasAnyBoxes(): boolean {
-    return Object.keys(KEY_TO_BOX_TYPE).some(key => !!this.boxForKey(key));
-  }
-
-  private evidenceKeyDetected(key: string): boolean {
-    if (key === 'company_name') return !!this.supplierIdentity?.supplier_name_detected;
-    if (key === 'supplier_address') return !!this.supplierIdentity?.address_detected;
-    const evidence = this.check?.ai_visual_result?.document_visual_evidence?.[key];
-    return !!evidence?.detected;
-  }
-
-  // Green when detected; amber when the AI could only point at a
-  // plausible-but-empty location (not detected, still needs a look); red
-  // only for company_name/supplier_address when identity is a genuine,
-  // confirmed INCONSISTENT mismatch — a real, location-tied risk, not a
-  // guess. Never derived from font/alignment/copy-paste risk, which have
-  // no location at all.
-  boxState(key: string): 'good' | 'warn' | 'bad' {
-    if (key === 'company_name' || key === 'supplier_address') {
-      if (this.identityStatus === 'INCONSISTENT') return 'bad';
-      if (this.identityStatus === 'UNCERTAIN') return 'warn';
-    }
-    return this.evidenceKeyDetected(key) ? 'good' : 'warn';
-  }
-
-  toggleShowHighlights() {
-    this.showHighlights = !this.showHighlights;
-    if (!this.showHighlights) {
-      this.showAllBoxes = false;
-      this.selectedKey = null;
-      this.hoveredKey = null;
-    }
-  }
-
-  toggleShowAll() {
-    this.showAllBoxes = !this.showAllBoxes;
-    if (this.showAllBoxes) {
-      this.selectedKey = null;
-      this.hoveredKey = null;
-    }
-  }
-
-  onRowEnter(key: string | null | undefined) {
-    if (this.boxForKey(key)) this.hoveredKey = key as string;
-  }
-
-  onRowLeave(key: string | null | undefined) {
-    if (this.hoveredKey === key) this.hoveredKey = null;
+  get hasLocatableEvidence(): boolean {
+    return Object.keys(KEY_TO_VISION_TYPE).some(key => !!this.visionBoxForKey(key));
   }
 
   // Click/Enter/Space on a row: select it, or clear the selection if it
-  // was already the active one. Also clears a same-key hover when
-  // deselecting — otherwise, if the pointer is still sitting on the row
-  // (the common case: you click, then re-click the same still-hovered
-  // row), the lingering hover would immediately re-show the highlight
-  // the click just turned off. The auditor has to move off and back onto
-  // the row for hover to re-activate it, which reads as a real toggle.
+  // was already the active one. A row with no reliable box is inert.
   onRowActivate(key: string | null | undefined) {
-    if (!this.boxForKey(key)) return;
-    if (this.selectedKey === key) {
-      this.selectedKey = null;
-      if (this.hoveredKey === key) this.hoveredKey = null;
-    } else {
-      this.selectedKey = key as string;
-    }
+    if (!this.visionBoxForKey(key)) return;
+    this.selectedKey = this.selectedKey === key ? null : (key as string);
   }
 
   isRowActive(key: string | null | undefined): boolean {
-    return !!key && (this.selectedKey === key || this.hoveredKey === key);
+    return !!key && this.selectedKey === key;
   }
 
-  get visibleHighlightBoxes(): HighlightBox[] {
-    if (!this.showHighlights) return [];
-    const activeKey = this.hoveredKey || this.selectedKey;
-    const keys = this.showAllBoxes ? Object.keys(KEY_TO_BOX_TYPE) : (activeKey ? [activeKey] : []);
-    const out: HighlightBox[] = [];
-    for (const key of keys) {
-      const box = this.boxForKey(key);
-      if (!box) continue;
-      out.push({ key, tagLabel: BOX_TAG_LABEL[key], box, state: this.boxState(key), active: key === activeKey });
-    }
-    return out;
+  get selectedBox(): VisionEvidenceBox | null {
+    return this.visionBoxForKey(this.selectedKey);
+  }
+
+  get selectedNumber(): number | null {
+    return this.selectedKey ? (EVIDENCE_NUMBER[this.selectedKey] ?? null) : null;
+  }
+
+  polygonPoints(box: VisionEvidenceBox): string {
+    return box.polygon.map(p => `${p.x},${p.y}`).join(' ');
+  }
+
+  // Small numbered marker sits just outside the polygon's top-left
+  // corner, clamped so it never renders off the top/left edge of the
+  // source image.
+  markerPosition(box: VisionEvidenceBox): { x: number; y: number } {
+    const xs = box.polygon.map(p => p.x);
+    const ys = box.polygon.map(p => p.y);
+    return { x: Math.max(0, Math.min(...xs) - 4), y: Math.max(0, Math.min(...ys) - 4) };
   }
 
   // ── Top summary: one overall qualitative status, never a numeric
@@ -521,19 +474,22 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
       // Ambiguous between the company_name and supplier_address boxes —
       // prefer whichever one actually has a reliable location, since
       // this one row can only point at a single region.
-      const key = this.boxForKey('company_name') ? 'company_name'
-        : (this.boxForKey('supplier_address') ? 'supplier_address' : null);
-      items.push({ label: 'Supplier details are consistent', key });
+      const nameBox = this.visionBoxForKey('company_name');
+      const addrBox = this.visionBoxForKey('supplier_address');
+      const key = nameBox ? 'company_name' : (addrBox ? 'supplier_address' : null);
+      items.push({ label: 'Supplier details are consistent', key, locationUnavailable: !nameBox && !addrBox });
     }
     for (const row of this.documentEvidenceRows) {
       if (items.length >= 3) break;
-      if (row.status === 'yes') items.push({ label: row.label, key: row.key || null });
+      if (row.status === 'yes') {
+        items.push({ label: row.label, key: row.key || null, locationUnavailable: !this.visionBoxForKey(row.key) });
+      }
     }
     if (items.length < 3) {
       const signatureRow = this.documentEvidenceRows.find(r => /signature/i.test(r.label) && r.status === 'na');
       // Not-required-and-absent has nothing meaningful to point at — a
       // plain, non-interactive row rather than a highlight on empty space.
-      if (signatureRow) items.push({ label: 'Signature not required', key: null });
+      if (signatureRow) items.push({ label: 'Signature not required', key: null, locationUnavailable: false });
     }
     return items.slice(0, 3);
   }
