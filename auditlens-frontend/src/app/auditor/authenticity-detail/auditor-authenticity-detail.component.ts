@@ -15,29 +15,24 @@ const SIGNAL_LABELS: Record<SignalKey, string> = {
   has_company_logo: 'Company Logo',
 };
 
-const CONSISTENCY_LABELS: Record<string, string> = {
-  vendor_match: 'Vendor Match',
-  po_match:     'PO Reference Match',
-  item_match:   'Items Match',
-  amount_match: 'Amount Match',
-};
-
+// Display labels for the 4 visual-integrity axes the AI vision engine
+// already returns. "Handwritten / Altered Content" is alteration_risk's
+// display name — the underlying field is unchanged, this just matches
+// the auditor-facing wording this page uses everywhere else.
 const RISK_LABELS: Record<string, string> = {
   copy_paste_risk:        'Copy/Paste Risk',
   font_consistency:       'Font Consistency',
   alignment_consistency:  'Alignment Consistency',
-  alteration_risk:        'Alteration Risk',
+  alteration_risk:        'Handwritten / Altered Content',
 };
 
-const RECOMMENDATION_LABELS: Record<string, string> = {
-  APPROVE: 'Likely Authentic',
-  REVIEW:  'Needs Review',
-  REJECT:  'Likely Inauthentic',
-};
+export type OverallStatus = 'NO_CONCERNS' | 'REVIEW_REQUIRED' | 'INCONCLUSIVE' | 'HIGH_RISK';
+export type IdentityStatus = 'CONSISTENT' | 'UNCERTAIN' | 'INCONSISTENT' | 'NOT CHECKED';
+export type CategoryStatus = 'LOW' | 'MEDIUM' | 'HIGH' | 'PRESENT' | 'PARTIAL' | 'LIMITED' | 'NOT CHECKED';
 
-export interface AttentionItem {
+export interface IntegrityFinding {
   label: string;
-  detail?: string;
+  level: 'MEDIUM' | 'HIGH';
 }
 
 @Component({
@@ -65,13 +60,11 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   signalKeys: SignalKey[] = ['has_company_name', 'has_company_chop', 'has_signature', 'has_company_logo'];
   signalLabels = SIGNAL_LABELS;
 
-  consistencyLabels = CONSISTENCY_LABELS;
   riskKeys = Object.keys(RISK_LABELS);
   riskLabels = RISK_LABELS;
 
-  // Which accordion sections are expanded — all start collapsed so the
-  // page opens short and focused; the auditor opts into detail.
-  private openSections = new Set<string>();
+  // Single "View Full Analysis" section — collapsed by default.
+  fullAnalysisOpen = false;
 
   private rawBlobUrl: string | null = null;
   private apiUrl = environment.apiUrl;
@@ -161,7 +154,7 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     });
   }
 
-  // ── New engine dashboard helpers ──
+  // ── Engine dashboard helpers ──
 
   get hasNewResult(): boolean {
     return !!this.check?.ai_visual_result;
@@ -175,59 +168,21 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return this.check?.ai_visual_result?.integrity_check || null;
   }
 
-  get overallResult(): any {
-    return this.check?.ai_visual_result?.overall_result || null;
+  // Any color-coded severity word this page uses (CONSISTENT/PRESENT/LOW,
+  // UNCERTAIN/PARTIAL/MEDIUM, INCONSISTENT/LIMITED/HIGH, or a neutral
+  // NOT CHECKED/INCONCLUSIVE) maps through this one classifier, so the
+  // summary table, the headline badge, and the risk chips all use the
+  // exact same three-color language.
+  statusSeverityClass(status: string): string {
+    const s = (status || '').toUpperCase();
+    if (['CONSISTENT', 'PRESENT', 'LOW', 'NO SIGNIFICANT CONCERNS'].includes(s)) return 'status-good';
+    if (['UNCERTAIN', 'PARTIAL', 'MEDIUM', 'REVIEW REQUIRED'].includes(s)) return 'status-warn';
+    if (['INCONSISTENT', 'LIMITED', 'HIGH', 'HIGH INTEGRITY RISK'].includes(s)) return 'status-bad';
+    return 'status-neutral';
   }
 
-  get documentConsistency(): any {
-    return this.check?.document_consistency || null;
-  }
-
-  get auditorScore(): any {
-    return this.check?.ai_visual_result?.auditor_score || null;
-  }
-
-  get crossDocumentAuthenticity(): any {
-    return this.check?.cross_document_authenticity || null;
-  }
-
-  decisionClass(decision: string): string {
-    if (decision === 'APPROVE') return 'decision-approve';
-    if (decision === 'REVIEW') return 'decision-review';
-    return 'decision-reject';
-  }
-
-  scoreClass(score: number): string {
-    if (score >= 85) return 'risk-low';
-    if (score >= 60) return 'risk-medium';
-    return 'risk-high';
-  }
-
-  get consistencyKeys(): string[] {
-    return Object.keys(CONSISTENCY_LABELS);
-  }
-
-  riskLevelClass(level: string): string {
-    const l = (level || '').toUpperCase();
-    if (l === 'HIGH') return 'risk-high';
-    if (l === 'MEDIUM') return 'risk-medium';
-    return 'risk-low';
-  }
-
-  matchLabel(value: boolean | null | undefined): string {
-    if (value === true) return 'Matched';
-    if (value === false) return 'Mismatch';
-    return 'N/A';
-  }
-
-  matchClass(value: boolean | null | undefined): string {
-    if (value === true) return 'icon-yes';
-    if (value === false) return 'icon-no';
-    return 'icon-na';
-  }
-
-  // Shared row status -> icon mapping used by every evidence-style
-  // checklist row on this page. Red ("icon-no") is reserved for genuine
+  // Shared row status -> icon mapping used by the detail rows inside
+  // "View Full Analysis". Red ("icon-no") is reserved for genuine
   // contradictions (e.g. a mismatched vendor name) — a signal that
   // simply wasn't found, but was required, reads as amber "Needs Review"
   // instead of a false-alarm red X.
@@ -239,21 +194,11 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return { yes: 'ph-check', no: 'ph-x', warn: 'ph-warning', na: 'ph-minus' }[status];
   }
 
-  // ── Section A: Supplier Identity ──
-
-  supplierStatusClass(): string {
-    const status = this.supplierIdentity?.status;
-    if (status === 'verified') return 'badge-verified';
-    if (status === 'uncertain') return 'badge-uncertain';
-    return 'badge-not-found';
-  }
-
-  supplierStatusLabel(): string {
-    const status = this.supplierIdentity?.status;
-    if (status === 'verified') return 'Verified';
-    if (status === 'uncertain') return 'Uncertain';
-    return 'Not Found';
-  }
+  // ── Category 1: Supplier Identity Consistency ──
+  // Deliberately never says "Verified" — nothing on this page checks the
+  // supplier against an external supplier master or company database;
+  // this only cross-checks the document's own visual details against its
+  // own extracted fields, so "Consistent" is the accurate word.
 
   supplierNameStatus(): RowStatus {
     return this.supplierIdentity?.supplier_name_detected ? 'yes' : 'warn';
@@ -265,8 +210,8 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
 
   // Cross-check against the vendor_name the (separate) extraction
   // pipeline already found — a genuine mismatch here is a real
-  // contradiction, so it's the one row in this section allowed to show
-  // red.
+  // contradiction, so it's the one signal allowed to escalate identity
+  // status all the way to INCONSISTENT.
   vendorMatchStatus(): RowStatus {
     const m = this.supplierIdentity?.vendor_name_matches_extraction;
     if (m === true) return 'yes';
@@ -292,77 +237,129 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return `Differs from extracted vendor "${supplier.extracted_vendor_name}" — worth a second look`;
   }
 
-  // ── Section B: Document Evidence (document-type-specific wording) ──
-  // Enterprise V3 Phase 7 (FIX 3): delegates to the shared util also used
-  // by the Authenticity list page's "Detected Signals" badges, so both
-  // pages can never disagree about the same document again.
+  get identityStatus(): IdentityStatus {
+    if (!this.hasNewResult || !this.supplierIdentity) return 'NOT CHECKED';
+    if (this.vendorMatchStatus() === 'no') return 'INCONSISTENT';
+    if (this.supplierIdentity.status === 'verified') return 'CONSISTENT';
+    if (this.supplierIdentity.status === 'uncertain') return 'UNCERTAIN';
+    return 'NOT CHECKED'; // not_found — nothing detected to compare
+  }
+
+  // ── Category 2: Visual Integrity — only Medium/High findings surface
+  // prominently; Low is never shown as a "finding", only reflected in
+  // the overall status. ──
+
+  get visualIntegrityStatus(): CategoryStatus {
+    if (!this.integrityCheck) return 'NOT CHECKED';
+    const levels = this.riskKeys.map(k => (this.integrityCheck?.[k] || 'low').toLowerCase());
+    if (levels.includes('high')) return 'HIGH';
+    if (levels.includes('medium')) return 'MEDIUM';
+    return 'LOW';
+  }
+
+  get visualIntegrityFindings(): IntegrityFinding[] {
+    if (!this.integrityCheck) return [];
+    const out: IntegrityFinding[] = [];
+    for (const key of this.riskKeys) {
+      const level = (this.integrityCheck[key] || 'low').toLowerCase();
+      if (level === 'medium' || level === 'high') {
+        out.push({ label: this.riskLabels[key], level: level.toUpperCase() as 'MEDIUM' | 'HIGH' });
+      }
+    }
+    return out;
+  }
+
+  // ── Category 3: Document Evidence (document-type-specific wording) ──
+  // Delegates to the shared util also used by the Authenticity list
+  // page's "Detected Signals" badges, so both pages can never disagree
+  // about the same document again. A buyer QC/receiving stamp is already
+  // labelled as processing evidence there ("QC / Receiving Stamp
+  // Detected"), never as supplier identity verification.
 
   get documentEvidenceRows(): EvidenceRow[] {
     return getAuthenticityEvidenceRows(this.check, this.documentType);
   }
 
-  // ── Final recommendation (top summary card) ──
-
-  get recommendationLabel(): string {
-    const decision = this.auditorScore?.decision;
-    return RECOMMENDATION_LABELS[decision] || 'Assessment Pending';
+  get documentEvidenceStatus(): CategoryStatus {
+    const rows = this.documentEvidenceRows;
+    const required = rows.filter(r => r.status !== 'na');
+    if (!required.length) return 'NOT CHECKED';
+    const detected = required.filter(r => r.status === 'yes').length;
+    if (detected === required.length) return 'PRESENT';
+    if (detected === 0) return 'LIMITED';
+    return 'PARTIAL';
   }
 
-  // The score/risk column always has *some* value to show, even for a
-  // legacy check that hasn't been re-run through the scoring engine yet
-  // — check.risk_level is written by both the old and new engine paths.
-  get displayRiskLevel(): string {
-    return this.auditorScore?.risk_level || this.check?.risk_level || 'LOW';
+  // ── Top summary: one overall qualitative status, never a numeric
+  // score and never a guaranteed "authentic" claim. Derived directly
+  // from the 3 category signals above — never from transaction/matching
+  // data, which this page doesn't assess at all. ──
+
+  get overallStatus(): OverallStatus {
+    if (!this.hasNewResult) return 'INCONCLUSIVE';
+    const identity = this.identityStatus;
+    const integrity = this.visualIntegrityStatus;
+    if (identity === 'INCONSISTENT' || integrity === 'HIGH') return 'HIGH_RISK';
+    if (identity === 'UNCERTAIN' || integrity === 'MEDIUM') return 'REVIEW_REQUIRED';
+    if (identity === 'NOT CHECKED' && this.documentEvidenceStatus === 'LIMITED') return 'INCONCLUSIVE';
+    return 'NO_CONCERNS';
   }
 
-  // ── Attention Required — only medium/high-risk or failed findings,
-  // each with a short (already backend-authored) explanation. Built from
-  // the deterministic auditor_score reasoning rather than re-deriving
-  // separate thresholds, so this can never disagree with the score
-  // above it. "(not required)" entries (e.g. a missing signature) are
-  // never a real problem, so they're excluded here and surfaced instead
-  // in Verified Evidence.
+  get overallStatusLabel(): string {
+    const labels: Record<OverallStatus, string> = {
+      NO_CONCERNS:     'NO SIGNIFICANT CONCERNS',
+      REVIEW_REQUIRED: 'REVIEW REQUIRED',
+      INCONCLUSIVE:    'INCONCLUSIVE',
+      HIGH_RISK:       'HIGH INTEGRITY RISK',
+    };
+    return labels[this.overallStatus];
+  }
 
-  get attentionItems(): AttentionItem[] {
-    const items: AttentionItem[] = [];
-    const negatives: string[] = this.auditorScore?.reasons?.negative || [];
-    for (const reason of negatives) {
-      if (/not required/i.test(reason)) continue;
-      items.push({ label: reason });
+  get summaryExplanation(): string {
+    if (!this.hasNewResult) {
+      return 'This document has not yet been assessed by the authenticity engine. Run Re-check Analysis to generate an assessment.';
     }
-    const issues: string[] = this.crossDocumentAuthenticity?.issues || [];
-    for (const issue of issues) {
-      items.push({ label: issue });
+    const parts: string[] = [];
+    switch (this.identityStatus) {
+      case 'CONSISTENT':   parts.push('Supplier identity is consistent.'); break;
+      case 'UNCERTAIN':    parts.push('Supplier identity could not be fully confirmed.'); break;
+      case 'INCONSISTENT': parts.push('Supplier identity shows a mismatch that needs review.'); break;
+      default:              parts.push('Supplier identity details were not detected on this document.');
     }
-    return items;
+    const flagged = this.visualIntegrityFindings.length;
+    if (flagged > 0) {
+      const noun = flagged > 1 ? 'observations' : 'observation';
+      const verb = flagged > 1 ? 'require' : 'requires';
+      parts.push(`${flagged} visual-integrity ${noun} ${verb} auditor review.`);
+    } else {
+      parts.push('No visual-integrity concerns were found.');
+    }
+    return parts.join(' ');
   }
 
-  // ── Verified Evidence — combined, deduplicated positive findings,
+  get hasVisualIntegrityConcerns(): boolean {
+    return this.visualIntegrityFindings.length > 0;
+  }
+
+  // ── Supporting Evidence — up to 3 concise, deduplicated positives,
   // built concept-by-concept from the structured fields (rather than
-  // merging free-text reason strings from multiple sources) so nothing
-  // can appear twice under different wording.
+  // merging free-text reason strings) so nothing repeats under
+  // different wording. ──
 
-  get verifiedEvidenceItems(): string[] {
+  get supportingEvidenceItems(): string[] {
     const items: string[] = [];
-    const supplier = this.supplierIdentity;
-    if (supplier?.supplier_name_detected && supplier?.address_detected) {
-      items.push('Supplier name and address verified');
-    } else if (supplier?.supplier_name_detected) {
-      items.push('Supplier name verified');
-    } else if (supplier?.address_detected) {
-      items.push('Supplier address verified');
-    }
-    if (this.vendorMatchStatus() === 'yes') {
-      items.push('Vendor name matches extracted record');
+    if (this.identityStatus === 'CONSISTENT') {
+      items.push('Supplier details are consistent');
     }
     for (const row of this.documentEvidenceRows) {
-      if (row.status === 'yes') {
-        items.push(row.label);
-      } else if (row.status === 'na' && /signature/i.test(row.label)) {
-        items.push('Signature not required');
-      }
+      if (items.length >= 3) break;
+      if (row.status === 'yes') items.push(row.label);
     }
-    return items;
+    if (items.length < 3) {
+      const signatureRow = this.documentEvidenceRows.find(r => /signature/i.test(r.label) && r.status === 'na');
+      if (signatureRow) items.push('Signature not required');
+    }
+    return items.slice(0, 3);
   }
 
   // ── Re-check: the only action on this page that calls Gemini/Claude ──
@@ -391,18 +388,8 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     });
   }
 
-  // ── Accordion state ──
-
-  toggleSection(key: string) {
-    if (this.openSections.has(key)) {
-      this.openSections.delete(key);
-    } else {
-      this.openSections.add(key);
-    }
-  }
-
-  isSectionOpen(key: string): boolean {
-    return this.openSections.has(key);
+  toggleFullAnalysis() {
+    this.fullAnalysisOpen = !this.fullAnalysisOpen;
   }
 
   // ── Display helpers ──

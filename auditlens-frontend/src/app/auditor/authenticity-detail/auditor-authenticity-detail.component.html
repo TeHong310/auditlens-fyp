@@ -16,39 +16,33 @@
 
   <ng-container *ngIf="!isLoading && check">
 
-    <!-- ══════════ Summary card — the one thing the auditor must read ══════════ -->
+    <!-- ══════════ Summary — the one thing the auditor must read ══════════ -->
     <div class="summary-card">
-      <div class="summary-doc">
-        <p class="summary-doc-title">{{ check.document_number || 'Unknown Document' }}</p>
-        <p class="summary-doc-sub">{{ docTypeLabel(check.document_type) }} · Vendor: {{ (hasNewResult ? supplierIdentity?.supplier_name : null) || check.vendor_name || 'Unknown vendor' }}</p>
+      <div class="summary-top">
+        <div class="summary-doc">
+          <p class="summary-eyebrow">Authenticity Assessment</p>
+          <p class="summary-doc-title">{{ check.document_number || 'Unknown Document' }}</p>
+          <p class="summary-doc-sub">{{ docTypeLabel(check.document_type) }} · Vendor: {{ (hasNewResult ? supplierIdentity?.supplier_name : null) || check.vendor_name || 'Unknown vendor' }}</p>
+        </div>
+        <p class="overall-status-badge" [ngClass]="statusSeverityClass(overallStatusLabel)">{{ overallStatusLabel }}</p>
       </div>
 
-      <ng-container *ngIf="hasNewResult && auditorScore; else legacySummary">
-        <div class="summary-main">
-          <div class="summary-score">
-            <p class="score-value" [ngClass]="scoreClass(auditorScore.authenticity_score)">{{ auditorScore.authenticity_score }}<span class="score-max">/100</span></p>
-            <p class="risk-chip" [ngClass]="riskLevelClass(displayRiskLevel)">{{ displayRiskLevel.toUpperCase() }} RISK</p>
-          </div>
-          <div class="summary-recommendation">
-            <p class="recommendation-label" [ngClass]="decisionClass(auditorScore.decision)">{{ recommendationLabel }}</p>
-            <p class="recommendation-reason">{{ auditorScore.decision_reason }}</p>
-          </div>
-        </div>
-      </ng-container>
-      <ng-template #legacySummary>
-        <div class="summary-main summary-pending">
-          <p class="recommendation-reason">
-            This document hasn't run through the full authenticity engine yet
-            <ng-container *ngIf="check.authenticity_status"> (legacy status: {{ check.authenticity_status }})</ng-container>.
-            Run Re-check Analysis to generate a score and recommendation.
-          </p>
-        </div>
-      </ng-template>
+      <p class="summary-explanation">{{ summaryExplanation }}</p>
 
-      <p class="summary-clarification">
-        <i class="ph-duotone ph-info"></i>
-        Authenticity assessment evaluates document identity and integrity. Transaction matching issues are reviewed separately.
-      </p>
+      <div class="category-table">
+        <div class="category-row">
+          <span class="category-label">Identity Consistency</span>
+          <span class="category-value" [ngClass]="statusSeverityClass(identityStatus)">{{ identityStatus }}</span>
+        </div>
+        <div class="category-row">
+          <span class="category-label">Visual Integrity</span>
+          <span class="category-value" [ngClass]="statusSeverityClass(visualIntegrityStatus)">{{ visualIntegrityStatus }}</span>
+        </div>
+        <div class="category-row">
+          <span class="category-label">Document Evidence</span>
+          <span class="category-value" [ngClass]="statusSeverityClass(documentEvidenceStatus)">{{ documentEvidenceStatus }}</span>
+        </div>
+      </div>
 
       <div class="summary-actions">
         <button class="btn-recheck" (click)="recheck()" [disabled]="isRechecking">
@@ -86,149 +80,83 @@
 
         <ng-container *ngIf="hasNewResult">
 
-          <!-- Attention Required — only medium/high-risk or failed findings -->
-          <div class="checklist-box attention-card" *ngIf="attentionItems.length">
-            <p class="section-label"><i class="ph-duotone ph-warning"></i> Attention Required</p>
-            <div class="attention-row" *ngFor="let item of attentionItems">
-              <span class="checklist-icon icon-warn"><i class="ph-duotone ph-warning"></i></span>
-              <span class="checklist-label">{{ item.label }}</span>
+          <!-- 1. Review Required — only Medium/High visual-integrity findings -->
+          <div class="checklist-box review-card" *ngIf="hasVisualIntegrityConcerns">
+            <p class="section-label"><i class="ph-duotone ph-warning"></i> Review Required</p>
+            <div class="finding-row" *ngFor="let finding of visualIntegrityFindings">
+              <div class="finding-head">
+                <span class="finding-label">{{ finding.label }}</span>
+                <span class="risk-chip" [ngClass]="statusSeverityClass(finding.level)">{{ finding.level }}</span>
+              </div>
             </div>
+            <p class="finding-reason" *ngIf="integrityCheck?.reason">{{ integrityCheck.reason }}</p>
+          </div>
+          <div class="no-concerns-line" *ngIf="!hasVisualIntegrityConcerns">
+            <i class="ph-duotone ph-check-circle"></i> No significant concerns detected.
           </div>
 
-          <!-- Verified Evidence — combined, deduplicated positive findings -->
-          <div class="checklist-box verified-card" *ngIf="verifiedEvidenceItems.length">
-            <p class="section-label"><i class="ph-duotone ph-check-circle"></i> Verified Evidence</p>
-            <div class="attention-row" *ngFor="let item of verifiedEvidenceItems">
+          <!-- 2. Supporting Evidence — up to 3 concise items -->
+          <div class="checklist-box evidence-card" *ngIf="supportingEvidenceItems.length">
+            <p class="section-label"><i class="ph-duotone ph-check-circle"></i> Supporting Evidence</p>
+            <div class="attention-row" *ngFor="let item of supportingEvidenceItems">
               <span class="checklist-icon icon-yes"><i class="ph-duotone ph-check"></i></span>
               <span class="checklist-label">{{ item }}</span>
             </div>
           </div>
 
-          <!-- Transaction Matching — compact, explicitly not an authenticity verdict -->
-          <div class="checklist-box matching-card" *ngIf="documentConsistency">
-            <p class="section-label">Transaction Matching</p>
-            <div class="matching-grid">
-              <div class="matching-cell" *ngFor="let key of consistencyKeys">
-                <span class="checklist-icon" [ngClass]="matchClass(documentConsistency[key])">
-                  <i class="ph-duotone" [ngClass]="documentConsistency[key] === false ? 'ph-x' : 'ph-check'"></i>
+          <!-- 3. View Full Analysis — one collapsed section for everything else -->
+          <div class="accordion-item">
+            <button class="accordion-header" (click)="toggleFullAnalysis()" [attr.aria-expanded]="fullAnalysisOpen">
+              <span>View Full Analysis</span>
+              <i class="ph-duotone" [ngClass]="fullAnalysisOpen ? 'ph-caret-up' : 'ph-caret-down'"></i>
+            </button>
+            <div class="accordion-body" *ngIf="fullAnalysisOpen">
+
+              <p class="subsection-label">Supplier Identity</p>
+              <p class="match-note" *ngIf="vendorMatchNote" [ngClass]="vendorMatchStatus() === 'yes' ? 'match-note-ok' : 'match-note-warn'">{{ vendorMatchNote }}</p>
+              <div class="checklist-row">
+                <span class="checklist-icon" [ngClass]="rowIconClass(supplierNameStatus())">
+                  <i class="ph-duotone" [ngClass]="rowIcon(supplierNameStatus())"></i>
                 </span>
-                <span class="checklist-label">{{ consistencyLabels[key] }}</span>
+                <span class="checklist-label">Supplier Name Detected</span>
               </div>
-            </div>
-            <p class="matching-note">A mismatch here does not automatically mean the document is inauthentic.</p>
-            <a class="matching-link" [routerLink]="['/auditor/record-detail']" [queryParams]="{ document_id: documentId }">
-              View full comparison in Record Detail <i class="ph-duotone ph-arrow-right"></i>
-            </a>
-          </div>
+              <div class="checklist-row">
+                <span class="checklist-icon" [ngClass]="rowIconClass(supplierAddressStatus())">
+                  <i class="ph-duotone" [ngClass]="rowIcon(supplierAddressStatus())"></i>
+                </span>
+                <span class="checklist-label">Supplier Address Detected</span>
+              </div>
+              <div class="checklist-row">
+                <span class="checklist-icon" [ngClass]="rowIconClass(vendorMatchStatus())">
+                  <i class="ph-duotone" [ngClass]="rowIcon(vendorMatchStatus())"></i>
+                </span>
+                <span class="checklist-label">Extracted Vendor Match</span>
+                <span class="checklist-located">{{ vendorMatchStatusLabel() }}</span>
+              </div>
 
-          <!-- Collapsed detail sections -->
-          <div class="accordion-group">
+              <p class="subsection-label">Visual Integrity — all checks</p>
+              <div class="checklist-row" *ngFor="let key of riskKeys">
+                <span class="checklist-label">{{ riskLabels[key] }}</span>
+                <span class="risk-chip" [ngClass]="statusSeverityClass((integrityCheck?.[key] || 'low').toUpperCase())">{{ (integrityCheck?.[key] || 'low').toUpperCase() }}</span>
+              </div>
 
-            <div class="accordion-item">
-              <button class="accordion-header" (click)="toggleSection('evidence')" [attr.aria-expanded]="isSectionOpen('evidence')">
-                <span>Document Evidence</span>
-                <i class="ph-duotone" [ngClass]="isSectionOpen('evidence') ? 'ph-caret-up' : 'ph-caret-down'"></i>
-              </button>
-              <div class="accordion-body" *ngIf="isSectionOpen('evidence')">
-
-                <p class="status-badge" [ngClass]="supplierStatusClass()">Supplier Identity: {{ supplierStatusLabel() }}</p>
-                <p class="match-note" *ngIf="vendorMatchNote" [ngClass]="vendorMatchStatus() === 'yes' ? 'match-note-ok' : 'match-note-warn'">{{ vendorMatchNote }}</p>
+              <p class="subsection-label">Document Evidence</p>
+              <div class="evidence-item" *ngFor="let row of documentEvidenceRows">
                 <div class="checklist-row">
-                  <span class="checklist-icon" [ngClass]="rowIconClass(supplierNameStatus())">
-                    <i class="ph-duotone" [ngClass]="rowIcon(supplierNameStatus())"></i>
+                  <span class="checklist-icon" [ngClass]="rowIconClass(row.status)">
+                    <i class="ph-duotone" [ngClass]="rowIcon(row.status)"></i>
                   </span>
-                  <span class="checklist-label">Supplier Name Verified</span>
+                  <span class="checklist-label">{{ row.label }}</span>
+                  <span class="checklist-located" [ngClass]="{'located-na': row.status === 'na'}">{{ row.statusLabel }}</span>
                 </div>
-                <div class="checklist-row">
-                  <span class="checklist-icon" [ngClass]="rowIconClass(supplierAddressStatus())">
-                    <i class="ph-duotone" [ngClass]="rowIcon(supplierAddressStatus())"></i>
-                  </span>
-                  <span class="checklist-label">Supplier Address Verified</span>
-                </div>
-                <div class="checklist-row">
-                  <span class="checklist-icon" [ngClass]="rowIconClass(vendorMatchStatus())">
-                    <i class="ph-duotone" [ngClass]="rowIcon(vendorMatchStatus())"></i>
-                  </span>
-                  <span class="checklist-label">Extracted Vendor Match</span>
-                  <span class="checklist-located">{{ vendorMatchStatusLabel() }}</span>
-                </div>
-
-                <div class="evidence-item" *ngFor="let row of documentEvidenceRows">
-                  <div class="checklist-row">
-                    <span class="checklist-icon" [ngClass]="rowIconClass(row.status)">
-                      <i class="ph-duotone" [ngClass]="rowIcon(row.status)"></i>
-                    </span>
-                    <span class="checklist-label">{{ row.label }}</span>
-                    <span class="checklist-located" [ngClass]="{'located-na': row.status === 'na'}">{{ row.statusLabel }}</span>
-                  </div>
-                  <p class="evidence-reason" *ngIf="row.reason">{{ row.reason }}</p>
-                </div>
+                <p class="evidence-reason" *ngIf="row.reason">{{ row.reason }}</p>
               </div>
-            </div>
 
-            <div class="accordion-item" *ngIf="overallResult">
-              <button class="accordion-header" (click)="toggleSection('integrity')" [attr.aria-expanded]="isSectionOpen('integrity')">
-                <span>Integrity Analysis</span>
-                <i class="ph-duotone" [ngClass]="isSectionOpen('integrity') ? 'ph-caret-up' : 'ph-caret-down'"></i>
-              </button>
-              <div class="accordion-body" *ngIf="isSectionOpen('integrity')">
-                <div class="checklist-row" *ngFor="let key of riskKeys">
-                  <span class="checklist-label">{{ riskLabels[key] }}</span>
-                  <span class="risk-chip" [ngClass]="riskLevelClass(integrityCheck?.[key])">{{ (integrityCheck?.[key] || 'low').toUpperCase() }}</span>
-                </div>
-                <p class="ai-text" *ngIf="integrityCheck?.reason">{{ integrityCheck.reason }}</p>
-                <p class="checklist-label" *ngFor="let reason of overallResult.reasons">{{ reason }}</p>
-              </div>
+              <p class="subsection-label">Technical Metadata</p>
+              <p class="meta-row"><i class="ph-duotone" [ngClass]="uploadSourceIcon(check.upload_source)"></i> Upload Source: {{ uploadSourceLabel(check.upload_source) }}</p>
+              <p class="meta-row" *ngIf="check.ai_engine_used"><i class="ph-duotone ph-robot"></i> AI Engine: {{ check.ai_engine_used }}</p>
+              <p class="meta-row" *ngIf="check.created_at"><i class="ph-duotone ph-clock"></i> Checked: {{ check.created_at | date:'medium' }}</p>
             </div>
-
-            <div class="accordion-item" *ngIf="crossDocumentAuthenticity">
-              <button class="accordion-header" (click)="toggleSection('cross-doc')" [attr.aria-expanded]="isSectionOpen('cross-doc')">
-                <span>Cross-document Verification</span>
-                <i class="ph-duotone" [ngClass]="isSectionOpen('cross-doc') ? 'ph-caret-up' : 'ph-caret-down'"></i>
-              </button>
-              <div class="accordion-body" *ngIf="isSectionOpen('cross-doc')">
-                <p class="risk-line" *ngIf="crossDocumentAuthenticity.cross_document_score !== null"
-                   [ngClass]="scoreClass(crossDocumentAuthenticity.cross_document_score)">
-                  {{ crossDocumentAuthenticity.cross_document_score }}/100
-                </p>
-                <div *ngIf="crossDocumentAuthenticity.issues.length === 0" class="checklist-row">
-                  <span class="checklist-icon icon-yes"><i class="ph-duotone ph-check"></i></span>
-                  <span class="checklist-label">No cross-document issues found</span>
-                </div>
-                <div class="checklist-row" *ngFor="let issue of crossDocumentAuthenticity.issues">
-                  <span class="checklist-icon icon-no"><i class="ph-duotone ph-x"></i></span>
-                  <span class="checklist-label">{{ issue }}</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="accordion-item" *ngIf="auditorScore">
-              <button class="accordion-header" (click)="toggleSection('why')" [attr.aria-expanded]="isSectionOpen('why')">
-                <span>Why This Recommendation?</span>
-                <i class="ph-duotone" [ngClass]="isSectionOpen('why') ? 'ph-caret-up' : 'ph-caret-down'"></i>
-              </button>
-              <div class="accordion-body" *ngIf="isSectionOpen('why')">
-                <div class="reason-row" *ngFor="let reason of auditorScore.reasons.positive">
-                  <span class="reason-sign reason-positive">+</span><span class="checklist-label">{{ reason }}</span>
-                </div>
-                <div class="reason-row" *ngFor="let reason of auditorScore.reasons.negative">
-                  <span class="reason-sign reason-negative">−</span><span class="checklist-label">{{ reason }}</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="accordion-item">
-              <button class="accordion-header" (click)="toggleSection('metadata')" [attr.aria-expanded]="isSectionOpen('metadata')">
-                <span>Technical Metadata</span>
-                <i class="ph-duotone" [ngClass]="isSectionOpen('metadata') ? 'ph-caret-up' : 'ph-caret-down'"></i>
-              </button>
-              <div class="accordion-body" *ngIf="isSectionOpen('metadata')">
-                <p class="meta-row"><i class="ph-duotone" [ngClass]="uploadSourceIcon(check.upload_source)"></i> Upload Source: {{ uploadSourceLabel(check.upload_source) }}</p>
-                <p class="meta-row" *ngIf="check.ai_engine_used"><i class="ph-duotone ph-robot"></i> AI Engine: {{ check.ai_engine_used }}</p>
-                <p class="meta-row" *ngIf="check.created_at"><i class="ph-duotone ph-clock"></i> Checked: {{ check.created_at | date:'medium' }}</p>
-              </div>
-            </div>
-
           </div>
 
         </ng-container>
