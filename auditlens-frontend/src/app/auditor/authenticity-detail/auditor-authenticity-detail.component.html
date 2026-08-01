@@ -62,17 +62,23 @@
 
         <div class="document-stage" *ngIf="imageLoadState === 'image'">
           <img [src]="imageBlobUrl" class="document-image" alt="Document" />
-          <svg *ngIf="selectedBox as box" class="document-overlay"
-               [attr.viewBox]="'0 0 ' + box.source_width + ' ' + box.source_height"
+          <svg *ngIf="visibleEvidenceBoxes.length" class="document-overlay"
+               [attr.viewBox]="overlayViewBox"
                preserveAspectRatio="none" aria-hidden="true">
-            <polygon class="evidence-polygon" [attr.points]="polygonPoints(box)"></polygon>
-            <circle class="evidence-marker-circle" [attr.cx]="markerPosition(box).x" [attr.cy]="markerPosition(box).y" r="17"></circle>
-            <text class="evidence-marker-text" [attr.x]="markerPosition(box).x" [attr.y]="markerPosition(box).y">{{ selectedNumber }}</text>
+            <g *ngFor="let ev of visibleEvidenceBoxes; trackBy: trackByKey"
+               class="evidence-region"
+               [class.evidence-region-emphasized]="ev.emphasized"
+               [class.evidence-region-dimmed]="emphasizedKey && !ev.emphasized">
+              <polygon class="evidence-polygon" [attr.points]="polygonPoints(ev.box)"></polygon>
+              <circle class="evidence-marker-circle" [attr.cx]="markerPosition(ev.box).x" [attr.cy]="markerPosition(ev.box).y" r="17"></circle>
+              <text class="evidence-marker-text" [attr.x]="markerPosition(ev.box).x" [attr.y]="markerPosition(ev.box).y">{{ ev.number }}</text>
+            </g>
           </svg>
         </div>
 
-        <p class="stage-hint" *ngIf="imageLoadState === 'image' && hasLocatableEvidence && !selectedKey">
-          <i class="ph-duotone ph-cursor-click"></i> Click an item in Supporting Evidence or Full Analysis to highlight its location here.
+        <p class="stage-hint" *ngIf="imageLoadState === 'image' && hasLocatableEvidence">
+          <i class="ph-duotone ph-cursor-click"></i>
+          {{ emphasizedKey ? 'Click the highlighted item again to show all regions normally.' : 'Click an evidence item below to emphasize its location.' }}
         </p>
 
         <div class="image-fallback" *ngIf="imageLoadState === 'loading'">

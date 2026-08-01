@@ -241,16 +241,35 @@
    the canonical image's true pixel dimensions — to fill this exact
    box, so a polygon's coordinates land on the same visual spot as the
    displayed image regardless of viewport width. */
+.evidence-region {
+  transition: opacity 0.15s ease;
+}
+
+/* Emphasizing one region dims the rest instead of hiding them — every
+   valid region stays visible, per the "keep others visible" rule. */
+.evidence-region-dimmed {
+  opacity: 0.35;
+}
+
 .evidence-polygon {
-  fill: rgba(99, 102, 241, 0.16);
-  stroke: #6366F1;
+  fill: rgba(34, 197, 94, 0.14);
+  stroke: #22C55E;
   stroke-width: 6;
 }
 
+.evidence-region-emphasized .evidence-polygon {
+  fill: rgba(34, 197, 94, 0.28);
+  stroke-width: 9;
+}
+
 .evidence-marker-circle {
-  fill: #6366F1;
+  fill: #22C55E;
   stroke: #fff;
   stroke-width: 3;
+}
+
+.evidence-region-emphasized .evidence-marker-circle {
+  fill: #16A34A;
 }
 
 .evidence-marker-text {

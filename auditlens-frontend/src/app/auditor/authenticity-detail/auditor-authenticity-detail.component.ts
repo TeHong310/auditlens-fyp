@@ -86,6 +86,14 @@ const EVIDENCE_NUMBER: Record<string, number> = {
   stamp:             3,
 };
 
+// One simultaneously-rendered region on the document overlay.
+export interface VisibleEvidenceBox {
+  key: string;
+  number: number;
+  box: VisionEvidenceBox;
+  emphasized: boolean;
+}
+
 @Component({
   selector: 'app-auditor-authenticity-detail',
   standalone: true,
@@ -117,11 +125,12 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   // Single "View Full Analysis" section — collapsed by default.
   fullAnalysisOpen = false;
 
-  // ── Evidence highlighting — single-selection only. Clicking a row
-  // highlights its region; clicking the same row again, or a different
-  // row, replaces/clears it. No "Show All", no hover — the document
-  // stays clean until the auditor deliberately clicks an item. ──
-  selectedKey: string | null = null;
+  // ── Evidence highlighting — all reliably-located regions (supplier
+  // name/address, stamp) are shown automatically as soon as the check
+  // loads; no click required. Clicking a row emphasizes just that
+  // region while the others stay visible at normal strength; clicking
+  // it again returns every region to normal. ──
+  emphasizedKey: string | null = null;
 
   private rawBlobUrl: string | null = null;
   private apiUrl = environment.apiUrl;
@@ -380,23 +389,36 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return Object.keys(KEY_TO_VISION_TYPE).some(key => !!this.visionBoxForKey(key));
   }
 
-  // Click/Enter/Space on a row: select it, or clear the selection if it
-  // was already the active one. A row with no reliable box is inert.
+  // All 3 reliably-locatable regions that currently have a real box —
+  // rendered simultaneously and automatically, no click required. Each
+  // key maps to exactly one vision type, so this list can never contain
+  // a duplicate region for the same evidence.
+  get visibleEvidenceBoxes(): VisibleEvidenceBox[] {
+    const out: VisibleEvidenceBox[] = [];
+    for (const key of Object.keys(KEY_TO_VISION_TYPE)) {
+      const box = this.visionBoxForKey(key);
+      if (!box) continue;
+      out.push({ key, number: EVIDENCE_NUMBER[key], box, emphasized: key === this.emphasizedKey });
+    }
+    return out;
+  }
+
+  // All visible boxes share the same canonical image, so any one of
+  // them carries the correct source dimensions for the shared viewBox.
+  get overlayViewBox(): string | null {
+    const first = this.visibleEvidenceBoxes[0];
+    return first ? `0 0 ${first.box.source_width} ${first.box.source_height}` : null;
+  }
+
+  // Click/Enter/Space on a row: emphasize it, or return to normal if it
+  // was already emphasized. A row with no reliable box is inert.
   onRowActivate(key: string | null | undefined) {
     if (!this.visionBoxForKey(key)) return;
-    this.selectedKey = this.selectedKey === key ? null : (key as string);
+    this.emphasizedKey = this.emphasizedKey === key ? null : (key as string);
   }
 
   isRowActive(key: string | null | undefined): boolean {
-    return !!key && this.selectedKey === key;
-  }
-
-  get selectedBox(): VisionEvidenceBox | null {
-    return this.visionBoxForKey(this.selectedKey);
-  }
-
-  get selectedNumber(): number | null {
-    return this.selectedKey ? (EVIDENCE_NUMBER[this.selectedKey] ?? null) : null;
+    return !!key && this.emphasizedKey === key;
   }
 
   polygonPoints(box: VisionEvidenceBox): string {
