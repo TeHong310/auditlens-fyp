@@ -210,7 +210,43 @@
   top: 20px;
 }
 
-.image-wrap {
+.image-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.toggle-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid #D1D5DB;
+  background: #F3F4F6;
+  color: #4B5563;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.toggle-pill:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.toggle-pill-on {
+  background: var(--accent-bg);
+  border-color: var(--accent-soft);
+  color: var(--accent-soft);
+}
+
+.toggle-pill:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 2px; }
+
+/* The wrapper hugs the rendered <img> exactly (inline-block shrinks to
+   its content) — so it never has empty letterboxed space around the
+   image the way the outer .image-panel card might. That's what makes
+   plain percentage-based positioning on .annotation-overlay correct:
+   the overlay's 0-100% maps 1:1 onto the actual visible image, at any
+   viewport size, with no JS resize recalculation needed. */
+.document-image-wrapper {
   position: relative;
   display: inline-block;
   max-width: 100%;
@@ -221,9 +257,53 @@
   max-width: 100%;
   height: auto;
   max-height: calc(100vh - 80px);
-  object-fit: contain;
   border-radius: 8px;
 }
+
+.annotation-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.evidence-box {
+  position: absolute;
+  border: 1.5px solid;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.evidence-box.box-approximate { border-style: dashed; }
+
+.box-good { border-color: #22C55E; background: rgba(34, 197, 94, 0.10); }
+.box-warn { border-color: #F59E0B; background: rgba(245, 158, 11, 0.10); }
+.box-bad  { border-color: #EF4444; background: rgba(239, 68, 68, 0.12); }
+
+.box-active {
+  border-color: #6366F1;
+  background: rgba(99, 102, 241, 0.14);
+  border-width: 2px;
+}
+
+.evidence-box-tag {
+  position: absolute;
+  left: 0;
+  top: -20px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  color: #fff;
+  background: inherit;
+  border: inherit;
+  border-style: solid;
+}
+
+.box-good .evidence-box-tag  { background: #22C55E; border-color: #22C55E; }
+.box-warn .evidence-box-tag  { background: #F59E0B; border-color: #F59E0B; }
+.box-bad  .evidence-box-tag  { background: #EF4444; border-color: #EF4444; }
+.box-active .evidence-box-tag { background: #6366F1; border-color: #6366F1; }
 
 .image-fallback {
   display: flex;
@@ -278,9 +358,15 @@
   gap: 10px;
   padding: 7px 0;
   border-bottom: 1px solid var(--bg-hover);
+  border-radius: 6px;
 }
 
 .checklist-row:last-child { border-bottom: none; }
+
+.checklist-row-clickable { cursor: pointer; padding-left: 6px; padding-right: 6px; }
+.checklist-row-clickable:hover { background: var(--bg-hover); }
+.checklist-row-active { background: var(--accent-bg); }
+.checklist-row-clickable:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: -2px; }
 
 .checklist-icon {
   width: 22px;
@@ -369,6 +455,13 @@
   border-top: 1px solid var(--bg-hover);
 }
 
+.finding-scope {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  opacity: 0.75;
+  margin-top: 6px;
+}
+
 .no-concerns-line {
   display: flex;
   align-items: center;
@@ -387,8 +480,14 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 0;
+  padding: 6px 4px;
+  border-radius: 6px;
 }
+
+.attention-row-clickable { cursor: pointer; }
+.attention-row-clickable:hover { background: var(--bg-hover); }
+.attention-row-active { background: var(--accent-bg); }
+.attention-row-clickable:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: -2px; }
 
 /* ── View Full Analysis (single accordion) ── */
 .accordion-item {

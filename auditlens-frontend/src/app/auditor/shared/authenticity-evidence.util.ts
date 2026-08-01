@@ -24,6 +24,14 @@ export interface EvidenceRow {
   status: RowStatus;
   statusLabel: string;
   reason?: string;
+  // The underlying document_visual_evidence key (company_logo/stamp/
+  // signature) this row maps 1:1 to, when it does — lets a caller cross-
+  // reference check.boxes for a location to highlight. Undefined for
+  // rows that don't correspond to exactly one evidence key (e.g. the
+  // combined "Supplier Information Present" row, or the static
+  // SUPPLIER_LOGO_OPTIONAL_ROW), which is the correct, honest answer:
+  // there's no single unambiguous box for those.
+  key?: string;
 }
 
 function evidenceEntry(check: any, key: string): any {
@@ -53,7 +61,7 @@ function evidenceRowFromKey(check: any, key: string, label: string): EvidenceRow
     const t = stampTypeLabel(check);
     if (t) label = `${label} (${t})`;
   }
-  return { label, status, statusLabel, reason: entry?.reason };
+  return { label, status, statusLabel, reason: entry?.reason, key };
 }
 
 function supplierInfoRow(check: any): EvidenceRow {

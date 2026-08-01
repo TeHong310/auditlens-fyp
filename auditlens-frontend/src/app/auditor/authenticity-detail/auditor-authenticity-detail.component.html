@@ -60,8 +60,30 @@
       <!-- Left: sticky document preview -->
       <div class="image-panel">
 
-        <div class="image-wrap" *ngIf="imageLoadState === 'image'">
+        <div class="image-controls" *ngIf="imageLoadState === 'image' && hasAnyBoxes">
+          <button type="button" class="toggle-pill" [class.toggle-pill-on]="showHighlights"
+                  [attr.aria-pressed]="showHighlights" (click)="toggleShowHighlights()">
+            <i class="ph-duotone ph-selection"></i> Show Highlights
+          </button>
+          <button type="button" class="toggle-pill" [class.toggle-pill-on]="showAllBoxes"
+                  [disabled]="!showHighlights" [attr.aria-pressed]="showAllBoxes" (click)="toggleShowAll()">
+            <i class="ph-duotone ph-squares-four"></i> Show All
+          </button>
+        </div>
+
+        <div class="document-image-wrapper" *ngIf="imageLoadState === 'image'">
           <img [src]="imageBlobUrl" class="doc-image" alt="Document" />
+          <div class="annotation-overlay" *ngIf="showHighlights" aria-hidden="true">
+            <div class="evidence-box" *ngFor="let h of visibleHighlightBoxes; trackBy: trackByKey"
+                 [ngClass]="['box-' + h.state, h.active ? 'box-active' : '']"
+                 [class.box-approximate]="h.box.localization_quality === 'approximate'"
+                 [style.left.%]="h.box.x * 100"
+                 [style.top.%]="h.box.y * 100"
+                 [style.width.%]="h.box.width * 100"
+                 [style.height.%]="h.box.height * 100">
+              <span class="evidence-box-tag">{{ h.tagLabel }}</span>
+            </div>
+          </div>
         </div>
 
         <div class="image-fallback" *ngIf="imageLoadState === 'loading'">
@@ -80,27 +102,43 @@
 
         <ng-container *ngIf="hasNewResult">
 
-          <!-- 1. Review Required — only Medium/High visual-integrity findings -->
+          <!-- 1. Review Required — only Medium/High visual-integrity findings.
+               These are global, page-wide observations (font/alignment/
+               copy-paste/alteration) with no single physical location, so
+               they are never clickable and never produce a highlight. -->
           <div class="checklist-box review-card" *ngIf="hasVisualIntegrityConcerns">
             <p class="section-label"><i class="ph-duotone ph-warning"></i> Review Required</p>
-            <div class="finding-row" *ngFor="let finding of visualIntegrityFindings">
+            <div class="finding-row" *ngFor="let finding of visualIntegrityFindings; trackBy: trackByLabel">
               <div class="finding-head">
                 <span class="finding-label">{{ finding.label }}</span>
                 <span class="risk-chip" [ngClass]="statusSeverityClass(finding.level)">{{ finding.level }}</span>
               </div>
             </div>
             <p class="finding-reason" *ngIf="integrityCheck?.reason">{{ integrityCheck.reason }}</p>
+            <p class="finding-scope">Global analysis — no specific region</p>
           </div>
           <div class="no-concerns-line" *ngIf="!hasVisualIntegrityConcerns">
             <i class="ph-duotone ph-check-circle"></i> No significant concerns detected.
           </div>
 
-          <!-- 2. Supporting Evidence — up to 3 concise items -->
+          <!-- 2. Supporting Evidence — up to 3 concise items. Clickable
+               (hover or click) when a reliable box exists for that item;
+               plain, non-interactive text otherwise. -->
           <div class="checklist-box evidence-card" *ngIf="supportingEvidenceItems.length">
             <p class="section-label"><i class="ph-duotone ph-check-circle"></i> Supporting Evidence</p>
-            <div class="attention-row" *ngFor="let item of supportingEvidenceItems">
+            <div class="attention-row"
+                 *ngFor="let item of supportingEvidenceItems; trackBy: trackByLabel"
+                 [class.attention-row-clickable]="!!boxForKey(item.key)"
+                 [class.attention-row-active]="isRowActive(item.key)"
+                 [attr.role]="boxForKey(item.key) ? 'button' : null"
+                 [attr.tabindex]="boxForKey(item.key) ? 0 : null"
+                 [attr.aria-pressed]="boxForKey(item.key) ? isRowActive(item.key) : null"
+                 (mouseenter)="onRowEnter(item.key)" (mouseleave)="onRowLeave(item.key)"
+                 (click)="onRowActivate(item.key)"
+                 (keydown.enter)="onRowActivate(item.key)"
+                 (keydown.space)="onRowActivate(item.key); $event.preventDefault()">
               <span class="checklist-icon icon-yes"><i class="ph-duotone ph-check"></i></span>
-              <span class="checklist-label">{{ item }}</span>
+              <span class="checklist-label">{{ item.label }}</span>
             </div>
           </div>
 
@@ -114,13 +152,31 @@
 
               <p class="subsection-label">Supplier Identity</p>
               <p class="match-note" *ngIf="vendorMatchNote" [ngClass]="vendorMatchStatus() === 'yes' ? 'match-note-ok' : 'match-note-warn'">{{ vendorMatchNote }}</p>
-              <div class="checklist-row">
+              <div class="checklist-row"
+                   [class.checklist-row-clickable]="!!boxForKey('company_name')"
+                   [class.checklist-row-active]="isRowActive('company_name')"
+                   [attr.role]="boxForKey('company_name') ? 'button' : null"
+                   [attr.tabindex]="boxForKey('company_name') ? 0 : null"
+                   [attr.aria-pressed]="boxForKey('company_name') ? isRowActive('company_name') : null"
+                   (mouseenter)="onRowEnter('company_name')" (mouseleave)="onRowLeave('company_name')"
+                   (click)="onRowActivate('company_name')"
+                   (keydown.enter)="onRowActivate('company_name')"
+                   (keydown.space)="onRowActivate('company_name'); $event.preventDefault()">
                 <span class="checklist-icon" [ngClass]="rowIconClass(supplierNameStatus())">
                   <i class="ph-duotone" [ngClass]="rowIcon(supplierNameStatus())"></i>
                 </span>
                 <span class="checklist-label">Supplier Name Detected</span>
               </div>
-              <div class="checklist-row">
+              <div class="checklist-row"
+                   [class.checklist-row-clickable]="!!boxForKey('supplier_address')"
+                   [class.checklist-row-active]="isRowActive('supplier_address')"
+                   [attr.role]="boxForKey('supplier_address') ? 'button' : null"
+                   [attr.tabindex]="boxForKey('supplier_address') ? 0 : null"
+                   [attr.aria-pressed]="boxForKey('supplier_address') ? isRowActive('supplier_address') : null"
+                   (mouseenter)="onRowEnter('supplier_address')" (mouseleave)="onRowLeave('supplier_address')"
+                   (click)="onRowActivate('supplier_address')"
+                   (keydown.enter)="onRowActivate('supplier_address')"
+                   (keydown.space)="onRowActivate('supplier_address'); $event.preventDefault()">
                 <span class="checklist-icon" [ngClass]="rowIconClass(supplierAddressStatus())">
                   <i class="ph-duotone" [ngClass]="rowIcon(supplierAddressStatus())"></i>
                 </span>
@@ -135,14 +191,24 @@
               </div>
 
               <p class="subsection-label">Visual Integrity — all checks</p>
+              <p class="finding-scope">Global analysis — no specific region</p>
               <div class="checklist-row" *ngFor="let key of riskKeys">
                 <span class="checklist-label">{{ riskLabels[key] }}</span>
                 <span class="risk-chip" [ngClass]="statusSeverityClass((integrityCheck?.[key] || 'low').toUpperCase())">{{ (integrityCheck?.[key] || 'low').toUpperCase() }}</span>
               </div>
 
               <p class="subsection-label">Document Evidence</p>
-              <div class="evidence-item" *ngFor="let row of documentEvidenceRows">
-                <div class="checklist-row">
+              <div class="evidence-item" *ngFor="let row of documentEvidenceRows; trackBy: trackByLabel">
+                <div class="checklist-row"
+                     [class.checklist-row-clickable]="!!boxForKey(row.key)"
+                     [class.checklist-row-active]="isRowActive(row.key)"
+                     [attr.role]="boxForKey(row.key) ? 'button' : null"
+                     [attr.tabindex]="boxForKey(row.key) ? 0 : null"
+                     [attr.aria-pressed]="boxForKey(row.key) ? isRowActive(row.key) : null"
+                     (mouseenter)="onRowEnter(row.key)" (mouseleave)="onRowLeave(row.key)"
+                     (click)="onRowActivate(row.key)"
+                     (keydown.enter)="onRowActivate(row.key)"
+                     (keydown.space)="onRowActivate(row.key); $event.preventDefault()">
                   <span class="checklist-icon" [ngClass]="rowIconClass(row.status)">
                     <i class="ph-duotone" [ngClass]="rowIcon(row.status)"></i>
                   </span>
