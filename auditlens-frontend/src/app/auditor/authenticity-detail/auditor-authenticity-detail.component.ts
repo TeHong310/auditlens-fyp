@@ -1,5 +1,6 @@
 import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { RouterLink } from '@angular/router';
 import { ActivatedRoute, Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
@@ -28,10 +29,21 @@ const RISK_LABELS: Record<string, string> = {
   alteration_risk:        'Alteration Risk',
 };
 
+const RECOMMENDATION_LABELS: Record<string, string> = {
+  APPROVE: 'Likely Authentic',
+  REVIEW:  'Needs Review',
+  REJECT:  'Likely Inauthentic',
+};
+
+export interface AttentionItem {
+  label: string;
+  detail?: string;
+}
+
 @Component({
   selector: 'app-auditor-authenticity-detail',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, RouterLink],
   templateUrl: './auditor-authenticity-detail.component.html',
   styleUrls: ['./auditor-authenticity-detail.component.css']
 })
@@ -56,6 +68,10 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   consistencyLabels = CONSISTENCY_LABELS;
   riskKeys = Object.keys(RISK_LABELS);
   riskLabels = RISK_LABELS;
+
+  // Which accordion sections are expanded — all start collapsed so the
+  // page opens short and focused; the auditor opts into detail.
+  private openSections = new Set<string>();
 
   private rawBlobUrl: string | null = null;
   private apiUrl = environment.apiUrl;
@@ -285,16 +301,71 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return getAuthenticityEvidenceRows(this.check, this.documentType);
   }
 
-  // ── Final recommendation ──
+  // ── Final recommendation (top summary card) ──
 
-  get finalAssessmentNote(): string {
-    const risk = (this.integrityCheck?.alteration_risk || '').toLowerCase();
-    if (risk === 'high') return 'The system flagged possible visual alteration — review closely.';
-    if (risk === 'medium') return 'The system found some inconsistencies worth a closer look.';
-    return 'The system found no obvious visual alteration.';
+  get recommendationLabel(): string {
+    const decision = this.auditorScore?.decision;
+    return RECOMMENDATION_LABELS[decision] || 'Assessment Pending';
   }
 
-  // ── Re-check: the only action on this page that calls Gemini ──
+  // The score/risk column always has *some* value to show, even for a
+  // legacy check that hasn't been re-run through the scoring engine yet
+  // — check.risk_level is written by both the old and new engine paths.
+  get displayRiskLevel(): string {
+    return this.auditorScore?.risk_level || this.check?.risk_level || 'LOW';
+  }
+
+  // ── Attention Required — only medium/high-risk or failed findings,
+  // each with a short (already backend-authored) explanation. Built from
+  // the deterministic auditor_score reasoning rather than re-deriving
+  // separate thresholds, so this can never disagree with the score
+  // above it. "(not required)" entries (e.g. a missing signature) are
+  // never a real problem, so they're excluded here and surfaced instead
+  // in Verified Evidence.
+
+  get attentionItems(): AttentionItem[] {
+    const items: AttentionItem[] = [];
+    const negatives: string[] = this.auditorScore?.reasons?.negative || [];
+    for (const reason of negatives) {
+      if (/not required/i.test(reason)) continue;
+      items.push({ label: reason });
+    }
+    const issues: string[] = this.crossDocumentAuthenticity?.issues || [];
+    for (const issue of issues) {
+      items.push({ label: issue });
+    }
+    return items;
+  }
+
+  // ── Verified Evidence — combined, deduplicated positive findings,
+  // built concept-by-concept from the structured fields (rather than
+  // merging free-text reason strings from multiple sources) so nothing
+  // can appear twice under different wording.
+
+  get verifiedEvidenceItems(): string[] {
+    const items: string[] = [];
+    const supplier = this.supplierIdentity;
+    if (supplier?.supplier_name_detected && supplier?.address_detected) {
+      items.push('Supplier name and address verified');
+    } else if (supplier?.supplier_name_detected) {
+      items.push('Supplier name verified');
+    } else if (supplier?.address_detected) {
+      items.push('Supplier address verified');
+    }
+    if (this.vendorMatchStatus() === 'yes') {
+      items.push('Vendor name matches extracted record');
+    }
+    for (const row of this.documentEvidenceRows) {
+      if (row.status === 'yes') {
+        items.push(row.label);
+      } else if (row.status === 'na' && /signature/i.test(row.label)) {
+        items.push('Signature not required');
+      }
+    }
+    return items;
+  }
+
+  // ── Re-check: the only action on this page that calls Gemini/Claude ──
 
   recheck() {
     if (!this.documentId || this.isRechecking) return;
@@ -318,6 +389,20 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       }
     });
+  }
+
+  // ── Accordion state ──
+
+  toggleSection(key: string) {
+    if (this.openSections.has(key)) {
+      this.openSections.delete(key);
+    } else {
+      this.openSections.add(key);
+    }
+  }
+
+  isSectionOpen(key: string): boolean {
+    return this.openSections.has(key);
   }
 
   // ── Display helpers ──

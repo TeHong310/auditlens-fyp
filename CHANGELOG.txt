@@ -15894,3 +15894,253 @@ Rollback instructions:
   build) - confined to icon class names/CSS values and one icon string
   in the login component; reverting restores the prior duotone/mixed-
   size icon treatment with no data or schema implications.
+
+----------------------------------------------------------------------
+
+Date: 2026-08-01
+What was changed:
+  Redesigned the Auditor "Authenticity Detail" page (frontend only) to
+  fix "too long, repetitive, no clear focus" - restructured around one
+  question at a time (is it authentic? what's the score/risk? what
+  needs attention? what's next?) instead of 6+ same-weight checklist
+  boxes stacked in a row. No backend, API, database, or route touched
+  - purely a template/CSS/display-logic rewrite over the exact same
+    data the page already fetched.
+  - auditlens-frontend/src/app/auditor/authenticity-detail/
+    auditor-authenticity-detail.component.ts:
+    - Added: recommendationLabel getter (maps the existing
+      auditor_score.decision enum - APPROVE/REVIEW/REJECT - to
+      "Likely Authentic"/"Needs Review"/"Likely Inauthentic" for the
+      new summary card; a display relabeling, not a new judgment -
+      the underlying decision is still the same backend-computed
+      value), displayRiskLevel getter (auditor_score.risk_level with
+      a fallback to check.risk_level so the risk badge has a value
+      even for a legacy check that hasn't run the new engine yet),
+      attentionItems getter (auditor_score.reasons.negative filtered
+      to drop "(not required)" entries - e.g. a missing signature,
+      which is never actually a problem - plus
+      cross_document_authenticity.issues), verifiedEvidenceItems
+      getter (a concept-by-concept build from supplier_identity's own
+      detected/address booleans, the vendor-match check, and
+      documentEvidenceRows' already-detected/not-required rows -
+      deliberately NOT a merge of two free-text reason arrays, which
+      would risk showing near-duplicate phrasings of the same fact),
+      and toggleSection()/isSectionOpen() for the new accordion
+      sections (a Set<string> of open section keys, all collapsed by
+      default).
+    - Removed: finalAssessmentNote getter - it became unreferenced
+      once the summary card started using auditor_score.decision_reason
+      directly (already a short, backend-authored explanation, a more
+      direct fit for "short AI explanation" than re-deriving a second
+      sentence about alteration risk specifically).
+    - Every existing getter/method (hasNewResult, supplierIdentity,
+      integrityCheck, overallResult, documentConsistency, auditorScore,
+      crossDocumentAuthenticity, decisionClass, scoreClass,
+      riskLevelClass, matchLabel/matchClass, rowIconClass/rowIcon,
+      supplierStatusClass/Label, supplierNameStatus/AddressStatus,
+      vendorMatchStatus/Label/Note, documentEvidenceRows, recheck(),
+      docTypeLabel, uploadSourceIcon/Label, consistencyKeys, all the
+      *Labels/*Keys constants) is untouched - the redesign only
+      changes how the template arranges and gates these, not the
+      underlying data computation.
+  - auditlens-frontend/src/app/auditor/authenticity-detail/
+    auditor-authenticity-detail.component.html - full template
+    rewrite (see "Main layout changes" below); every *ngFor/*ngIf
+    still binds to the same `check` object property paths as before,
+    just re-arranged.
+  - auditlens-frontend/src/app/auditor/authenticity-detail/
+    auditor-authenticity-detail.component.css - full rewrite:
+    new .summary-card/.attention-card/.verified-card/.matching-card/
+    .accordion-* rules; .image-panel gained position:sticky (disabled
+    under the existing 900px responsive breakpoint); removed the
+    hover-lift transform+glow transition from .checklist-box/.meta-box
+    (excessive per the task), removed font-style:italic from
+    .evidence-reason/.ai-text (repeated italic explanations, per the
+    task); .meta-box and .ai-box rules removed as no longer referenced
+    by any element (their content now lives inside the Technical
+    Metadata accordion / legacy checklist box respectively).
+
+Main layout changes:
+  1. Final Recommendation moved to a full-width summary card at the
+     very top: authenticity score, risk badge, recommendation label,
+     the short decision_reason explanation, the exact clarification
+     sentence requested ("Authenticity assessment evaluates document
+     identity and integrity. Transaction matching issues are reviewed
+     separately."), and both the Re-check Analysis and (new) Open
+     Record Detail buttons. For a legacy check with no ai_visual_result
+     yet, this card shows a plain "hasn't run through the full
+     engine yet" message instead of a score, rather than displaying
+     nothing or a misleading zero.
+  2. Two-column desktop layout preserved (left 1.4fr / right 1fr) -
+     the left document-preview panel is now position:sticky (stays in
+     view while the findings column scrolls), disabled below the
+     existing 900px breakpoint where the columns stack.
+  3. New "Attention Required" card - only medium/high-risk or failed
+     findings (e.g. "Elevated font consistency (medium)", cross-
+     document issues), each already a short backend-authored phrase;
+     absent entirely when there's nothing to flag.
+  4. New "Verified Evidence" card - combined/deduplicated positives
+     (supplier name/address verified, vendor matched, evidence rows
+     already detected, "Signature not required" when a signature
+     genuinely isn't required for that document type) - built
+     concept-by-concept so the same fact can't appear twice under
+     different wording.
+  5. "Document Consistency" replaced by a compact "Transaction
+     Matching" card (2x2 grid: Vendor/PO/Items/Amount match), the
+     requested disclaimer sentence, and a link to Record Detail
+     (routerLink to /auditor/record-detail with the document_id query
+     param record-detail already reads - confirmed by reading its
+     ngOnInit before wiring this up, no new backend endpoint needed).
+  6. Five collapsed-by-default accordion sections replace what were
+     5 separate always-open checklist boxes: Document Evidence
+     (supplier identity detail + the per-key evidence rows), Integrity
+     Analysis (per-axis risk chips + reason + overall_result.reasons),
+     Cross-document Verification (only rendered when the backend
+     actually returned it - i.e. 2+ document types checked), Why This
+     Recommendation? (new - the full auditor_score.reasons positive/
+     negative breakdown, previously only ever shown in full, all the
+     time, taking up permanent space), Technical Metadata (upload
+     source, plus ai_engine_used and created_at - both real columns
+     the API already returned but the old template never displayed
+     at all).
+  7. Removed: the standalone Upload Source card (folded into Technical
+     Metadata / the legacy checklist), the separate "AI Notes" box for
+     documents already using the new engine (its content, check.
+     ai_notes, is generated server-side as
+     '; '.join(overall_result.reasons) - i.e. the exact same array
+     already shown in Integrity Analysis, just pre-joined into a
+     string - so showing both was showing the same explanation twice;
+     confirmed by reading helpers/authenticity_check.py before
+     deciding this, not assumed), the bottom full-width Re-check
+     button (recheck() now has exactly one call site, in the summary
+     card), the hover-lift card animation, and the italic styling on
+     repeated AI-explanation text.
+
+Any existing fields that could not be displayed:
+  None were technically impossible to display - every field the page
+  already fetched is shown somewhere in the new layout. Two fields
+  are deliberately NOT repeated for documents that have run the new
+  engine, both explained above and neither a data loss:
+  - check.authenticity_status (the old raw "warning"/"passed" flag) -
+    superseded by the new score-derived recommendation for
+    hasNewResult documents (a strictly more informative signal); still
+    shown for legacy documents, where it's the only status available.
+  - check.ai_notes - superseded by overall_result.reasons for
+    hasNewResult documents for the duplication reason above; still
+    shown for legacy documents.
+  check.signal_boxes and check.boxes (bounding-box marker data) were
+  already unused by the pre-redesign template too - this page has no
+  image-annotation/marker UI in either version - so their absence is
+  pre-existing, not something this redesign removed.
+
+Why:
+  Requested: the page was too long, repetitive, and had no clear
+  focus - an auditor opening it should immediately see whether the
+  document is authentic, its score/risk, what needs attention, and
+  what to do next, instead of scrolling through 6+ equally-weighted
+  boxes to piece that together themselves.
+
+Confirmed unchanged (safety rules for this phase):
+  - No backend file touched - git diff --stat shows only the 3
+    authenticity-detail component files.
+  - No API/response shape touched - every field referenced is one the
+    page already fetched from the existing GET /authenticity/<id>
+    endpoint; nothing hardcoded, nothing invented.
+  - No routing touched - the existing /auditor/authenticity/:documentId
+    route, its document_type query param, and the Authenticity list
+    page's navigation into it (auditor-authenticity.component.ts's
+    viewDocument()) are all unchanged and re-verified working.
+  - Record Detail page and its own navigation/data-loading are
+    completely untouched - confirmed by loading it directly (zero
+    console/page errors) and via the new Open Record Detail link.
+  - recheck()'s request/response handling, the image-loading blob
+    logic, and ngOnDestroy's URL.revokeObjectURL cleanup are all
+    byte-for-byte unchanged.
+
+Test results:
+  - npx ng build --configuration production - succeeded (exit 0; new
+    main-*.js bundle hash; same pre-existing bundle-size warnings,
+    unrelated to this change).
+  - No existing test data in the dev DB for this table, so 3 realistic
+    fixture authenticity_checks rows (plus their documents/
+    extracted_fields rows and one throwaway auditor account) were
+    inserted directly via psycopg2 to cover the real scenarios: (1) a
+    medium-risk, mixed-match document with a SECOND document_type row
+    on the same document_id specifically to exercise the live-computed
+    cross_document_authenticity path (which needs 2+ checked types -
+    confirmed by reading routes/authenticity.py's
+    _cross_document_authenticity_for first), (2) a legacy document
+    with ai_visual_result left NULL, (3) a high-risk/low-score REJECT
+    document with zero positive findings except the always-true
+    "signature not required" fact. All 3 verified live via Playwright
+    (38 total checks across both sessions, 37 pass on first run, the
+    1 "failure" was a wrong test assumption on my part - see below -
+    not a bug):
+    - Doc 1 (medium risk): summary shows 74/100, MEDIUM RISK, "Needs
+      Review", the real decision_reason; Attention Required shows
+      exactly the 4 real medium/high findings and excludes every
+      "(not required)" entry; Verified Evidence shows 4 deduplicated
+      positives including "Signature not required"; Transaction
+      Matching renders the 2x2 grid with a genuine PO-match mismatch
+      and the disclaimer; all 5 accordions present, collapsed by
+      default (0 accordion-body elements visible on load), each opens
+      to real content on click, including Cross-document Verification
+      genuinely showing a live-detected "Supplier identity differs
+      across Invoice/PO/GR" issue (the fixture's 2nd row used a
+      deliberately different supplier name); image panel confirmed
+      position:sticky; confirmed .meta-box/.ai-box no longer exist in
+      the DOM and there's exactly one .btn-recheck element on the page.
+    - Doc 2 (legacy): summary card shows the "hasn't run through the
+      full engine yet" fallback (including the legacy authenticity_
+      status), no score/risk shown, Attention Required and Verified
+      Evidence cards both correctly absent, the legacy Signals
+      Checklist box still renders with the real upload source.
+    - Doc 3 (high risk): summary shows 22/100, HIGH RISK, "Likely
+      Inauthentic"; Attention Required shows all 8 real negative
+      findings; Verified Evidence correctly shows only the single
+      always-true "Signature not required" fact (my test initially
+      asserted this card should be fully absent when there are zero
+      "real" positives, which was my own wrong assumption going in -
+      the card is working correctly per the task's own requirement
+      that this exact fact belongs in Verified Evidence regardless of
+      overall risk; confirmed by screenshot that it reads honestly,
+      not misleadingly, next to 8 Attention items).
+    - Open Record Detail link verified navigating to the exact
+      /auditor/record-detail?document_id=<id> URL record-detail's own
+      ngOnInit reads, and Record Detail loads cleanly (0 console/page
+      errors) from it.
+    - Authenticity list page -> detail page click-through
+      re-verified working end-to-end (not just direct URL navigation).
+    - Responsive check at 700px width: grid collapses to a single
+      column, image panel position becomes static (sticky disabled),
+      zero horizontal overflow, full page screenshot confirmed
+      readable stacked order.
+    - Zero console/page errors across every scenario tested.
+    - All fixture rows (3 documents, 3 extracted_fields, 4
+      authenticity_checks, 7 audit_logs, 1 user) deleted afterward and
+      verified at 0 remaining. Dev server processes (Flask + reloader
+      child, Angular CLI + esbuild child) stopped afterward by exact
+      PID.
+
+Build result:
+  Frontend: clean production build, exit 0. Live browser check: all
+  3 realistic fixture scenarios (medium-risk/cross-document, legacy,
+  high-risk/REJECT) render correctly, list-page and Record-Detail
+  navigation both re-verified working, responsive layout confirmed at
+  700px, zero console/page errors throughout.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false,
+     so Render should auto-deploy the frontend from this push with no
+     separate manual trigger needed on my end.
+  2. No backend redeploy needed (no backend changes this phase).
+  3. No database migration needed (no schema changes).
+
+Rollback instructions:
+  Revert this one commit (git revert, or redeploy the previous
+  frontend build) - confined to the 3 authenticity-detail component
+  files; reverting restores the prior long-form layout with no data
+  or schema implications.

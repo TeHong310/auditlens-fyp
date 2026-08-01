@@ -66,6 +66,111 @@
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ══════════ Summary card ══════════ */
+.summary-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-hover);
+  border-radius: 14px;
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.summary-doc-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.summary-doc-sub {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.summary-main {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 12px 0;
+  border-top: 1px solid var(--bg-hover);
+  border-bottom: 1px solid var(--bg-hover);
+}
+
+.summary-pending {
+  border: none;
+  padding: 4px 0;
+}
+
+.summary-score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.summary-score .score-value {
+  font-size: 34px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.summary-recommendation { flex: 1; min-width: 220px; }
+
+.recommendation-label {
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.recommendation-label.decision-approve { color: var(--success); }
+.recommendation-label.decision-review  { color: var(--warning); }
+.recommendation-label.decision-reject  { color: var(--danger); }
+
+.recommendation-reason {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.summary-clarification {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.summary-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn-record-detail {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 11px 18px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border-hover);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: background .2s ease;
+}
+
+.btn-record-detail:hover { background: var(--bg-active); }
+
 /* Layout */
 .detail-layout {
   display: grid;
@@ -76,12 +181,13 @@
 
 @media (max-width: 900px) {
   .detail-layout { grid-template-columns: 1fr; }
+  .image-panel { position: static !important; }
 }
 
 /* Image panel — deliberately kept a WHITE/paper background even in the
    dark restyle: this is the uploaded document itself, not app chrome,
-   and darkening it would make a real paper document look wrong plus
-   risk the overlay markers losing contrast against it. */
+   and darkening it would make a real paper document look wrong. Sticky
+   so it stays in view while the findings column scrolls. */
 .image-panel {
   background: white;
   border-radius: 12px;
@@ -90,6 +196,8 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  position: sticky;
+  top: 20px;
 }
 
 .image-wrap {
@@ -102,18 +210,9 @@
   display: block;
   max-width: 100%;
   height: auto;
+  max-height: calc(100vh - 80px);
+  object-fit: contain;
   border-radius: 8px;
-}
-
-/* Sits on the white .image-panel above, so stays light-on-white rather
-   than following the dark accent tokens — see .image-panel comment. */
-.image-caption {
-  background: #EFF6FF;
-  border: 1px solid #BFDBFE;
-  border-radius: 8px;
-  padding: 10px 14px;
-  font-size: 12.5px;
-  color: #1D4ED8;
 }
 
 /* .image-fallback sits within the light .image-panel above — kept
@@ -138,52 +237,14 @@
   gap: 14px;
 }
 
-.verdict-banner {
-  border-radius: 12px;
-  padding: 16px 18px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-  border-left: 4px solid transparent;
-}
-
-.verdict-passed {
-  background: linear-gradient(135deg, var(--success-bg), var(--success-bg));
-  color: var(--success);
-  border-left-color: var(--success);
-}
-
-.verdict-warning {
-  background: linear-gradient(135deg, var(--warning-bg), var(--warning-bg));
-  color: var(--warning);
-  border-left-color: var(--warning);
-}
-
-.verdict-icon { font-size: 26px; }
-
-.verdict-title {
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.verdict-doc {
-  font-size: 12px;
-  margin-top: 2px;
-  opacity: 0.85;
-}
-
-.vendor-line {
-  font-size: 13px;
-  color: var(--text-secondary);
-  padding: 0 2px;
-}
-
 .section-label {
   font-size: 11.5px;
   font-weight: 700;
   color: var(--text-secondary);
   margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .checklist-box {
@@ -191,12 +252,6 @@
   border-radius: 12px;
   padding: 16px 18px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-  transition: transform .28s cubic-bezier(.34,1.2,.64,1), box-shadow .28s ease;
-}
-
-.checklist-box:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 10px 28px var(--accent-glow), 0 0 0 1px var(--border-hover);
 }
 
 .checklist-row {
@@ -285,7 +340,6 @@
 .evidence-reason {
   font-size: 11px;
   color: var(--text-secondary);
-  font-style: italic;
   padding: 0 0 6px 32px;
   line-height: 1.4;
 }
@@ -301,50 +355,89 @@
 .risk-chip.risk-medium { background: var(--warning-bg); color: var(--warning); }
 .risk-chip.risk-high   { background: var(--danger-bg); color: var(--danger); }
 
-/* Final Risk Assessment (v4) */
-.final-assessment {
-  background: var(--accent-bg);
-  border: 1px solid var(--border-hover);
+/* ── Attention Required / Verified Evidence ── */
+.attention-card { border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border)); }
+.verified-card  { border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border)); }
+
+.attention-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
 }
 
-.ai-disclaimer {
+/* ── Transaction Matching (compact) ── */
+.matching-card { display: flex; flex-direction: column; gap: 10px; }
+
+.matching-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+}
+
+.matching-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.matching-note {
   font-size: 11.5px;
   color: var(--text-secondary);
-  line-height: 1.5;
-  margin-bottom: 10px;
+  line-height: 1.4;
 }
 
-.score-row {
+.matching-link {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-soft);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+}
+
+.matching-link:hover { text-decoration: underline; }
+
+/* ── Accordion ── */
+.accordion-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.accordion-item {
+  background: var(--bg-card);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.accordion-header {
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.score-value {
-  font-size: 26px;
-  font-weight: 800;
-}
-
-.score-max {
+  gap: 10px;
+  padding: 14px 18px;
+  background: none;
+  border: none;
+  cursor: pointer;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--text-primary);
+  text-align: left;
 }
 
-.decision-badge {
-  font-size: 12px;
-  font-weight: 800;
-  padding: 5px 12px;
-  border-radius: 8px;
-  letter-spacing: 0.03em;
+.accordion-header:hover { background: var(--bg-hover); }
+.accordion-header i { color: var(--text-secondary); font-size: 14px; flex-shrink: 0; }
+
+.accordion-body {
+  padding: 0 18px 16px;
 }
 
-.decision-approve { background: var(--success-bg); color: var(--success); }
-.decision-review  { background: var(--warning-bg); color: var(--warning); }
-.decision-reject  { background: var(--danger-bg);  color: var(--danger); }
-
+/* Final Risk Assessment (v4) reason breakdown — used inside the "Why
+   This Recommendation?" accordion. */
 .reason-row {
   display: flex;
   align-items: flex-start;
@@ -362,41 +455,25 @@
 .reason-positive { color: var(--success); }
 .reason-negative { color: var(--text-secondary); }
 
-.meta-box {
-  background: var(--bg-card);
-  border-radius: 12px;
-  padding: 14px 18px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-  transition: transform .28s cubic-bezier(.34,1.2,.64,1), box-shadow .28s ease;
-}
-
-.meta-box:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 10px 28px var(--accent-glow), 0 0 0 1px var(--border-hover);
-}
-
 .meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
   color: var(--text-secondary);
+  padding: 4px 0;
 }
-
-.ai-box {
-  background: var(--accent-bg);
-  border: 1px solid var(--border-hover);
-  border-radius: 12px;
-  padding: 14px 18px;
-}
-
-.ai-box .section-label { color: var(--accent-soft); }
 
 .ai-text {
   font-size: 13px;
   color: var(--text-secondary);
-  font-style: italic;
   line-height: 1.5;
 }
 
 .btn-recheck {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 11px 18px;
   border-radius: 10px;
   font-size: 13.5px;
@@ -405,8 +482,8 @@
   border: none;
   background: linear-gradient(135deg, var(--accent), var(--accent));
   color: var(--text-primary);
-  transition: all .2s ease;
+  transition: filter .2s ease;
 }
 
-.btn-recheck:hover:not(:disabled) { background: linear-gradient(135deg, var(--accent-soft), var(--accent)); }
+.btn-recheck:hover:not(:disabled) { filter: brightness(1.1); }
 .btn-recheck:disabled { opacity: 0.6; cursor: not-allowed; }
