@@ -16438,3 +16438,217 @@ Rollback instructions:
   state, old filter labels) with no data loss - the anomaly_detection_
   runs table simply stops being written to/read from, existing
   anomalies/reviews are untouched either way.
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Frontend only - no backend files changed. auditlens-frontend/src/app/
+  finance/upload/finance-upload.component.ts/.html/.css, plus package.
+  json/package-lock.json (new dependency: jszip) and angular.json (one
+  line: allowedCommonJsDependencies: ["jszip"], to silence Angular's
+  expected "not ESM" build warning for that package - purely cosmetic,
+  no behavior change).
+    - ZIP batch upload: .zip added to the file picker and accepted via
+      drag-and-drop. A selected/dropped ZIP is extracted entirely
+      client-side with JSZip - the ZIP itself is never uploaded or
+      stored, only its supported entries (PDF/JPG/JPEG/PNG) are. Nested
+      ZIPs, unreadable/encrypted entries, and unsupported formats are
+      skipped with a note; directory entries, __MACOSX metadata, and
+      dotfiles (.DS_Store, etc.) are ignored silently as routine ZIP
+      noise. A ZIP whose own container is encrypted/corrupted fails to
+      load entirely and reports one clear top-level error. Extracted
+      entries over 10MB (the page's own already-documented "Maximum
+      10MB per file" rule, not a new limit) are skipped. A ZIP that
+      yields zero supported documents shows a clear "contains no
+      supported documents" error. Same-name+same-size duplicates
+      (against anything already staged or queued) are skipped; a
+      previous FAILED entry with the same name+size is still replaced
+      on re-add, matching this page's pre-existing retry-by-re-add
+      behavior.
+    - Document type recognition: every newly added/extracted file lands
+      in a new "Confirm Document Types" staging list (NOT the upload
+      queue) with a document type guessed from its filename - invoice/
+      inv -> Invoice, purchase_order/purchase-order/po -> Purchase
+      Order, goods_receipt/goods-receipt/gr -> Goods Receipt (word-
+      boundary matched, so e.g. "report.pdf" doesn't false-positive on
+      "po"), defaulting to Invoice otherwise. The type is shown in an
+      editable dropdown per file; nothing uploads until the file is
+      explicitly confirmed (per-file "Confirm" or a "Confirm All" for
+      the whole batch) or removed. This is a purely frontend label -
+      the actual backend document_type enum used elsewhere (e.g.
+      authenticity_checks.document_type) is untouched.
+    - Sequential processing + routing: confirmed files still upload one
+      at a time through the SAME queue engine as before. Invoice-typed
+      files upload via the existing (unchanged) POST /documents/upload.
+      Purchase Order/Goods Receipt-typed files reuse the existing
+      "attach to an invoice" endpoints (POST /documents/upload-po/<id>,
+      POST /documents/upload-gr/<id>) - the target invoice is the one
+      most recently uploaded earlier in the SAME batch (so a ZIP/multi-
+      select containing an Invoice + PO + GR wires them together
+      automatically), falling back to whatever document the user has
+      separately selected via the page's existing "Attach PO/GR" flow.
+      A Purchase Order/Goods Receipt with no available target invoice
+      fails with a clear message rather than silently doing nothing -
+      and does not stop the rest of the queue.
+    - Upload/processing progress: switched from a plain observe:'body'
+      POST to reportProgress:true, observe:'events', tracking real
+      HttpEventType.UploadProgress ticks for the actual transfer
+      percentage. IMPORTANT correction made during live testing:
+      HttpEventType.Sent fires at the START of a request (right after
+      it's dispatched), not after the upload finishes - confirmed live
+      via direct console inspection of every event, which showed type=0
+      (Sent) arriving BEFORE any UploadProgress events. The original
+      implementation used Sent to trigger the "OCR and AI Processing"
+      state, which made every file skip the uploading-percentage
+      display entirely (verified live with a throttled connection:
+      status jumped straight to "OCR and AI Processing" at t=0ms for
+      every file, 0 distinct percentages ever observed). Fixed to
+      switch to 'processing' when an UploadProgress event's own
+      loaded reaches total instead - re-verified live over a CDP-
+      throttled connection: 100 distinct percentage values observed
+      climbing 0%->100%, THEN switching to "OCR and AI Processing" with
+      the exact required message "OCR and AI extraction in progress.
+      This may take a moment." (indeterminate, no fabricated
+      percentage). Each queued row shows one of 5 states - Waiting /
+      Uploading (with a live %) / OCR and AI Processing (indeterminate)
+      / Completed / Failed - plus a new "Processing Summary" panel
+      (Total Files / Completed / Processing / Failed / "Processing N of
+      Total") computed live from the queue.
+    - Also fixed as part of "disable accidental duplicate submission"
+      (explicit UX requirement): the sequential engine's own re-entry
+      point now no-ops if an upload is already active, closing a
+      pre-existing gap where a drag-drop mid-upload (not blocked by the
+      dropzone's disabled state, which only gates click/Browse) could
+      have started a second, concurrent upload.
+    - "Clear Done" relabeled "Clear Completed"; the drained-queue
+      message now reads "Batch processing completed: N successful, M
+      failed." (matching the requested format exactly) instead of the
+      previous generic "All files uploaded successfully!" - this
+      summarizes the WHOLE current queue (unchanged scope from the
+      original code, which already worked this way), not just the
+      files from the most recent confirm action.
+    - Everything else on this page - the PO/GR "Attach" section, the
+      Recent Upload Queue table, pagination, view/delete actions - is
+      completely unchanged.
+
+Why:
+  User-requested improvement to the Finance Executive "Upload Document"
+  page: let finance executives upload a ZIP of scanned/exported
+  documents in one action instead of selecting each file individually,
+  auto-recognize and route Invoice/PO/GR from filenames while keeping a
+  human confirmation step, and give clear, honest upload-vs-processing
+  progress feedback (no fake percentages during the AI/OCR stage) -
+  all while reusing the existing upload endpoints/OCR/AI pipeline
+  completely unchanged.
+
+Test results:
+  - python tests/extraction/run_all.py - 29/29 suites PASS (unchanged;
+    confirms zero backend regressions from a change that touches no
+    backend files at all).
+  - npx ng build --configuration production - succeeded (exit 0; new
+    bundle hash, ~110KB larger from the new jszip dependency, still
+    well under the 2MB error budget; same 2 pre-existing per-component
+    CSS budget warnings, unrelated to this change; the earlier "jszip
+    is not ESM" warning is silenced via angular.json's
+    allowedCommonJsDependencies).
+  - Live Playwright verification (throwaway finance_executive account
+    zip_fixture_finance@x.com), synthetic PDFs/ZIPs built with PyMuPDF/
+    Python's zipfile/pyzipper (a genuinely AES-encrypted ZIP, for a
+    real - not simulated - encrypted-archive rejection test):
+    - 1 normal PDF, and 2 manually multi-selected PDFs: both flows
+      staged for type confirmation, correctly inferred as Invoice,
+      uploaded strictly sequentially (never more than 1 file
+      uploading/processing at once, confirmed by polling), reached
+      Completed, and produced the exact "Batch processing completed: N
+      successful, 0 failed." summary. 16/16 checks passed.
+    - ZIP with 1 Invoice + 1 PO + 1 GR: all 3 correctly extracted (ZIP
+      itself never appeared anywhere), correctly inferred by filename,
+      and after confirming all 3 - the Invoice uploaded via POST /
+      documents/upload, then the PO and GR were automatically routed to
+      POST /documents/upload-po/<id> and /upload-gr/<id> against that
+      SAME batch's newly-created invoice document_id, both completing
+      with "... attached successfully". 8/8 checks passed.
+    - ZIP with folders + __MACOSX/.DS_Store/an explicit directory entry
+      alongside 2 real documents: exactly 2 documents staged (junk
+      silently ignored), shown by basename only (no folder-path
+      prefix). 5/5 checks passed.
+    - ZIP containing only unsupported files, and a completely empty
+      ZIP: both correctly produced the "contains no supported
+      documents" error with nothing staged. 4/4 checks passed.
+    - ZIP with a nested .zip alongside 1 valid PDF: the nested archive
+      was skipped with a "nested ZIP files are not supported" note,
+      the 1 valid PDF still staged normally. 2/2 checks passed.
+    - A genuinely AES-256 encrypted ZIP (built with pyzipper, real
+      password protection - not a simulated failure) and a corrupted/
+      garbage-bytes ".zip": both correctly failed to load and showed
+      the clear "could not be read - it may be encrypted, password-
+      protected, or corrupted" error, nothing staged either time. 4/4
+      checks passed.
+    - Partial-failure batch (1 valid PDF, 1 deliberately invalid
+      "garbage.pdf", 1 more valid PDF): the invalid file failed with a
+      real backend error message ("Failed to open stream" - a genuine
+      PDF-parsing failure from the actual OCR pipeline, not a simulated
+      one), while BOTH valid files - including the one queued AFTER the
+      failure - still reached Completed, proving the queue doesn't stop
+      on a failure. Batch summary correctly read "2 successful, 1
+      failed." Retry Failed re-attempted the invalid file (which
+      predictably failed again, proving the retry path actually re-
+      runs the upload rather than just resetting a status flag).
+      Confirmed a staged-but-not-yet-confirmed file never appears in
+      the Upload Queue or shows any uploading state. 10/10 checks
+      passed.
+    - Upload/processing progress state machine re-verified in isolation
+      over a CDP-throttled connection (see the bug fix above): real
+      percentage climbs 0%->100% during transfer, then switches to the
+      exact required indeterminate message, then Completed.
+    - OCR Review: every completed upload (normal, multi-select, and
+      ZIP-derived) confirmed showing up correctly there, via the same
+      unchanged GET /documents/ endpoint this page's own Recent Upload
+      Queue table already uses.
+    - Responsive check at a 390px mobile viewport: zero horizontal
+      page overflow (document.documentElement.scrollWidth === client-
+      Width), dropzone/processing panel/queue table all render legibly
+      stacked; wide tables scroll horizontally within their own
+      existing .table-wrapper (the same pre-existing pattern already
+      used by every other table on this page).
+    - Zero console/page errors across every scenario. All 17 test
+      documents created during verification deleted afterward
+      (cascaded through extracted_fields/purchase_orders/goods_receipts/
+      authenticity_checks/anomaly_detection_runs) and verified at 0
+      remaining; the throwaway test account itself was left in place
+      (same pattern as this project's other reusable fixture accounts).
+      Dev server processes (Flask + reloader child, Angular CLI)
+      stopped afterward by exact PID.
+
+Build result:
+  Backend: 29/29 test suites pass (no backend files touched). Frontend:
+  clean production build, exit 0. Live browser check: every scenario in
+  the task's verification list confirmed end-to-end against real
+  synthetic fixtures (including a genuinely encrypted ZIP and a real
+  backend-side processing failure, not simulated), zero console/page
+  errors.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0 (test fixtures were small synthetic
+  PDFs with plain text; whichever AI provider actually ran for each
+  real upload is unchanged/unaffected by this change - this task never
+  touches routes/documents.py, helpers/claude_extractor.py, helpers/
+  gemini_extractor.py, or helpers/ai_extractor_router.py).
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false,
+     so Render should auto-deploy the frontend from this push with no
+     separate manual trigger needed.
+  2. No backend redeploy needed (no backend files changed).
+  3. No database migration needed (no schema changes).
+  4. Nothing to configure - jszip has zero runtime dependencies and
+     needs no API key/environment variable.
+
+Rollback instructions:
+  Revert this one commit (git revert, or redeploy the previous frontend
+  build) - confined to the 3 finance-upload component files plus
+  package.json/package-lock.json/angular.json; reverting removes the
+  jszip dependency and restores the page's prior single-endpoint,
+  no-staging-step upload flow exactly as it was. No backend, data, or
+  schema implications either way.

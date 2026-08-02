@@ -1,10 +1,61 @@
 import { Component, OnInit, OnDestroy, ElementRef, ViewChild, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { HttpClient, HttpHeaders, HttpEventType, HttpEvent } from '@angular/common/http';
+import JSZip from 'jszip';
 import { environment } from '../../../environments/environment';
 import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
 import { FinanceUserMenuComponent } from '../shared/finance-user-menu.component';
+
+// The 3 document types this page recognizes from a filename — kept
+// separate from any backend document_type enum (e.g. authenticity_
+// checks.document_type's 'po'/'gr') per the task's own "without
+// changing the underlying backend document-type values" requirement.
+// This value only ever decides WHICH existing endpoint a queue item is
+// sent to (see uploadNextInQueue()) — it is never sent to the backend
+// as a form field.
+export type DocType = 'invoice' | 'purchase_order' | 'goods_receipt';
+
+export type QueueStatus = 'pending' | 'uploading' | 'processing' | 'done' | 'error';
+
+export interface QueueItem {
+  file: File;
+  docType: DocType;
+  status: QueueStatus;
+  message: string;
+  previewUrl?: string;
+  progress: number;       // 0-100, real upload % — only meaningful while status === 'uploading'
+  batchId: number;        // groups files added together in one handleFiles() call — used to
+                           // find "the invoice from THIS batch" for purchase_order/goods_receipt routing
+}
+
+// A file that has been selected/extracted but not yet confirmed into
+// the actual upload queue — see the task's "Do not upload a file until
+// its document type is confirmed" requirement.
+export interface StagedFile {
+  id: number;
+  file: File;
+  docType: DocType;
+  inferredType: DocType;
+  previewUrl?: string;
+  batchId: number;
+}
+
+const ALLOWED_EXTENSIONS = ['pdf', 'jpg', 'jpeg', 'png'];
+// Matches the ONLY existing size figure documented anywhere on this
+// page (the "Upload Rules" card's "Maximum 10MB per file") — there is
+// no enforced hard limit today for manually-selected files, so this is
+// reused specifically for ZIP-extracted entries per the task's own
+// "Reuse the project's existing file-size limits" instruction, without
+// retroactively changing the (currently unenforced) manual-select path.
+const MAX_ZIP_ENTRY_BYTES = 10 * 1024 * 1024;
+
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+};
 
 @Component({
   selector: 'app-finance-upload',
@@ -25,7 +76,21 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
   successMessage: string = '';
   isDragOver: boolean = false;
 
-  uploadQueue: { file: any, status: 'pending' | 'uploading' | 'done' | 'error', message: string, previewUrl?: string }[] = [];
+  uploadQueue: QueueItem[] = [];
+
+  // Files awaiting document-type confirmation — populated by
+  // handleFiles() (manual select, drag-drop, or ZIP extraction) and
+  // moved into uploadQueue only once confirmed (confirmStaged()/
+  // confirmAllStaged()).
+  stagedFiles: StagedFile[] = [];
+  private stagedIdCounter = 0;
+  private batchCounter = 0;
+  // The document_id of the most recently successfully-uploaded Invoice
+  // per batch — purchase_order/goods_receipt queue items from the SAME
+  // batch attach to this via the existing upload-po/upload-gr endpoints
+  // (falls back to selectedDocumentId, the page's existing "Attach
+  // PO/GR" target, if no invoice from the same batch is available yet).
+  private batchAnchorInvoice: Record<number, number> = {};
 
   // PO + GR
   selectedDocumentId: number | null = null;
@@ -52,6 +117,9 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
 
   ngOnDestroy() {
     this.uploadQueue.forEach(item => {
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+    });
+    this.stagedFiles.forEach(item => {
       if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
     });
   }
@@ -110,104 +178,348 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
     }
   }
 
-  handleFiles(files: File[]) {
+  // Entry point for every file-selection path (Browse Files, drag-drop,
+  // and — via extractZipFile() below — a .zip's contents). ZIP files
+  // are extracted client-side and never themselves added to the queue
+  // or uploaded; their supported entries are merged in with any
+  // directly-selected files and go through the SAME validation/dedup/
+  // type-inference staging step before anything is queued for upload.
+  async handleFiles(files: File[]) {
     this.errorMessage = '';
     this.successMessage = '';
 
-    const allowed = ['pdf', 'jpg', 'jpeg', 'png'];
+    const batchId = ++this.batchCounter;
+    const zipInputs = files.filter(f => this.isZipFile(f));
+    const directInputs = files.filter(f => !this.isZipFile(f));
+
+    const candidates: File[] = [...directInputs];
+    const zipNotes: string[] = [];
+    for (const zip of zipInputs) {
+      const result = await this.extractZipFile(zip);
+      candidates.push(...result.files);
+      zipNotes.push(...result.notes);
+    }
+
     const validFiles: File[] = [];
     const invalidFiles: string[] = [];
-
-    for (const file of files) {
+    for (const file of candidates) {
       const ext = file.name.split('.').pop()?.toLowerCase();
-      if (!ext || !allowed.includes(ext)) {
+      if (!ext || !ALLOWED_EXTENSIONS.includes(ext)) {
         invalidFiles.push(file.name);
       } else {
         validFiles.push(file);
       }
     }
 
-    if (invalidFiles.length > 0) {
-      this.errorMessage = `File type not allowed: ${invalidFiles.join(', ')}. Use: PDF, JPG, JPEG, PNG`;
-    }
+    // A same-name/same-size file already staged or actively queued
+    // (pending/uploading/processing/done) is a true duplicate and is
+    // skipped. A same-name/same-size 'error' queue item is treated as
+    // replaceable — matches the existing retry-by-re-add behavior this
+    // page already had before this change.
+    const seenKeys = new Set<string>();
+    this.stagedFiles.forEach(s => seenKeys.add(`${s.file.name}:${s.file.size}`));
+    this.uploadQueue.forEach(q => { if (q.status !== 'error') seenKeys.add(`${q.file.name}:${q.file.size}`); });
 
-    if (validFiles.length === 0) return;
-
-    const newFileNames = validFiles.map(f => f.name);
     this.uploadQueue = this.uploadQueue.filter(item =>
-      !(newFileNames.includes(item.file.name) && item.status === 'error')
+      !(validFiles.some(f => f.name === item.file.name && f.size === item.file.size) && item.status === 'error')
     );
 
-    const newItems = validFiles.map(file => ({
-      file,
-      status: 'pending' as const,
-      message: '',
-      previewUrl: this.isImageFile(file) ? URL.createObjectURL(file) : undefined
-    }));
+    const duplicateNames: string[] = [];
+    const newStaged: StagedFile[] = [];
+    for (const file of validFiles) {
+      const key = `${file.name}:${file.size}`;
+      if (seenKeys.has(key)) {
+        duplicateNames.push(file.name);
+        continue;
+      }
+      seenKeys.add(key);
+      const inferred = this.inferDocType(file.name);
+      newStaged.push({
+        id: ++this.stagedIdCounter,
+        file,
+        docType: inferred,
+        inferredType: inferred,
+        previewUrl: this.isImageFile(file) ? URL.createObjectURL(file) : undefined,
+        batchId,
+      });
+    }
 
+    const messages: string[] = [];
+    if (invalidFiles.length > 0) {
+      messages.push(`File type not allowed: ${invalidFiles.join(', ')}. Use: PDF, JPG, JPEG, PNG`);
+    }
+    if (duplicateNames.length > 0) {
+      messages.push(`Already in the queue, skipped: ${duplicateNames.join(', ')}`);
+    }
+    messages.push(...zipNotes);
+    if (messages.length > 0) {
+      this.errorMessage = messages.join(' ');
+    }
+
+    if (newStaged.length > 0) {
+      this.stagedFiles = [...this.stagedFiles, ...newStaged];
+    }
+    this.cdr.detectChanges();
+  }
+
+  private isZipFile(file: File): boolean {
+    return file.name.toLowerCase().endsWith('.zip');
+  }
+
+  // Extracts supported documents from a ZIP client-side (JSZip) — the
+  // ZIP itself is never uploaded or stored. Directory entries, __MACOSX
+  // metadata, and dotfiles (e.g. .DS_Store) are ignored silently as
+  // routine ZIP noise; nested ZIPs, unreadable/encrypted entries, and
+  // unsupported formats are skipped with a note so the user knows
+  // something in their ZIP was excluded. A ZIP that is itself encrypted
+  // fails to load at all and is reported as a single top-level note.
+  private async extractZipFile(zipFile: File): Promise<{ files: File[]; notes: string[] }> {
+    const notes: string[] = [];
+    let zip: JSZip;
+    try {
+      zip = await JSZip.loadAsync(zipFile);
+    } catch (e) {
+      notes.push(`"${zipFile.name}" could not be read — it may be encrypted, password-protected, or corrupted.`);
+      return { files: [], notes };
+    }
+
+    const extracted: File[] = [];
+
+    for (const relativePath of Object.keys(zip.files)) {
+      const entry = zip.files[relativePath];
+      if (entry.dir) continue;
+
+      const segments = relativePath.split('/');
+      const baseName = segments[segments.length - 1];
+      if (!baseName) continue; // stray trailing-slash-only entries
+
+      if (segments.includes('__MACOSX')) continue;
+      if (baseName === '.DS_Store') continue;
+      if (baseName.startsWith('.')) continue;
+
+      const ext = baseName.split('.').pop()?.toLowerCase() || '';
+
+      if (ext === 'zip') {
+        notes.push(`${baseName}: nested ZIP files are not supported, skipped.`);
+        continue;
+      }
+      if (!ALLOWED_EXTENSIONS.includes(ext)) {
+        notes.push(`${baseName}: unsupported file type, skipped.`);
+        continue;
+      }
+
+      let bytes: Uint8Array;
+      try {
+        bytes = await entry.async('uint8array');
+      } catch (e) {
+        notes.push(`${baseName}: could not be extracted (likely encrypted), skipped.`);
+        continue;
+      }
+
+      if (bytes.length > MAX_ZIP_ENTRY_BYTES) {
+        notes.push(`${baseName}: exceeds the 10MB size limit, skipped.`);
+        continue;
+      }
+
+      const mime = MIME_BY_EXT[ext] || 'application/octet-stream';
+      extracted.push(new File([bytes as BlobPart], baseName, { type: mime }));
+    }
+
+    if (extracted.length === 0) {
+      notes.unshift(`"${zipFile.name}" contains no supported documents (PDF, JPG, JPEG, PNG).`);
+    }
+
+    return { files: extracted, notes };
+  }
+
+  // Filename-based document-type guess — an editable starting point
+  // only; see confirmStaged()/confirmAllStaged() for the confirmation
+  // gate that must happen before any file actually uploads.
+  inferDocType(fileName: string): DocType {
+    const name = fileName.toLowerCase();
+    if (/(^|[\s_.\-])(purchase[\s_\-]?order|po)([\s_.\-]|$)/.test(name)) return 'purchase_order';
+    if (/(^|[\s_.\-])(goods[\s_\-]?receipt|gr)([\s_.\-]|$)/.test(name)) return 'goods_receipt';
+    return 'invoice'; // covers explicit "invoice"/"inv" matches and the sensible default otherwise
+  }
+
+  // ── Type-confirmation staging (gates entry into uploadQueue) ──────
+
+  updateStagedType(item: StagedFile, type: DocType) {
+    item.docType = type;
+  }
+
+  removeStaged(item: StagedFile) {
+    if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+    this.stagedFiles = this.stagedFiles.filter(s => s.id !== item.id);
+    this.cdr.detectChanges();
+  }
+
+  confirmStaged(item: StagedFile) {
+    this.stagedFiles = this.stagedFiles.filter(s => s.id !== item.id);
+    this.uploadQueue = [...this.uploadQueue, this.toQueueItem(item)];
+    this.saveQueueToStorage();
+    this.cdr.detectChanges();
+    this.uploadNextInQueue();
+  }
+
+  confirmAllStaged() {
+    if (this.stagedFiles.length === 0) return;
+    const newItems = this.stagedFiles.map(item => this.toQueueItem(item));
+    this.stagedFiles = [];
     this.uploadQueue = [...this.uploadQueue, ...newItems];
     this.saveQueueToStorage();
     this.cdr.detectChanges();
     this.uploadNextInQueue();
   }
 
+  private toQueueItem(item: StagedFile): QueueItem {
+    return {
+      file: item.file,
+      docType: item.docType,
+      status: 'pending',
+      message: '',
+      previewUrl: item.previewUrl,
+      progress: 0,
+      batchId: item.batchId,
+    };
+  }
+
+  docTypeLabel(type: DocType): string {
+    switch (type) {
+      case 'purchase_order': return 'Purchase Order';
+      case 'goods_receipt': return 'Goods Receipt';
+      default: return 'Invoice';
+    }
+  }
+
   uploadNextInQueue() {
+    // Re-entrant guard: prevents drag-dropping/selecting more files
+    // while an upload is already in flight from starting a second,
+    // concurrent upload — the active item's own completion callback
+    // (below) calls this again once it's actually free.
+    if (this.isUploading) return;
+
     const pendingIndex = this.uploadQueue.findIndex(item => item.status === 'pending');
     if (pendingIndex === -1) {
       this.isUploading = false;
       this.loadDocuments();
       this.saveQueueToStorage();
 
-      const hasError = this.uploadQueue.some(item => item.status === 'error');
-      if (hasError) {
-        this.successMessage = 'Some files failed. Click Retry Failed to re-upload.';
-      } else {
-        this.successMessage = 'All files uploaded successfully!';
+      const successCount = this.uploadQueue.filter(item => item.status === 'done').length;
+      const failCount = this.uploadQueue.filter(item => item.status === 'error').length;
+      if (successCount + failCount > 0) {
+        this.successMessage = `Batch processing completed: ${successCount} successful, ${failCount} failed.`;
       }
       this.cdr.detectChanges();
       setTimeout(() => {
         this.successMessage = '';
         this.cdr.detectChanges();
-      }, 5000);
+      }, 6000);
       return;
     }
 
     this.isUploading = true;
-    this.uploadQueue[pendingIndex].status = 'uploading';
+    const item = this.uploadQueue[pendingIndex];
+    item.status = 'uploading';
+    item.progress = 0;
     this.saveQueueToStorage();
     this.cdr.detectChanges();
 
-    const item = this.uploadQueue[pendingIndex];
-
     if (!item.file || !(item.file instanceof File)) {
-      this.uploadQueue[pendingIndex].status = 'error';
-      this.uploadQueue[pendingIndex].message = 'Please re-select this file';
+      item.status = 'error';
+      item.message = 'Please re-select this file';
+      this.isUploading = false;
       this.saveQueueToStorage();
       this.cdr.detectChanges();
       this.uploadNextInQueue();
       return;
     }
 
-    const file = item.file;
-    const formData = new FormData();
-    formData.append('document', file);
-    formData.append('input_method', 'upload');
-
-    const token = localStorage.getItem('access_token');
-
-    this.http.post<any>(`${this.apiUrl}/documents/upload`, formData, {
-      headers: new HttpHeaders({ 'Authorization': `Bearer ${token}` })
-    }).subscribe({
-      next: (res) => {
-        this.uploadQueue[pendingIndex].status = 'done';
-        this.uploadQueue[pendingIndex].message = 'Uploaded successfully';
+    if (item.docType !== 'invoice') {
+      // purchase_order/goods_receipt reuse the EXISTING "attach
+      // supporting document to an invoice" endpoints — they need a
+      // target document_id. Prefer the invoice already uploaded
+      // earlier in this SAME batch (the ZIP/multi-select this file
+      // came from); fall back to whatever document the user has
+      // explicitly picked via the page's existing "Attach PO/GR" flow.
+      const targetDocumentId = this.batchAnchorInvoice[item.batchId] ?? this.selectedDocumentId;
+      if (!targetDocumentId) {
+        item.status = 'error';
+        item.message = `No invoice available to attach this ${this.docTypeLabel(item.docType)} to. ` +
+          `Upload an Invoice in the same batch first, or select an existing invoice via "Attach PO/GR".`;
+        this.isUploading = false;
         this.saveQueueToStorage();
         this.cdr.detectChanges();
         this.uploadNextInQueue();
+        return;
+      }
+      this.uploadQueueItem(item, targetDocumentId);
+      return;
+    }
+
+    this.uploadQueueItem(item, null);
+  }
+
+  // Uploads one confirmed queue item via the appropriate EXISTING
+  // endpoint — /documents/upload for an invoice, /documents/upload-po
+  // or /documents/upload-gr/<targetDocumentId> for a purchase_order/
+  // goods_receipt. Uses HttpClient's progress events (reportProgress +
+  // observe: 'events') so the real upload percentage is shown only
+  // during the file-transfer stage. HttpEventType.Sent fires the moment
+  // the request is DISPATCHED (i.e. at the START of the request, before
+  // any bytes are transferred) — it is NOT a "finished sending" signal
+  // and must not be used to detect upload completion (confirmed live:
+  // Sent arrives before any UploadProgress events at all). The correct
+  // signal that the file is fully on the wire and the backend is now
+  // running OCR/AI extraction — with no further progress available from
+  // the transport layer — is an UploadProgress event whose loaded has
+  // reached total; that's when status switches to 'processing' and the
+  // template shows an indeterminate indicator instead of a fabricated
+  // percentage.
+  private uploadQueueItem(item: QueueItem, targetDocumentId: number | null) {
+    const formData = new FormData();
+    formData.append('document', item.file);
+    if (item.docType === 'invoice') {
+      formData.append('input_method', 'upload');
+    }
+
+    const token = localStorage.getItem('access_token');
+    const url = item.docType === 'invoice'
+      ? `${this.apiUrl}/documents/upload`
+      : item.docType === 'purchase_order'
+        ? `${this.apiUrl}/documents/upload-po/${targetDocumentId}`
+        : `${this.apiUrl}/documents/upload-gr/${targetDocumentId}`;
+
+    this.http.post<any>(url, formData, {
+      headers: new HttpHeaders({ 'Authorization': `Bearer ${token}` }),
+      reportProgress: true,
+      observe: 'events'
+    }).subscribe({
+      next: (event: HttpEvent<any>) => {
+        if (event.type === HttpEventType.UploadProgress) {
+          item.progress = event.total ? Math.round((100 * event.loaded) / event.total) : 0;
+          if (event.total && event.loaded >= event.total) {
+            item.status = 'processing';
+          }
+          this.cdr.detectChanges();
+        } else if (event.type === HttpEventType.Response) {
+          item.status = 'done';
+          item.message = item.docType === 'invoice'
+            ? 'Uploaded successfully'
+            : `${this.docTypeLabel(item.docType)} attached successfully`;
+          if (item.docType === 'invoice' && event.body?.document_id) {
+            this.batchAnchorInvoice[item.batchId] = event.body.document_id;
+          }
+          this.isUploading = false;
+          this.saveQueueToStorage();
+          this.cdr.detectChanges();
+          this.uploadNextInQueue();
+        }
       },
       error: (err) => {
-        this.uploadQueue[pendingIndex].status = 'error';
-        this.uploadQueue[pendingIndex].message = err.error?.error || 'Upload failed';
+        item.status = 'error';
+        item.message = err.error?.error || 'Upload failed';
+        this.isUploading = false;
         this.saveQueueToStorage();
         this.cdr.detectChanges();
         this.uploadNextInQueue();
@@ -338,7 +650,7 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
   saveQueueToStorage() {
     const simplified = this.uploadQueue.map(item => ({
       name: item.file.name, size: item.file.size,
-      status: item.status, message: item.message
+      status: item.status, message: item.message, docType: item.docType
     }));
     localStorage.setItem('uploadQueue', JSON.stringify(simplified));
   }
@@ -348,12 +660,58 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        this.uploadQueue = parsed.map((item: any) => ({
-          file: { name: item.name, size: item.size } as File,
-          status: (item.status === 'uploading' || item.status === 'pending') ? 'error' : item.status,
-          message: (item.status === 'uploading' || item.status === 'pending') ? 'Please re-select this file' : item.message
-        }));
+        this.uploadQueue = parsed.map((item: any): QueueItem => {
+          const unresumable = item.status === 'uploading' || item.status === 'pending' || item.status === 'processing';
+          return {
+            file: { name: item.name, size: item.size } as File,
+            docType: (item.docType === 'purchase_order' || item.docType === 'goods_receipt') ? item.docType : 'invoice',
+            status: unresumable ? 'error' : item.status,
+            message: unresumable ? 'Please re-select this file' : item.message,
+            progress: 0,
+            batchId: -1,
+          };
+        });
       } catch (e) { localStorage.removeItem('uploadQueue'); }
+    }
+  }
+
+  // ── Overall processing summary (drives the processing panel) ──────
+
+  get totalQueued(): number {
+    return this.uploadQueue.length;
+  }
+
+  get completedCount(): number {
+    return this.uploadQueue.filter(item => item.status === 'done').length;
+  }
+
+  get processingCount(): number {
+    return this.uploadQueue.filter(item => item.status === 'uploading' || item.status === 'processing').length;
+  }
+
+  get failedCount(): number {
+    return this.uploadQueue.filter(item => item.status === 'error').length;
+  }
+
+  // "Processing N of Total" — N is how far through the queue this
+  // sequential run has reached: everything finished so far, plus the
+  // one item currently active (if any).
+  get currentFileNumber(): number {
+    const finished = this.completedCount + this.failedCount;
+    return this.processingCount > 0 ? finished + 1 : finished;
+  }
+
+  get activeQueueItem(): QueueItem | undefined {
+    return this.uploadQueue.find(item => item.status === 'uploading' || item.status === 'processing');
+  }
+
+  statusLabelFor(status: QueueStatus): string {
+    switch (status) {
+      case 'pending': return 'Waiting';
+      case 'uploading': return 'Uploading';
+      case 'processing': return 'OCR and AI Processing';
+      case 'done': return 'Completed';
+      default: return 'Failed';
     }
   }
 

@@ -34,16 +34,25 @@
         <div *ngIf="!isUploading">
           <i class="ph-duotone ph-tray-arrow-up" style="font-size:48px; color:var(--accent);"></i>
           <p class="dropzone-title">Drop files here to upload</p>
-          <p class="dropzone-subtitle">Supports multiple files — PDF, JPG, JPEG, PNG</p>
+          <p class="dropzone-subtitle">Supports multiple files — PDF, JPG, JPEG, PNG, or a ZIP of these</p>
         </div>
         <div *ngIf="isUploading" class="uploading-state">
-          <div class="spinner"></div>
-          <p class="uploading-text">Processing OCR...</p>
-          <p class="uploading-note">Please wait, this may take a moment</p>
+          <ng-container *ngIf="activeQueueItem as active">
+            <div class="spinner"></div>
+            <p class="uploading-text">{{ statusLabelFor(active.status) }}: {{ active.file.name }}</p>
+            <div class="progress-bar" *ngIf="active.status === 'uploading'">
+              <div class="progress-fill" [style.width.%]="active.progress"></div>
+            </div>
+            <p class="uploading-note" *ngIf="active.status === 'uploading'">{{ active.progress }}%</p>
+            <p class="uploading-note indeterminate" *ngIf="active.status === 'processing'">
+              OCR and AI extraction in progress. This may take a moment.
+            </p>
+            <p class="uploading-note" *ngIf="totalQueued > 1">Processing {{ currentFileNumber }} of {{ totalQueued }}</p>
+          </ng-container>
         </div>
       </div>
 
-      <input #fileInput type="file" accept=".pdf,.jpg,.jpeg,.png,image/*" capture="environment" multiple style="display:none"
+      <input #fileInput type="file" accept=".pdf,.jpg,.jpeg,.png,.zip,image/*" capture="environment" multiple style="display:none"
         (change)="onFileSelected($event)" />
 
       <div class="upload-actions">
@@ -63,7 +72,7 @@
           <div class="rule-dot blue"></div>
           <div>
             <p class="rule-title">Accepted formats</p>
-            <p class="rule-desc">PDF, JPG, JPEG, PNG only</p>
+            <p class="rule-desc">PDF, JPG, JPEG, PNG — or a ZIP containing these</p>
           </div>
         </div>
         <div class="rule-item">
@@ -92,6 +101,88 @@
         <div class="file-type-badge pdf">PDF</div>
         <div class="file-type-badge jpg">JPG</div>
         <div class="file-type-badge png">PNG</div>
+        <div class="file-type-badge zip">ZIP</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Files Awaiting Type Confirmation -->
+  <div class="table-card" *ngIf="stagedFiles.length > 0">
+    <div class="table-header">
+      <div>
+        <h2 class="section-title">Confirm Document Types</h2>
+        <p class="section-subtitle">{{ stagedFiles.length }} file(s) ready to queue — review the detected type before uploading</p>
+      </div>
+      <button class="btn-browse" (click)="confirmAllStaged()" style="font-size:13px; padding: 6px 14px;">
+        <i class="ph-duotone ph-check-circle"></i> Confirm All
+      </button>
+    </div>
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>File Name</th>
+            <th>Size</th>
+            <th>Document Type</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let item of stagedFiles">
+            <td class="doc-name">
+              <div class="doc-name-wrapper">
+                <img *ngIf="item.previewUrl" [src]="item.previewUrl" class="doc-thumbnail" alt="" />
+                <div class="doc-icon" *ngIf="!item.previewUrl">
+                  <i class="ph-duotone ph-file-text" style="font-size:14px;"></i>
+                </div>
+                {{ item.file.name }}
+              </div>
+            </td>
+            <td>{{ (item.file.size / 1024 / 1024).toFixed(2) }} MB</td>
+            <td>
+              <select class="type-select" (change)="updateStagedType(item, $any($event.target).value)">
+                <option value="invoice" [selected]="item.docType === 'invoice'">Invoice</option>
+                <option value="purchase_order" [selected]="item.docType === 'purchase_order'">Purchase Order</option>
+                <option value="goods_receipt" [selected]="item.docType === 'goods_receipt'">Goods Receipt</option>
+              </select>
+            </td>
+            <td>
+              <div style="display:flex; gap:6px;">
+                <button class="btn-view" (click)="confirmStaged(item)"><i class="ph-duotone ph-check"></i> Confirm</button>
+                <button class="btn-delete" (click)="removeStaged(item)"><i class="ph-duotone ph-x"></i></button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Overall Processing Panel -->
+  <div class="table-card" *ngIf="uploadQueue.length > 0">
+    <div class="table-header">
+      <div>
+        <h2 class="section-title">Processing Summary</h2>
+        <p class="section-subtitle" *ngIf="isUploading">Processing {{ currentFileNumber }} of {{ totalQueued }}</p>
+        <p class="section-subtitle" *ngIf="!isUploading">{{ totalQueued }} file(s) in this batch</p>
+      </div>
+    </div>
+    <div class="summary-stats-row">
+      <div class="summary-stat">
+        <p class="summary-stat-value">{{ totalQueued }}</p>
+        <p class="summary-stat-label">Total Files</p>
+      </div>
+      <div class="summary-stat stat-done">
+        <p class="summary-stat-value">{{ completedCount }}</p>
+        <p class="summary-stat-label">Completed</p>
+      </div>
+      <div class="summary-stat stat-processing">
+        <p class="summary-stat-value">{{ processingCount }}</p>
+        <p class="summary-stat-label">Processing</p>
+      </div>
+      <div class="summary-stat stat-failed">
+        <p class="summary-stat-value">{{ failedCount }}</p>
+        <p class="summary-stat-label">Failed</p>
       </div>
     </div>
   </div>
@@ -106,7 +197,7 @@
       <div style="display:flex; gap:8px;">
         <button class="btn-browse" (click)="retryFailed()" [disabled]="isUploading || !hasRetryableErrors()"
           style="font-size:13px; padding: 6px 14px;"><i class="ph-duotone ph-arrow-clockwise"></i> Retry Failed</button>
-        <button class="btn-filter" (click)="clearDoneItems()" [disabled]="isUploading">Clear Done</button>
+        <button class="btn-filter" (click)="clearDoneItems()" [disabled]="isUploading">Clear Completed</button>
         <button class="btn-filter" (click)="clearQueue()" [disabled]="isUploading">Clear All</button>
       </div>
     </div>
@@ -116,6 +207,7 @@
           <tr>
             <th>File Name</th>
             <th>Size</th>
+            <th>Type</th>
             <th>Status</th>
             <th>Message</th>
           </tr>
@@ -132,20 +224,29 @@
               </div>
             </td>
             <td>{{ (item.file.size / 1024 / 1024).toFixed(2) }} MB</td>
+            <td><span class="type-badge">{{ docTypeLabel(item.docType) }}</span></td>
             <td>
               <span class="badge" [ngClass]="{
-                'badge-pending':   item.status === 'pending',
-                'badge-review':    item.status === 'uploading',
-                'badge-processed': item.status === 'done',
-                'badge-returned':  item.status === 'error'
+                'badge-pending':    item.status === 'pending',
+                'badge-review':     item.status === 'uploading',
+                'badge-processing': item.status === 'processing',
+                'badge-processed':  item.status === 'done',
+                'badge-returned':   item.status === 'error'
               }">
                 <ng-container [ngSwitch]="item.status">
-                  <ng-container *ngSwitchCase="'pending'">Pending</ng-container>
-                  <ng-container *ngSwitchCase="'uploading'">Uploading...</ng-container>
-                  <ng-container *ngSwitchCase="'done'"><i class="ph-duotone ph-check"></i> Done</ng-container>
+                  <ng-container *ngSwitchCase="'pending'">Waiting</ng-container>
+                  <ng-container *ngSwitchCase="'uploading'">Uploading {{ item.progress }}%</ng-container>
+                  <ng-container *ngSwitchCase="'processing'">OCR and AI Processing</ng-container>
+                  <ng-container *ngSwitchCase="'done'"><i class="ph-duotone ph-check"></i> Completed</ng-container>
                   <ng-container *ngSwitchDefault><i class="ph-duotone ph-x"></i> Failed</ng-container>
                 </ng-container>
               </span>
+              <div class="row-progress-bar" *ngIf="item.status === 'uploading'">
+                <div class="row-progress-fill" [style.width.%]="item.progress"></div>
+              </div>
+              <div class="row-progress-bar indeterminate-bar" *ngIf="item.status === 'processing'">
+                <div class="row-progress-fill-indeterminate"></div>
+              </div>
             </td>
             <td [style.color]="item.status === 'error' ? '#EF4444' : item.status === 'done' ? '#10B981' : '#6B7280'"
               style="font-size:12px;">{{ item.message }}</td>
