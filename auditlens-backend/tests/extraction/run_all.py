@@ -20,7 +20,8 @@ SUITES = ['test_invoice.py', 'test_po.py', 'test_gr.py', 'test_currency.py', 'te
           'test_ai_assistant.py', 'test_document_timeline.py', 'test_document_relationships.py',
           'test_enterprise_matching.py', 'test_relationship_builder.py', 'test_shadow_comparison.py',
           'test_phase4_integration.py', 'test_transaction_packages.py', 'test_transaction_auditor_integration.py',
-          'test_anomaly_detector.py', 'test_anomaly_decision_mapping.py', 'test_audit_review_steps_timeline.py']
+          'test_anomaly_detector.py', 'test_anomaly_decision_mapping.py', 'test_audit_review_steps_timeline.py',
+          'test_document_review_steps_migration.py']
 REVIEWS_SUITES = ['test_send_back_validation.py', 'test_send_back_routes.py', 'test_review_steps.py']
 CALENDAR_SUITES = ['test_calendar_events_validation.py', 'test_malaysia_calendar.py', 'test_calendar_routes.py']
 

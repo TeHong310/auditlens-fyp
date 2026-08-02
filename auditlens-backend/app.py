@@ -638,7 +638,23 @@ def _ensure_document_review_steps_table():
     DECISION, unchanged) — this tracks step-level REVIEW PROGRESS, a
     different, finer-grained concept the sequential unlock/Approve-
     gating logic needs. Auto-create-on-startup, same pattern as every
-    other table in this file."""
+    other table in this file — CREATE TABLE/INDEX IF NOT EXISTS is a
+    no-op on a boot where the table already exists, so every existing
+    row and the routes' own decision/gating logic are untouched either
+    way; this only ever adds the table, never alters or drops data.
+
+    A prior version of this function left `conn` open (never closed)
+    on the except path — a connection-pool leak (see db.py's
+    _PooledConnection) that, combined with a real CREATE-TABLE failure,
+    could starve later requests of a healthy pooled connection with no
+    clear signal why. Also adds an explicit post-CREATE verification
+    query (to_regclass) so a failure surfaces as a loud, unmistakable
+    ERROR line in the startup log — matching the exact symptom that
+    triggered this fix ("relation document_review_steps does not
+    exist" surfacing only later, at request time, from routes/reviews.
+    py::mark_review_step, with no earlier indication in the deploy log
+    that the migration itself never actually created the table)."""
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -654,10 +670,24 @@ def _ensure_document_review_steps_table():
         ''')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_document_review_steps_document ON document_review_steps(document_id)')
         conn.commit()
-        conn.close()
-        print('document_review_steps table ready')
+
+        # Verify, don't assume — to_regclass returns NULL if the
+        # relation still doesn't exist (e.g. the CREATE silently no-
+        # opped for a reason other than "already exists", or ran
+        # against a different schema/search_path than expected).
+        cursor.execute("SELECT to_regclass('document_review_steps')")
+        exists = cursor.fetchone()[0] is not None
+        if exists:
+            print('document_review_steps table ready (verified present)')
+        else:
+            print('ERROR: document_review_steps CREATE TABLE ran without error, '
+                  'but the table is still not visible via to_regclass — check DB '
+                  'user privileges / search_path on this environment.')
     except Exception as e:
         print(f'WARNING: could not create document_review_steps table: {type(e).__name__}: {e}')
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _ensure_document_relationships_table():

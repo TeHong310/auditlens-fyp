@@ -17321,3 +17321,103 @@ Rollback instructions:
   every anomaly/exception/authenticity/review-history record and its
   full history is untouched by this change or its rollback; Finance
   Correction Detail's workflow timeline was never modified.
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Root cause: app.py::_ensure_document_review_steps_table() (added in
+  the previous entry) never called conn.close() on its except path -
+  if the CREATE TABLE statement failed for any reason on Render's
+  Postgres, that pooled connection (see db.py's _PooledConnection) was
+  never returned to the pool, and the only trace was a WARNING line
+  easy to miss in a full deploy log; the table's actual absence then
+  only surfaced later, at request time, as "relation document_
+  review_steps does not exist" from routes/reviews.py::mark_review_step.
+  Backend (auditlens-backend/app.py):
+    - _ensure_document_review_steps_table() rewritten: conn is now
+      always closed via try/finally regardless of success or failure
+      (fixes the connection-pool leak). The CREATE TABLE/INDEX
+      statements themselves are unchanged (still CREATE ... IF NOT
+      EXISTS - idempotent, touches no existing row on a boot where the
+      table already exists) and still run in the same position in the
+      startup sequence, before any blueprint's routes can be hit.
+    - Added an explicit post-CREATE verification query (SELECT to_
+      regclass('document_review_steps')) instead of assuming success
+      just because no exception was raised - logs a clear, greppable
+      "document_review_steps table ready (verified present)" line on
+      success, or a loud ERROR line (naming DB user privileges/search_
+      path as the likely cause) if the table still isn't visible for
+      any other reason. The WARNING path on a genuine exception is
+      unchanged in wording, just no longer leaks the connection.
+
+Why:
+  User-reported production error: "relation document_review_steps does
+  not exist" when marking an Audit Review checklist step as reviewed,
+  meaning the auto-create-on-startup migration added in the previous
+  session's session did not actually create the table on Render. The
+  connection leak above is the concrete bug found by inspection - a
+  failed CREATE TABLE attempt (for whatever transient reason on that
+  specific boot) would have left no clear diagnostic trail and could
+  starve a later migration or request of a healthy pooled connection.
+  The added verification step makes any FUTURE recurrence immediately
+  visible in the Render deploy log instead of only surfacing minutes or
+  hours later as a confusing "relation does not exist" at request time.
+
+Test results:
+  - python tests/extraction/run_all.py - 33/33 suites PASS (32 pre-
+    existing + the new file below).
+  - New tests/extraction/test_document_review_steps_migration.py (real
+    local Postgres):
+    - Dropped the table (simulating a fresh/un-migrated Render
+      Postgres), ran the real migration function, confirmed the table
+      exists afterward AND that the new "verified present" log line
+      actually appears (not just "no exception was raised").
+    - Re-ran the migration against an already-migrated table with a
+      real row present (using the INV-NBI-2026-0017 fixture) -
+      confirmed no error and the existing row survived untouched
+      (idempotent, no data loss).
+    - Simulated a CREATE TABLE failure via a monkey-patched connection
+      whose cursor.execute() raises - confirmed the failure is still
+      logged as a WARNING AND that conn.close() is called despite the
+      exception (proving the connection-pool-leak bug is fixed).
+  - Live verification against the real local Postgres + a real running
+    Flask server: dropped document_review_steps entirely, started the
+    real app (python app.py), confirmed "document_review_steps table
+    ready (verified present)" in the startup log, then via real HTTP
+    calls: POST /reviews/review-steps/3753/three_way_matching -> 200;
+    POST .../exception_review (unlocked by the prior step) -> 200; POST
+    .../anomaly_review (skipping authenticity_review) -> 400 rejecting
+    it by name, exactly as designed; GET /documents/3753/timeline's
+    review_steps field matched both successful marks. Test rows deleted
+    afterward; INV-NBI-2026-0017's own status/anomaly/decision fields
+    confirmed unchanged. Dev server stopped by exact PID.
+
+Build result:
+  Backend: 33/33 test suites pass, including a live end-to-end re-
+  verification of the exact reported production error against a
+  dropped-and-recreated table.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub - Render should auto-deploy the backend.
+  2. Backend redeploy required (app.py changed). On first boot after
+     deploy, check the Render logs specifically for "document_review_
+     steps table ready (verified present)" - if that line is missing or
+     an ERROR/WARNING line appears instead, that's now a direct,
+     actionable signal (not a guess) of what's actually failing on that
+     environment (e.g. DB user privileges), rather than a silent gap
+     only discovered later from a user-facing 500.
+  3. No manual database migration needed - self-heals automatically on
+     the next deploy regardless of whether the table currently exists
+     in Render's Postgres or not.
+  4. Nothing new to configure - no new environment variables, no new
+     dependencies.
+
+Rollback instructions:
+  Revert this one commit. Purely a robustness/logging fix to an
+  existing migration function - no schema, data, or route-behavior
+  change either way; reverting simply restores the connection-leak-on-
+  failure behavior (not recommended, but harmless to existing data).
