@@ -67,6 +67,17 @@ def _with_authentication_score(row):
         'doc_number':   bool(row.get('document_number')),
     }
     row.update(compute_authentication(row.get('document_type'), detected_signals))
+    # Flask's default JSON encoder formats a raw datetime via HTTP's GMT-
+    # labeled RFC 1123 format WITHOUT actually converting a naive (no
+    # tzinfo) value to UTC first — it just relabels the DB session's
+    # local wall-clock digits as "GMT", which is wrong by the session's
+    # UTC offset. evidence_corrections.py already sidesteps this by
+    # explicitly calling .isoformat() on corrected_at; do the same here
+    # so created_at is comparable (both naive, same convention) against
+    # evidence_corrections[].corrected_at on the frontend — this is what
+    # the pending-vs-confirmed evidence status is computed from.
+    if row.get('created_at') is not None:
+        row['created_at'] = row['created_at'].isoformat()
     # Enterprise V3 Phase 7 (FIX 2): both GET /authenticity (list) and
     # GET /authenticity/<id> (detail) already call this function on
     # every row, so this is the one shared place to add transaction_

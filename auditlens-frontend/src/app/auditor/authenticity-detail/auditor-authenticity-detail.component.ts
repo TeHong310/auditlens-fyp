@@ -109,14 +109,24 @@ interface StagedEdit {
   rect: EditableRect | null; // null for 'delete' / 'reset'
 }
 
+// AUDITOR_CORRECTED / AUDITOR_ADDED always mean "pending re-check" — a
+// saved correction that hasn't yet survived an AI re-check. Once a
+// recheck runs after the correction was saved (see partyRows' timestamp
+// comparison below), the SAME correction reports as AUDITOR_CONFIRMED
+// instead — a distinct status value so the orange-vs-green styling in
+// the template (keyed off status string, see the .html's
+// evidence-polygon-auditor binding) falls out for free with no template
+// change: AUDITOR_CONFIRMED simply isn't one of the two strings that
+// binding checks for.
 export type EvidenceStatus =
-  | 'AI_DETECTED' | 'AUDITOR_CORRECTED' | 'AUDITOR_ADDED'
+  | 'AI_DETECTED' | 'AUDITOR_CORRECTED' | 'AUDITOR_ADDED' | 'AUDITOR_CONFIRMED'
   | 'NEEDS_LOCATION' | 'NOT_DETECTED' | 'NOT_REQUIRED';
 
 const STATUS_LABEL: Record<EvidenceStatus, string> = {
   AI_DETECTED:        'AI Detected',
-  AUDITOR_CORRECTED:  'Auditor Corrected',
-  AUDITOR_ADDED:       'Auditor Added',
+  AUDITOR_CORRECTED:  'Auditor Corrected · Pending Re-check',
+  AUDITOR_ADDED:       'Auditor Added · Pending Re-check',
+  AUDITOR_CONFIRMED:   'Auditor Confirmed',
   NEEDS_LOCATION:      'Needs Location',
   NOT_DETECTED:        'Not Detected',
   NOT_REQUIRED:        'Not Required',
@@ -127,17 +137,17 @@ const STATUS_LABEL: Record<EvidenceStatus, string> = {
 // is explicit that a green check must never appear for evidence with no
 // location.
 const STATUS_HAS_LOCATION: Record<EvidenceStatus, boolean> = {
-  AI_DETECTED: true, AUDITOR_CORRECTED: true, AUDITOR_ADDED: true,
+  AI_DETECTED: true, AUDITOR_CORRECTED: true, AUDITOR_ADDED: true, AUDITOR_CONFIRMED: true,
   NEEDS_LOCATION: false, NOT_DETECTED: false, NOT_REQUIRED: false,
 };
 
 const STATUS_ICON_CLASS: Record<EvidenceStatus, string> = {
-  AI_DETECTED: 'icon-yes', AUDITOR_CORRECTED: 'icon-yes', AUDITOR_ADDED: 'icon-yes',
+  AI_DETECTED: 'icon-yes', AUDITOR_CORRECTED: 'icon-yes', AUDITOR_ADDED: 'icon-yes', AUDITOR_CONFIRMED: 'icon-yes',
   NEEDS_LOCATION: 'icon-warn', NOT_DETECTED: 'icon-no', NOT_REQUIRED: 'icon-na',
 };
 
 const STATUS_ICON: Record<EvidenceStatus, string> = {
-  AI_DETECTED: 'ph-check', AUDITOR_CORRECTED: 'ph-check', AUDITOR_ADDED: 'ph-check',
+  AI_DETECTED: 'ph-check', AUDITOR_CORRECTED: 'ph-check', AUDITOR_ADDED: 'ph-check', AUDITOR_CONFIRMED: 'ph-check',
   NEEDS_LOCATION: 'ph-map-pin-line', NOT_DETECTED: 'ph-x', NOT_REQUIRED: 'ph-minus',
 };
 
@@ -609,6 +619,19 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return null; // qc_passed_stamp / key_in_store_stamp / handwritten_notes — box-only signal
   }
 
+  // authenticity_checks.created_at is refreshed to NOW() on every AI
+  // run (initial check AND every recheck — see the ON CONFLICT ... DO
+  // UPDATE SET created_at = NOW() clause in run_authenticity_check()),
+  // so it doubles as "when was AI last run for this document_type". A
+  // correction saved BEFORE that timestamp has survived a recheck
+  // untouched (recheck never writes to the corrections table) — treat
+  // it as confirmed. This needs no new backend column: both timestamps
+  // already flow through the existing API response.
+  private isCorrectionConfirmed(correction: EvidenceCorrection): boolean {
+    if (!this.check?.created_at || !correction.corrected_at) return false;
+    return new Date(this.check.created_at).getTime() > new Date(correction.corrected_at).getTime();
+  }
+
   // One row per party/stamp this document_type can carry, numbered by
   // position (stable regardless of which rows have a box right now, so
   // the on-image marker and its row always agree). Priority for the
@@ -635,7 +658,9 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
       } else if (correction && correction.source !== 'auditor_deleted') {
         const rect = this.correctionToRect(correction);
         box = rect ? this.rectToBox(def.key, def.label, rect) : null;
-        status = correction.source === 'auditor_added' ? 'AUDITOR_ADDED' : 'AUDITOR_CORRECTED';
+        status = this.isCorrectionConfirmed(correction)
+          ? 'AUDITOR_CONFIRMED'
+          : (correction.source === 'auditor_added' ? 'AUDITOR_ADDED' : 'AUDITOR_CORRECTED');
       } else if (correction && correction.source === 'auditor_deleted') {
         box = null;
         status = independent === true ? 'NEEDS_LOCATION' : (def.optional ? 'NOT_REQUIRED' : 'NOT_DETECTED');
@@ -903,7 +928,7 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   private actionFor(key: string): EditAction {
     const row = this.partyRows.find(r => r.key === key);
     if (!row) return 'add';
-    return (row.status === 'AI_DETECTED' || row.status === 'AUDITOR_CORRECTED') ? 'correct' : 'add';
+    return (row.status === 'AI_DETECTED' || row.status === 'AUDITOR_CORRECTED' || row.status === 'AUDITOR_CONFIRMED') ? 'correct' : 'add';
   }
 
   private applyResize(rect: EditableRect, handle: 'nw' | 'ne' | 'sw' | 'se', dx: number, dy: number): EditableRect {
