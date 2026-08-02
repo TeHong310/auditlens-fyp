@@ -16144,3 +16144,116 @@ Rollback instructions:
   frontend build) - confined to the 3 authenticity-detail component
   files; reverting restores the prior long-form layout with no data
   or schema implications.
+
+----------------------------------------------------------------------
+
+Date: 2026-08-02
+What was changed:
+  Frontend (auditlens-frontend/src/app/auditor/authenticity-detail/
+  auditor-authenticity-detail.component.ts):
+    - Added a new 'AUDITOR_CONFIRMED' EvidenceStatus value alongside the
+      existing AI_DETECTED/AUDITOR_CORRECTED/AUDITOR_ADDED states, with
+      its own label ("Auditor Confirmed"), and reused the existing
+      green icon-yes styling.
+    - AUDITOR_CORRECTED/AUDITOR_ADDED labels now read "... · Pending
+      Re-check" - they now always mean "saved but not yet reconfirmed
+      by an AI run", a state distinct from AUDITOR_CONFIRMED.
+    - partyRows getter: a saved correction now resolves to
+      AUDITOR_CONFIRMED (instead of staying AUDITOR_CORRECTED/
+      AUDITOR_ADDED forever) once authenticity_checks.created_at is
+      newer than the correction's corrected_at - i.e. an AI recheck has
+      run since the correction was saved. The comparison is a pure
+      frontend computation; the correction's own coordinates and the
+      original_ai_box/corrected_by/corrected_at audit trail are
+      untouched, so nothing about the corrections table's data changes
+      - only how its age relative to the latest AI run is read.
+    - actionFor() (decides whether an edit is logged as a "correction"
+      vs a fresh "add") now also treats AUDITOR_CONFIRMED like
+      AI_DETECTED/AUDITOR_CORRECTED, so re-editing an already-confirmed
+      box keeps its correction lineage instead of being miscategorized
+      as a brand-new addition.
+    - No HTML/CSS changes needed: the existing
+      [class.evidence-polygon-auditor]="status === 'AUDITOR_CORRECTED'
+      || status === 'AUDITOR_ADDED'" binding already excludes any other
+      status string, so AUDITOR_CONFIRMED falls through to the default
+      green polygon styling for free.
+  Backend (auditlens-backend/routes/authenticity.py):
+    - _with_authentication_score() now explicitly calls .isoformat() on
+      the row's created_at before it reaches jsonify(), matching the
+      convention evidence_corrections.py already uses for corrected_at.
+      This was a required bug fix, not a style change: Flask's default
+      JSON encoder formats a raw (timezone-naive) datetime via HTTP's
+      GMT-labelled RFC 1123 format WITHOUT converting the DB session's
+      local wall-clock value to true UTC first - it just relabels those
+      digits "GMT". Comparing that against evidence_corrections[].
+      corrected_at (already isoformat()'d, no zone) on the frontend
+      produced a spurious ~8 hour skew (this dev DB session runs in
+      Asia/Kuala_Lumpur, UTC+8), which made a correction saved seconds
+      ago look "confirmed" immediately, before any recheck had run.
+      Normalizing both fields to the same bare-ISO convention fixes the
+      comparison and, as a side effect, also fixes the "Checked: ..."
+      timestamp already shown elsewhere on this page, which was
+      silently off by the session's UTC offset before this change.
+
+Why:
+  User-requested workflow change: AI-detected boxes stay green: after
+  an auditor edits/adds an evidence box it should show orange with
+  "Auditor Corrected · Pending Re-check" until the auditor clicks
+  Re-check Analysis, at which point - if the correction is still being
+  shown - it should turn green and read "Auditor Confirmed", without
+  the fresh AI results overwriting the auditor's saved coordinates, and
+  without needing a manual page reload. Green now means "the current
+  evidence location is confirmed", whether that confirmation came from
+  the AI or from an auditor whose correction has survived a recheck.
+
+Test results:
+  - python tests/extraction/run_all.py - 28/28 suites PASS (unchanged
+    by this diff; confirms the created_at serialization fix didn't
+    break any existing authenticity/evidence-corrections test).
+  - npx ng build --configuration production - succeeded (exit 0; same
+    pre-existing bundle-size budget warnings, unrelated to this
+    change).
+  - Live Playwright verification against a fresh fixture document (one
+    AI-detected "Invoice Issuer / Supplier" box, throwaway auditor
+    account vision_fixture_auditor@x.com): row starts "AI Detected"
+    with no amber class; dragging + saving the box turns it amber and
+    reads "Auditor Corrected · Pending Re-check"; clicking Re-check
+    Analysis (falls through to the OCR-text-only fallback engine in
+    this sandbox, since Claude/Gemini/Vision keys are unusable here)
+    then turns the SAME box green, status reads "Auditor Confirmed",
+    and the polygon's on-screen coordinates are byte-for-byte identical
+    before and after the recheck - proving the fresh (empty, in this
+    sandbox) AI result never overwrote the auditor's saved box, and the
+    page reflected the new state automatically with no manual reload.
+    8/8 checks passed, 0 console/page errors. All fixture rows
+    (3 documents, 3 extracted_fields, 3 authenticity_checks, 2
+    evidence_corrections) and cached files deleted afterward and
+    verified at 0 remaining. Dev server processes (Flask + reloader
+    child, Angular CLI) stopped afterward by exact PID.
+
+Build result:
+  Backend: 28/28 test suites pass. Frontend: clean production build,
+  exit 0. Live browser check: full pending -> confirmed lifecycle
+  verified end-to-end with coordinate preservation, zero console/page
+  errors.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0 successful (1 attempted by the live
+  recheck call, rejected with 401 by this sandbox's disabled key,
+  which is the expected/relied-upon fallback path for this test).
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false,
+     so Render should auto-deploy both the frontend and backend from
+     this push with no separate manual trigger needed.
+  2. No database migration needed - both fields already existed and
+     were already returned by the API; only their serialization/
+     comparison logic changed.
+
+Rollback instructions:
+  Revert this one commit (git revert) - confined to one frontend
+  component file and one backend route helper; reverting restores the
+  prior "AUDITOR_CORRECTED/AUDITOR_ADDED forever, no recheck-aware
+  confirmation" behavior with no data or schema implications (existing
+  corrections and their original_ai_box/audit-trail data are untouched
+  either way).
