@@ -86,6 +86,11 @@ _SELECT_WITH_JOINS = '''
                WHEN 'po' THEN po.po_number
                WHEN 'gr' THEN gr.gr_number
            END AS document_number,
+           CASE ac.document_type
+               WHEN 'invoice' THEN ef.invoice_date
+               WHEN 'po' THEN po.po_date
+               WHEN 'gr' THEN gr.receipt_date
+           END AS document_date,
            COALESCE(
                CASE ac.document_type WHEN 'invoice' THEN ef.vendor_name END,
                CASE ac.document_type WHEN 'po' THEN po.vendor_name END,

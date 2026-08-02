@@ -64,34 +64,71 @@ export interface SupportingEvidenceItem {
   locationUnavailable: boolean;
 }
 
-// The only 3 evidence categories this page can point at with a real,
-// OCR-measured location — helpers/vision_evidence_boxes.py only matches
-// supplier name/address text and stamp keywords against Google Vision
-// word boxes. company_logo and signature have no reliable detector, so
-// per the task spec they always render as "Detected · Location
-// unavailable" instead of a guessed box.
-const KEY_TO_VISION_TYPE: Record<string, string> = {
-  company_name:     'supplier_name',
-  supplier_address: 'supplier_address',
-  stamp:             'stamp_text',
-};
-
-// Stable numbering for the on-image marker badge — fixed regardless of
-// which UI element (Supporting Evidence card vs. accordion row)
-// triggered the highlight, so the same evidence type always shows the
-// same number.
-const EVIDENCE_NUMBER: Record<string, number> = {
-  company_name:     1,
-  supplier_address: 2,
-  stamp:             3,
-};
-
 // One simultaneously-rendered region on the document overlay.
 export interface VisibleEvidenceBox {
   key: string;
   number: number;
   box: VisionEvidenceBox;
   emphasized: boolean;
+}
+
+interface PartyRowDef {
+  key: string;
+  // The check.boxes[].type this row cross-references — matches exactly
+  // what helpers/vision_evidence_boxes.py's build_vision_evidence_boxes()
+  // builds for this document_type (see its own DOCUMENT-TYPE RULES).
+  visionType: string;
+  label: string;
+}
+
+// Each document type carries different real-world parties and stamps —
+// an Invoice's Issuer/Supplier is a different structural role from a
+// PO's Buyer/Issuer, and only a Goods Received Note carries the two
+// buyer-side processing stamps. This is the ONE place that decides
+// which rows this page shows per type; helpers/vision_evidence_boxes.py
+// only ever builds the box types listed here for a given document_type,
+// so a row here either finds its box or honestly shows nothing.
+const PARTY_ROW_DEFS: Record<string, PartyRowDef[]> = {
+  invoice: [
+    { key: 'supplier', visionType: 'supplier_name', label: 'Invoice Issuer / Supplier' },
+    { key: 'buyer', visionType: 'buyer_name', label: 'Buyer (Bill To)' },
+    { key: 'buyer_stamp', visionType: 'buyer_received_stamp', label: 'Buyer Received Stamp' },
+  ],
+  po: [
+    { key: 'buyer', visionType: 'buyer_name', label: 'PO Issuer / Buyer' },
+    { key: 'supplier', visionType: 'supplier_name', label: 'Supplier' },
+    { key: 'supplier_address', visionType: 'supplier_address', label: 'Supplier Address' },
+  ],
+  gr: [
+    { key: 'buyer', visionType: 'buyer_name', label: 'GR Issuer / Receiver' },
+    { key: 'supplier', visionType: 'supplier_name', label: 'Supplier' },
+    { key: 'supplier_address', visionType: 'supplier_address', label: 'Supplier Address' },
+    { key: 'qc_stamp', visionType: 'qc_passed_stamp', label: 'QC Passed Stamp' },
+    { key: 'keyin_stamp', visionType: 'key_in_store_stamp', label: 'Key-In Store Stamp' },
+  ],
+};
+
+const PARTY_SECTION_TITLE: Record<string, string> = {
+  invoice: 'Invoice Parties',
+  po: 'Purchase Order Parties',
+  gr: 'Receiving Parties',
+};
+
+export interface PartyRow {
+  key: string;
+  number: number;
+  label: string;
+  box: VisionEvidenceBox | null;
+  // True once this row has ANY positive signal — a Vision box, or (for
+  // supplier/supplier_address only) Claude/Gemini's own independent
+  // supplier_identity detection. Rows with no independent signal
+  // (buyer, every stamp) have no other source of truth: no box means
+  // honestly "not detected", never a claimed-but-unlocated positive.
+  detected: boolean;
+  // Detected via the independent signal but with no Vision box to
+  // point at — the one case where "Location unavailable" is honest;
+  // never shown for rows whose only signal IS the box itself.
+  locationUnavailable: boolean;
 }
 
 @Component({
@@ -356,21 +393,28 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return 'PARTIAL';
   }
 
-  // ── Evidence highlighting — cross-references check.boxes for a v7
-  // Google-Vision-sourced polygon matching this evidence key. Per the
-  // task's validation rules: only a box with coordinate_source
-  // "google_vision", a real 4-point polygon, valid positive source
-  // dimensions, and a page number matching the single page this preview
-  // ever shows (page 1) is trusted — an old AI-vision-estimated
-  // rectangle (coordinate_space "normalized_0_1", no coordinate_source)
-  // living in the same array is never used for highlighting. ──
+  // ── Evidence highlighting — document-type-aware. Which parties/
+  // stamps can even be looked for is decided once, per document_type,
+  // by PARTY_ROW_DEFS (mirroring exactly what helpers/
+  // vision_evidence_boxes.py builds for that type); this then cross-
+  // references check.boxes for a v7 Google-Vision-sourced polygon
+  // matching each row's vision type. Per the task's validation rules:
+  // only a box with coordinate_source "google_vision", a real 4-point
+  // polygon, valid positive source dimensions, and a page number
+  // matching the single page this preview ever shows (page 1) is
+  // trusted. ──
 
-  visionBoxForKey(key: string | null | undefined): VisionEvidenceBox | null {
-    if (!key) return null;
-    const type = KEY_TO_VISION_TYPE[key];
-    if (!type) return null;
+  get partyRowDefs(): PartyRowDef[] {
+    return PARTY_ROW_DEFS[this.documentType] || PARTY_ROW_DEFS['invoice'];
+  }
+
+  get partySectionTitle(): string {
+    return PARTY_SECTION_TITLE[this.documentType] || 'Document Parties';
+  }
+
+  private partyVisionBox(visionType: string): VisionEvidenceBox | null {
     const box = (this.check?.boxes || []).find((b: any) =>
-      b?.type === type &&
+      b?.type === visionType &&
       b?.coordinate_source === 'google_vision' &&
       b?.page === 1 &&
       typeof b?.source_width === 'number' && b.source_width > 0 &&
@@ -385,20 +429,51 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return (box as VisionEvidenceBox) || null;
   }
 
-  get hasLocatableEvidence(): boolean {
-    return Object.keys(KEY_TO_VISION_TYPE).some(key => !!this.visionBoxForKey(key));
+  // One row per party/stamp this document_type can carry. Numbered by
+  // position — stable for a given type regardless of which rows ended
+  // up with a box this time, so the on-image marker and the row it
+  // corresponds to always agree.
+  get partyRows(): PartyRow[] {
+    return this.partyRowDefs.map((def, i) => {
+      const box = this.partyVisionBox(def.visionType);
+      // Only supplier/supplier_address have an independent (non-box)
+      // signal — Claude/Gemini's own supplier_identity detection.
+      // Buyer and every stamp type have no other source of truth in
+      // this app: a missing box for those honestly means "not
+      // detected", never "detected but unlocated".
+      let independentDetected: boolean | null = null;
+      if (def.key === 'supplier') independentDetected = this.supplierNameStatus() === 'yes';
+      else if (def.key === 'supplier_address') independentDetected = this.supplierAddressStatus() === 'yes';
+      const detected = !!box || independentDetected === true;
+      return {
+        key: def.key,
+        number: i + 1,
+        label: def.label,
+        box,
+        detected,
+        locationUnavailable: detected && !box,
+      };
+    });
   }
 
-  // All 3 reliably-locatable regions that currently have a real box —
-  // rendered simultaneously and automatically, no click required. Each
-  // key maps to exactly one vision type, so this list can never contain
-  // a duplicate region for the same evidence.
+  visionBoxForKey(key: string | null | undefined): VisionEvidenceBox | null {
+    if (!key) return null;
+    return this.partyRows.find(r => r.key === key)?.box || null;
+  }
+
+  get hasLocatableEvidence(): boolean {
+    return this.partyRows.some(r => !!r.box);
+  }
+
+  // Every party/stamp that currently has a real box — rendered
+  // simultaneously and automatically, no click required. Each row key
+  // maps to exactly one vision type, so this list can never contain a
+  // duplicate region for the same evidence.
   get visibleEvidenceBoxes(): VisibleEvidenceBox[] {
     const out: VisibleEvidenceBox[] = [];
-    for (const key of Object.keys(KEY_TO_VISION_TYPE)) {
-      const box = this.visionBoxForKey(key);
-      if (!box) continue;
-      out.push({ key, number: EVIDENCE_NUMBER[key], box, emphasized: key === this.emphasizedKey });
+    for (const row of this.partyRows) {
+      if (!row.box) continue;
+      out.push({ key: row.key, number: row.number, box: row.box, emphasized: row.key === this.emphasizedKey });
     }
     return out;
   }
@@ -493,12 +568,12 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   get supportingEvidenceItems(): SupportingEvidenceItem[] {
     const items: SupportingEvidenceItem[] = [];
     if (this.identityStatus === 'CONSISTENT') {
-      // Ambiguous between the company_name and supplier_address boxes —
+      // Ambiguous between the supplier and supplier_address boxes —
       // prefer whichever one actually has a reliable location, since
       // this one row can only point at a single region.
-      const nameBox = this.visionBoxForKey('company_name');
+      const nameBox = this.visionBoxForKey('supplier');
       const addrBox = this.visionBoxForKey('supplier_address');
-      const key = nameBox ? 'company_name' : (addrBox ? 'supplier_address' : null);
+      const key = nameBox ? 'supplier' : (addrBox ? 'supplier_address' : null);
       items.push({ label: 'Supplier details are consistent', key, locationUnavailable: !nameBox && !addrBox });
     }
     for (const row of this.documentEvidenceRows) {

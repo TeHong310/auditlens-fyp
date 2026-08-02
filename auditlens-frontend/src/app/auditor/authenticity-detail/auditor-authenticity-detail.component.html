@@ -22,7 +22,7 @@
         <div class="summary-doc">
           <p class="summary-eyebrow">Authenticity Assessment</p>
           <p class="summary-doc-title">{{ check.document_number || 'Unknown Document' }}</p>
-          <p class="summary-doc-sub">{{ docTypeLabel(check.document_type) }} · Vendor: {{ (hasNewResult ? supplierIdentity?.supplier_name : null) || check.vendor_name || 'Unknown vendor' }}</p>
+          <p class="summary-doc-sub">{{ docTypeLabel(check.document_type) }} · Vendor: {{ (hasNewResult ? supplierIdentity?.supplier_name : null) || check.vendor_name || 'Unknown vendor' }}<ng-container *ngIf="check.document_date"> · {{ check.document_date | date:'mediumDate' }}</ng-container></p>
         </div>
         <p class="overall-status-badge" [ngClass]="statusSeverityClass(overallStatusLabel)">{{ overallStatusLabel }}</p>
       </div>
@@ -116,7 +116,35 @@
             <i class="ph-duotone ph-check-circle"></i> No significant concerns detected.
           </div>
 
-          <!-- 2. Supporting Evidence — up to 3 concise items. Clickable
+          <!-- 2. Parties & Stamps — document-type-aware. Every row this
+               document_type can carry (see PARTY_ROW_DEFS); each row
+               with a real Google-Vision-sourced box is clickable and
+               numbered to match its on-image marker; rows without one
+               show "Not detected" or "Location unavailable" plainly,
+               never a guessed box. -->
+          <div class="checklist-box party-card" *ngIf="partyRows.length">
+            <p class="section-label"><i class="ph-duotone ph-users-three"></i> {{ partySectionTitle }}</p>
+            <div class="checklist-row"
+                 *ngFor="let row of partyRows; trackBy: trackByKey"
+                 [class.checklist-row-clickable]="!!row.box"
+                 [class.checklist-row-active]="isRowActive(row.key)"
+                 [attr.role]="row.box ? 'button' : null"
+                 [attr.tabindex]="row.box ? 0 : null"
+                 [attr.aria-pressed]="row.box ? isRowActive(row.key) : null"
+                 (click)="onRowActivate(row.key)"
+                 (keydown.enter)="onRowActivate(row.key)"
+                 (keydown.space)="onRowActivate(row.key); $event.preventDefault()">
+              <span class="party-number-badge" *ngIf="row.box">{{ row.number }}</span>
+              <span class="checklist-icon" [ngClass]="row.detected ? 'icon-yes' : 'icon-warn'">
+                <i class="ph-duotone" [ngClass]="row.detected ? 'ph-check' : 'ph-warning'"></i>
+              </span>
+              <span class="checklist-label">{{ row.label }}</span>
+              <span class="location-note" *ngIf="row.locationUnavailable">Location unavailable</span>
+              <span class="location-note" *ngIf="!row.detected">Not detected</span>
+            </div>
+          </div>
+
+          <!-- 3. Supporting Evidence — up to 3 concise items. Clickable
                when a reliable Google-Vision-sourced location exists for
                that item; a plain "Location unavailable" note otherwise. -->
           <div class="checklist-box evidence-card" *ngIf="supportingEvidenceItems.length">
@@ -137,7 +165,7 @@
             </div>
           </div>
 
-          <!-- 3. View Full Analysis — one collapsed section for everything else -->
+          <!-- 4. View Full Analysis — one collapsed section for everything else -->
           <div class="accordion-item">
             <button class="accordion-header" (click)="toggleFullAnalysis()" [attr.aria-expanded]="fullAnalysisOpen">
               <span>View Full Analysis</span>
@@ -148,19 +176,19 @@
               <p class="subsection-label">Supplier Identity</p>
               <p class="match-note" *ngIf="vendorMatchNote" [ngClass]="vendorMatchStatus() === 'yes' ? 'match-note-ok' : 'match-note-warn'">{{ vendorMatchNote }}</p>
               <div class="checklist-row"
-                   [class.checklist-row-clickable]="!!visionBoxForKey('company_name')"
-                   [class.checklist-row-active]="isRowActive('company_name')"
-                   [attr.role]="visionBoxForKey('company_name') ? 'button' : null"
-                   [attr.tabindex]="visionBoxForKey('company_name') ? 0 : null"
-                   [attr.aria-pressed]="visionBoxForKey('company_name') ? isRowActive('company_name') : null"
-                   (click)="onRowActivate('company_name')"
-                   (keydown.enter)="onRowActivate('company_name')"
-                   (keydown.space)="onRowActivate('company_name'); $event.preventDefault()">
+                   [class.checklist-row-clickable]="!!visionBoxForKey('supplier')"
+                   [class.checklist-row-active]="isRowActive('supplier')"
+                   [attr.role]="visionBoxForKey('supplier') ? 'button' : null"
+                   [attr.tabindex]="visionBoxForKey('supplier') ? 0 : null"
+                   [attr.aria-pressed]="visionBoxForKey('supplier') ? isRowActive('supplier') : null"
+                   (click)="onRowActivate('supplier')"
+                   (keydown.enter)="onRowActivate('supplier')"
+                   (keydown.space)="onRowActivate('supplier'); $event.preventDefault()">
                 <span class="checklist-icon" [ngClass]="rowIconClass(supplierNameStatus())">
                   <i class="ph-duotone" [ngClass]="rowIcon(supplierNameStatus())"></i>
                 </span>
                 <span class="checklist-label">Supplier Name Detected</span>
-                <span class="location-note" *ngIf="supplierNameStatus() === 'yes' && !visionBoxForKey('company_name')">Location unavailable</span>
+                <span class="location-note" *ngIf="supplierNameStatus() === 'yes' && !visionBoxForKey('supplier')">Location unavailable</span>
               </div>
               <div class="checklist-row"
                    [class.checklist-row-clickable]="!!visionBoxForKey('supplier_address')"
