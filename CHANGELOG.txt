@@ -17925,3 +17925,105 @@ Rollback instructions:
   Finance Home's previous browser-local-timezone "this month"/month-
   bucket logic. The tzdata dependency can stay even after a rollback -
   it's inert unless something imports zoneinfo.
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Frontend (auditlens-frontend/):
+    - New auditor page: Three-Way Matching (auditor/three-way-matching/
+      auditor-three-way-matching.component.ts/html/css), added to the
+      sidebar between Review Queue and Authenticity, route /auditor/
+      three-way-matching. Lists every transaction package/standalone
+      invoice with Invoice Number, Related PO, Related GR, Supplier,
+      Total Amount, a Match Status badge (PASS/REVIEW/FAIL, plus the
+      existing PARTIAL/PENDING states the same engine can already
+      return), and a "View Details" button - filter chips (All/Passed/
+      Review Required/Failed) and a supplier/invoice-number search bar,
+      styled with the exact same tokens/classes as the existing Review
+      Queue page for visual consistency.
+    - Reads the SAME GET /auditor/transactions endpoint Auditor Home's
+      dashboard and Review Queue already use - no new matching
+      calculation, no duplicated engine call. matching_status is the
+      existing Enterprise Matching V2-derived verdict computed server-
+      side in that one place; this page only adds its own filter/search/
+      display over the same rows.
+    - "View Details" navigates to the EXISTING, completely unmodified
+      Three-Way Matching Details page (auditor-matching-details.
+      component.ts) via the SAME query params Record Detail's own "View
+      Matching Details" button already uses (document_id, plus
+      transaction_package_id when the invoice belongs to one) - verified
+      live to open the correct invoice's field-by-field comparison.
+    - app.routes.ts: added the route; auditor-layout.component.ts/.html:
+      added the sidebar nav item (new 'matching' icon key, ph-arrows-
+      left-right) between Review Queue and Authenticity, no other nav
+      items reordered or touched.
+
+  Backend (auditlens-backend/):
+    - routes/auditor.py's GET /auditor/transactions gained two new
+      fields per row - total_amount and currency - needed for the new
+      page's "Total Amount" column, which didn't exist on this endpoint
+      before. Reuses data already fetched in the SAME request with zero
+      new queries: for a transaction package, summed from the invoice
+      rows already loaded via list_all_packages_with_documents() (the
+      exact list invoice_numbers already reads); for a standalone
+      invoice, read directly off the row list_standalone_invoices()
+      already selects total_amount/currency from. No new endpoint, no
+      new matching/calculation logic - purely exposing 2 fields that
+      were already sitting in memory.
+    - Record Detail, Matching Details, Review Queue, Audit Review
+      workflow, and every other existing route/page are completely
+      untouched - confirmed via `git status`/diff before committing:
+      only routes/auditor.py, app.routes.ts, auditor-layout.component.
+      ts/.html, and the new three-way-matching/ folder changed.
+
+Why:
+  The auditor previously had no single page to review every
+  transaction's Invoice/PO/GR match outcome at a glance - matching
+  status was only visible buried inside Review Queue's broader risk
+  triage view or one record at a time on Record Detail/Matching
+  Details. This adds a focused list scoped to exactly that: what
+  matched, what needs review, what failed, and a one-click way into the
+  existing detailed comparison.
+
+Build result:
+  Backend: all 33 suites in tests/extraction/run_all.py pass, plus
+  `python -c "import app"` clean (task explicitly asked not to add
+  tests, so no new test file was added - existing suites re-run only to
+  confirm no regression). Frontend: `ng build --configuration
+  development` and `ng build --configuration production` both clean
+  (the production budget warning grew by the new page's own bundle
+  weight, same pre-existing warning class as before, not a new issue).
+
+  Live verification against the real local dev stack (python app.py +
+  ng serve, real Postgres, real login as vision_fixture_auditor@x.com):
+  confirmed the sidebar order is exactly Auditor Home, Review Queue,
+  Three-Way Matching, Authenticity, Exceptions, Anomaly Detection,
+  Calendar, Report & Log. Opened /auditor/three-way-matching and
+  confirmed real rows rendered: INV-NBI-2026-0017 / PO-NBI-2026-0017 /
+  GR-NBI-2026-0017 / Northbridge Industries Sdn Bhd / RM 1,500.00 /
+  PASS, alongside two other real invoices showing their own PARTIAL
+  status and amounts (RM 100.00, USD 1,000.00 - confirming per-currency
+  formatting). Clicked "View Details" on the PASS row and confirmed it
+  opened /auditor/matching-details?document_id=3753 - the existing,
+  unmodified Matching Details page - showing the correct invoice's
+  Field Comparison (Vendor/PO Ref/Amount all matched) and Source
+  Documents section. Zero browser console errors throughout. Both dev
+  servers stopped by exact PID afterward.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub - Render should auto-deploy both the backend
+     (Docker web service) and the frontend static site.
+  2. Backend redeploy required (routes/auditor.py changed - 2 new
+     response fields on an existing endpoint).
+  3. No schema/migration, no new environment variables, no new
+     dependencies.
+
+Rollback instructions:
+  Revert this one commit. No schema or data change either way -
+  reverting removes the sidebar item/route/page and the 2 new response
+  fields on GET /auditor/transactions; every other page (which never
+  read those 2 new fields) is unaffected either way.

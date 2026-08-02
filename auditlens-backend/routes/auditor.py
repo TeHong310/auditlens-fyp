@@ -1576,6 +1576,7 @@ def get_auditor_transactions():
             # PASS" per the Record Detail fix this mirrors).
             latest_review_action = _latest_review_action_for_documents(cursor, invoice_ids)
             anomaly_risk_level, has_material_finding = _anomaly_risk_for_documents(cursor, invoice_ids)
+            invoice_amounts = [inv['total_amount'] for inv in docs['invoices'] if inv.get('total_amount') is not None]
 
             rows.append({
                 'kind':                  'transaction_package',
@@ -1602,6 +1603,15 @@ def get_auditor_transactions():
                 'invoice_numbers':       [inv['invoice_number'] for inv in docs['invoices'] if inv.get('invoice_number')],
                 'po_numbers':            [po['po_number'] for po in docs['purchase_orders'] if po.get('po_number')],
                 'gr_numbers':            [gr['gr_number'] for gr in docs['goods_receipts'] if gr.get('gr_number')],
+                # Three-Way Matching page's "Total Amount" column — sums
+                # every invoice already in docs['invoices'] (same list
+                # invoice_numbers above reads), no new query. Currency
+                # taken from the first invoice that has one; this app's
+                # packages are effectively always single-currency in
+                # practice, and summing across genuinely different
+                # currencies isn't meaningful anyway.
+                'total_amount':          float(sum(invoice_amounts)) if invoice_amounts else None,
+                'currency':              next((inv['currency'] for inv in docs['invoices'] if inv.get('currency')), None),
             })
 
         # STEP 10 backward compatibility: legacy/standalone invoices
@@ -1637,6 +1647,12 @@ def get_auditor_transactions():
                 'invoice_numbers':       [doc['invoice_number']] if doc.get('invoice_number') else [],
                 'po_numbers':            [po['po_no']] if po and po.get('po_no') else [],
                 'gr_numbers':            [gr['gr_no']] if gr and gr.get('gr_no') else [],
+                # Same Three-Way Matching "Total Amount" column as the
+                # package branch above — list_standalone_invoices()
+                # already selects total_amount/currency from
+                # extracted_fields, no new query.
+                'total_amount':          float(doc['total_amount']) if doc.get('total_amount') is not None else None,
+                'currency':              doc.get('currency'),
             })
 
         conn.close()

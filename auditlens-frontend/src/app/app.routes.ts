@@ -18,6 +18,7 @@ import { AuditorReviewQueueComponent } from './auditor/review-queue/auditor-revi
 import { AuditorReportComponent } from './auditor/report/auditor-report.component';
 import { AuditorRecordDetailComponent } from './auditor/record-detail/auditor-record-detail.component';
 import { AuditorMatchingDetailsComponent } from './auditor/matching-details/auditor-matching-details.component';
+import { AuditorThreeWayMatchingComponent } from './auditor/three-way-matching/auditor-three-way-matching.component';
 import { AuditorExceptionsComponent } from './auditor/exceptions/auditor-exceptions.component';
 import { AuditorAnomaliesComponent } from './auditor/anomalies/auditor-anomalies.component';
 import { AuditorAuthenticityComponent } from './auditor/authenticity/auditor-authenticity.component';
@@ -62,6 +63,7 @@ export const routes: Routes = [
     children: [
       { path: 'home', component: AuditorDashboardComponent },
       { path: 'review-queue', component: AuditorReviewQueueComponent },
+      { path: 'three-way-matching', component: AuditorThreeWayMatchingComponent },
       { path: 'record-detail', component: AuditorRecordDetailComponent },  // ← 新加
       { path: 'matching-details', component: AuditorMatchingDetailsComponent },
       { path: 'exceptions', component: AuditorExceptionsComponent },     // ← 新加

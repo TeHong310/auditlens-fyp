@@ -1,0 +1,115 @@
+<div class="page-wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <h1 class="page-title">Three-Way Matching</h1>
+      <p class="page-subtitle">Invoice / PO / GR match status across every transaction</p>
+    </div>
+  </div>
+
+  <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
+
+  <!-- Summary Cards -->
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-dot blue"></span>
+        <span class="stat-label">Total Transactions</span>
+      </div>
+      <p class="stat-value">{{ transactions.length }}</p>
+      <p class="stat-sub">Packages &amp; standalone invoices</p>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-dot green"></span>
+        <span class="stat-label">Passed</span>
+      </div>
+      <p class="stat-value">{{ passCount }}</p>
+      <p class="stat-sub">Invoice, PO &amp; GR match</p>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-dot orange"></span>
+        <span class="stat-label">Review Required</span>
+      </div>
+      <p class="stat-value">{{ reviewCount }}</p>
+      <p class="stat-sub">Discrepancy detected</p>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-dot red"></span>
+        <span class="stat-label">Failed</span>
+      </div>
+      <p class="stat-value">{{ failCount }}</p>
+      <p class="stat-sub">Matching failed</p>
+    </div>
+  </div>
+
+  <div class="list-card">
+
+    <!-- Filters + Search -->
+    <div class="filter-row">
+      <button class="filter-chip" [class.active]="activeFilter === 'all'" (click)="setFilter('all')">
+        All <span class="chip-count">{{ transactions.length }}</span>
+      </button>
+      <button class="filter-chip" [class.active]="activeFilter === 'PASS'" (click)="setFilter('PASS')">
+        Passed <span class="chip-count">{{ passCount }}</span>
+      </button>
+      <button class="filter-chip" [class.active]="activeFilter === 'REVIEW'" (click)="setFilter('REVIEW')">
+        Review Required <span class="chip-count">{{ reviewCount }}</span>
+      </button>
+      <button class="filter-chip" [class.active]="activeFilter === 'FAIL'" (click)="setFilter('FAIL')">
+        Failed <span class="chip-count">{{ failCount }}</span>
+      </button>
+    </div>
+
+    <div class="search-bar">
+      <i class="ph-duotone ph-magnifying-glass" style="font-size:15px; color:var(--text-muted);"></i>
+      <input type="text" placeholder="Search invoice number or supplier..." class="search-input" [(ngModel)]="searchText" />
+    </div>
+
+    <!-- Table -->
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Invoice Number</th>
+            <th>Related PO</th>
+            <th>Related GR</th>
+            <th>Supplier</th>
+            <th>Total Amount</th>
+            <th>Match Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngIf="isLoading"><td colspan="7" class="loading-row">Loading...</td></tr>
+          <tr *ngIf="!isLoading && filteredTransactions.length === 0">
+            <td colspan="7" class="empty-row">No transactions match this filter.</td>
+          </tr>
+          <tr *ngFor="let txn of filteredTransactions" (click)="viewDetails(txn)">
+            <td class="inv-id">{{ relatedDocLabel(txn.invoice_numbers) }}</td>
+            <td class="doc-numbers">{{ relatedDocLabel(txn.po_numbers) }}</td>
+            <td class="doc-numbers">{{ relatedDocLabel(txn.gr_numbers) }}</td>
+            <td>{{ txn.supplier || 'Unknown' }}</td>
+            <td class="amount-cell">{{ formatAmount(txn.total_amount, txn.currency) }}</td>
+            <td>
+              <span class="badge" [ngClass]="matchingStatusClass(txn.matching_status)">
+                {{ matchingStatusLabel(txn.matching_status) }}
+              </span>
+            </td>
+            <td>
+              <button class="btn-open" (click)="viewDetails(txn); $event.stopPropagation()">View Details →</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+</div>
