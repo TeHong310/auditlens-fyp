@@ -64,7 +64,7 @@ CLAUDE_RAW = {
 
 def run_case_document_type_guidance_differs_po_gr_vs_invoice():
     print('Case: PO/GR get a "supplier priority order" block Invoice does not (letterhead != supplier on PO/GR)')
-    check('prompt version bumped to v5', ce.CLAUDE_AUTHENTICITY_PROMPT_VERSION == 'v5', ce.CLAUDE_AUTHENTICITY_PROMPT_VERSION)
+    check('prompt version bumped to v6', ce.CLAUDE_AUTHENTICITY_PROMPT_VERSION == 'v6', ce.CLAUDE_AUTHENTICITY_PROMPT_VERSION)
     check('PO guidance includes the priority order', 'priority order' in ce._DOCUMENT_TYPE_GUIDANCE['po'])
     check('GR guidance includes the priority order', 'priority order' in ce._DOCUMENT_TYPE_GUIDANCE['gr'])
     check('Invoice guidance does NOT include a priority order (letterhead IS the supplier there)',

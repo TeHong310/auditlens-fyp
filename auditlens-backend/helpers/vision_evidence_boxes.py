@@ -1,6 +1,14 @@
 """
 v7 spec — accurate document evidence highlighting.
 v8 spec — document-type-aware party/stamp detection.
+v9 spec — hybrid Invoice evidence location: Claude supplies semantic
+values only (issuer/buyer names, whether a stamp exists — NEVER a
+coordinate), Google Vision OCR turns those values into precise pixel
+coordinates against the canonical image, and OpenCV performs one
+narrowly-scoped refinement step (isolating the red ink of a Buyer
+Received stamp within a small area Vision itself already anchored via
+a nearby date). See build_vision_evidence_boxes()'s docstring for the
+full division of labor.
 
 Builds real, Google-Vision-derived polygon regions for the parties and
 stamps each document type actually carries, by matching Google Vision
@@ -20,31 +28,32 @@ for the same check (helpers/authenticity_check.py passes through
 prepare_gemini_image_payload()'s own output) — so OCR and the
 authenticity preview are always looking at identical pixels.
 
-DOCUMENT-TYPE RULES (v8) — same real-world counterparty (e.g. the
+DOCUMENT-TYPE RULES — same real-world counterparty (e.g. the
 buyer/receiver company running this AuditLens instance), three
-different roles, three different structural positions:
-  - INVOICE: the SUPPLIER owns the page's own letterhead (matched via
-    extracted_vendor_name); the BUYER is a separately labelled block
-    ("Bill To" / "Sold To" / "Customer"). No supplier-address box is
-    built for an invoice — an invoice's own letterhead already IS the
-    supplier evidence, and address inference risks bleeding into the
-    buyer's Bill-To block instead, so this category is skipped
-    entirely rather than risk a wrong label.
-  - PURCHASE ORDER: the BUYER issues the PO, so the buyer owns the
-    page's own top letterhead; the SUPPLIER appears in a separately
-    labelled Vendor/Supplier field, matched via extracted_vendor_name
-    same as always. Supplier address IS built (structural inference,
-    same-block-as-supplier-name).
-  - GOODS RECEIVED NOTE: same shape as a PO — the RECEIVER (buyer) owns
-    the top letterhead, the SUPPLIER is matched via extracted_vendor_name.
-    Two distinct buyer-side processing stamps are looked for
-    separately (QC Passed, Key-In Store) — never a supplier stamp, and
-    never triggered by the word "Received" in the document's own title
-    "Goods Received Note" (that word isn't in either GR stamp keyword
-    set at all).
-  - Only INVOICE looks for a stamp keyword set containing "received"
-    (the Buyer Received Stamp) — this is why the same word never false-
-    positives on a GR's title.
+different roles, three different detection strategies:
+  - INVOICE (v9 hybrid — see build_vision_evidence_boxes()'s docstring):
+    the SUPPLIER owns the page's own letterhead, matched via Claude's
+    own detected supplier name (falls back to extracted_vendor_name);
+    the BUYER is Claude's own detected buyer name, located near a
+    priority-ordered anchor ("Accounts Payable" / "Bill To" / "Sold To"
+    / "Customer" / "Ship To"); the Buyer Received Stamp is located by
+    Vision anchoring a nearby date, then OpenCV isolating the red ink
+    around it. No supplier-address box is built for an invoice — an
+    invoice's own letterhead already IS the supplier evidence, and
+    address inference risks bleeding into the buyer's block instead, so
+    this category is skipped entirely rather than risk a wrong label.
+  - PURCHASE ORDER (unchanged, structural only — no Claude semantic
+    input): the BUYER issues the PO, so the buyer owns the page's own
+    top letterhead; the SUPPLIER appears in a separately labelled
+    Vendor/Supplier field, matched via extracted_vendor_name. Supplier
+    address IS built (structural inference, same-block-as-supplier-name).
+  - GOODS RECEIVED NOTE (unchanged, structural only): same shape as a
+    PO — the RECEIVER (buyer) owns the top letterhead, the SUPPLIER is
+    matched via extracted_vendor_name. Two distinct buyer-side
+    processing stamps are looked for separately (QC Passed, Key-In
+    Store) — never a supplier stamp, and never triggered by the word
+    "Received" in the document's own title "Goods Received Note" (that
+    word isn't in either GR stamp keyword set at all).
 
 This mirrors the SAME buyer-vs-supplier reasoning already encoded in
 helpers/claude_extractor.py's CLAUDE_AUTHENTICITY_PROMPT (see its
@@ -70,6 +79,8 @@ import base64
 import difflib
 
 import requests
+import numpy as np
+import cv2
 
 from config import Config
 
@@ -313,6 +324,55 @@ def find_buyer_block_by_label(words):
     return following, _COUNTERPARTY_CONFIDENCE
 
 
+# v9: strict priority order for Invoice buyer anchors — "Accounts
+# Payable" is checked FIRST and, if present anywhere at all, every
+# lower-priority anchor is ignored even if it also appears on the page.
+_BUYER_ANCHOR_PHRASES_PRIORITY = ['accountspayable', 'billto', 'soldto', 'customer', 'shipto']
+
+
+def find_buyer_near_anchor(words, buyer_name):
+    """
+    v9 Invoice buyer detection: Claude has already read the page and
+    returned buyer_name as plain text (semantic value, no coordinates —
+    see build_vision_evidence_boxes()'s docstring). This function's ONLY
+    job is to turn that text into a precise location using real Vision
+    OCR data:
+
+      1. Try each anchor phrase in _BUYER_ANCHOR_PHRASES_PRIORITY, in
+         order — the first one found ANYWHERE in the OCR text wins;
+         lower-priority anchors are only tried if every higher one is
+         completely absent from the page.
+      2. Within that anchor's own visual block, fuzzy-match buyer_name
+         against the block's words (same technique as
+         match_supplier_name) — never blindly assume every word in the
+         block is the buyer, so a false anchor match can't pull in
+         unrelated text.
+      3. Any remaining words in that block AFTER the matched name are
+         included too — the buyer's own nearby address line, per the
+         "company name and nearby address" requirement — never words
+         BEFORE it, which would be the anchor label itself.
+
+    Returns (words, confidence) or (None, 0.0) if buyer_name is empty,
+    no anchor is found at all, or an anchor was found but buyer_name
+    doesn't match anything near it.
+    """
+    if not buyer_name:
+        return None, 0.0
+    for phrase in _BUYER_ANCHOR_PHRASES_PRIORITY:
+        anchor_end = _label_anchor_end(words, {phrase})
+        if anchor_end is None:
+            continue
+        anchor_block = words[anchor_end - 1]['block_index']
+        block_words = [w for w in words if w['block_index'] == anchor_block]
+        name_words, name_conf, name_idx = match_supplier_name(buyer_name, block_words)
+        if not name_words:
+            continue
+        start, end = name_idx
+        trailing = [w for i, w in enumerate(block_words) if i >= end]
+        return name_words + trailing, name_conf
+    return None, 0.0
+
+
 def find_buyer_block_by_top_position(words, exclude_block_index):
     """PO/GR-style buyer detection: the buyer is normally the document's
     OWN top letterhead — the topmost block on the page, excluding
@@ -341,18 +401,17 @@ def find_buyer_block_by_top_position(words, exclude_block_index):
     return name_words, _COUNTERPARTY_CONFIDENCE
 
 
-# ── Stamp text matching ──
+# ── Stamp text matching (GR only — Invoice uses the date+OpenCV
+#    pipeline below instead) ──
 #
-# Keyword sets are deliberately per-document-type and never share the
-# word "received" outside of the invoice set — this is what stops a
-# Goods Received Note's own title ("Goods RECEIVED Note") from ever
-# being mistaken for a stamp: 'received' simply never appears in either
-# GR keyword set. Generic single-character-risk words ("in") are
-# excluded entirely; the remaining generic-sounding words ("store",
-# "dept") are only trusted when at least 2 keyword words cluster
-# together (min_words), which a single incidental page word can't do.
+# Keyword sets are per-document-type and never contain "received" —
+# this is what stops a Goods Received Note's own title ("Goods RECEIVED
+# Note") from ever being mistaken for a stamp. Generic single-
+# character-risk words ("in") are excluded entirely; the remaining
+# generic-sounding words ("store", "dept") are only trusted when at
+# least 2 keyword words cluster together (min_words), which a single
+# incidental page word can't do.
 
-_INVOICE_STAMP_KEYWORDS = {'received', 'stamp'}
 _GR_QC_STAMP_KEYWORDS = {'qc', 'qc1', 'passed', 'pass', 'dept'}
 _GR_KEYIN_STAMP_KEYWORDS = {'keyin', 'key', 'store'}
 
@@ -404,6 +463,100 @@ def find_stamp_region(words, keywords, min_words=1):
     return best['words'], confidence
 
 
+# ── Received-stamp date anchor + OpenCV red-region refinement ──
+#
+# No extracted "received date" ground truth exists anywhere in this
+# app's schema, so — unlike supplier/buyer name matching — this can
+# only be a general PATTERN match (day + 3-letter month + year), never
+# a text comparison against a known value. This is the one place a
+# date-shaped string is treated as a location anchor rather than a
+# fuzzy name.
+
+_MONTH_ABBR = {'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'}
+_DATE_SINGLE_TOKEN_RE = re.compile(r'^\d{1,2}[\-/.](\d{1,2}|[a-z]{3})[\-/.]\d{2,4}$')
+_DAY_RE = re.compile(r'^\d{1,2}$')
+_YEAR_RE = re.compile(r'^\d{4}$')
+
+
+def find_date_near(words):
+    """Scans the OCR words (reading order) for a date-shaped run: either
+    one single token like "04-MAR-2026" / "04/03/2026", or 3 consecutive
+    tokens forming day + 3-letter month + year, e.g. "04" "MAR" "2026" —
+    the exact style the task's own Coilcraft stamp example uses. Returns
+    the matched word(s) (for their bounding box, used only as a search
+    ANCHOR for the OpenCV step below — never rendered as its own
+    evidence box) or None if nothing date-shaped is found anywhere."""
+    n = len(words)
+    for i in range(n):
+        if _DATE_SINGLE_TOKEN_RE.match(words[i]['text'].lower()):
+            return [words[i]]
+        if i + 2 < n:
+            day, month, year = words[i]['text'], words[i + 1]['text'], words[i + 2]['text']
+            if _DAY_RE.match(day) and _normalize(month) in _MONTH_ABBR and _YEAR_RE.match(year):
+                return [words[i], words[i + 1], words[i + 2]]
+    return None
+
+
+def find_red_stamp_region(image_bytes, search_bbox, page_width, page_height):
+    """
+    OpenCV refinement step (v9) — the ONLY place in this module that
+    touches raw pixels instead of Vision word geometry. Decodes the SAME
+    canonical PNG bytes Vision OCR and the frontend preview both use,
+    crops to a LIMITED area expanded around search_bbox (the date
+    Vision just anchored — never the whole page, and never a hard-coded
+    region), thresholds for red ink in HSV space, and merges every red
+    contour above a noise-floor area into one bounding box.
+
+    Returns (x1, y1, x2, y2) in full-image pixel coordinates, or None if
+    no red ink is found in the search area at all — the caller must
+    treat that as "not reliably located" (Location unavailable), never
+    fall back to a guessed box.
+    """
+    arr = np.frombuffer(image_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+
+    sx1, sy1, sx2, sy2 = search_bbox
+    # A physical stamp is normally noticeably larger than just the date
+    # line printed/stamped inside it, so the search crop is expanded
+    # generously around the date's own (small) bounding box.
+    margin_x = (sx2 - sx1) * 3 + 60
+    margin_y = (sy2 - sy1) * 5 + 60
+    cx1 = max(0, int(sx1 - margin_x))
+    cy1 = max(0, int(sy1 - margin_y))
+    cx2 = min(page_width, int(sx2 + margin_x))
+    cy2 = min(page_height, int(sy2 + margin_y))
+    if cx2 <= cx1 or cy2 <= cy1:
+        return None
+
+    crop = img[cy1:cy2, cx1:cx2]
+    if crop.size == 0:
+        return None
+
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    # Red wraps around hue 0/180 in OpenCV's 0-179 hue range, so it
+    # needs two bands, OR'd together.
+    mask = (
+        cv2.inRange(hsv, np.array([0, 70, 50]), np.array([10, 255, 255])) |
+        cv2.inRange(hsv, np.array([170, 70, 50]), np.array([180, 255, 255]))
+    )
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    min_contour_area = 15  # ignores single-pixel/antialiasing noise
+    boxes = [cv2.boundingRect(c) for c in contours if cv2.contourArea(c) >= min_contour_area]
+    if not boxes:
+        return None
+
+    bx1 = min(b[0] for b in boxes)
+    by1 = min(b[1] for b in boxes)
+    bx2 = max(b[0] + b[2] for b in boxes)
+    by2 = max(b[1] + b[3] for b in boxes)
+
+    # Map the crop-local box back to full canonical-image coordinates.
+    return cx1 + bx1, cy1 + by1, cx1 + bx2, cy1 + by2
+
+
 # ── Validation + entry construction ──
 
 _MIN_BOX_CONFIDENCE = 0.55
@@ -438,7 +591,9 @@ def _build_box_entry(box_type, label, page, source_width, source_height, polygon
     }
 
 
-def build_vision_evidence_boxes(document_id, document_type, image_bytes, extracted_vendor_name):
+def build_vision_evidence_boxes(document_id, document_type, image_bytes, extracted_vendor_name,
+                                  claude_supplier_name=None, claude_buyer_name=None,
+                                  claude_stamp_detected=False):
     """
     Main entry point, called from run_authenticity_check(). Runs Vision
     OCR (with box geometry) against the SAME canonical image bytes
@@ -450,6 +605,19 @@ def build_vision_evidence_boxes(document_id, document_type, image_bytes, extract
       po:      supplier_name, supplier_address, buyer_name
       gr:      supplier_name, supplier_address, buyer_name,
                qc_passed_stamp, key_in_store_stamp
+
+    v9 hybrid division of labor (Invoice only — PO/GR are unchanged):
+    Claude supplies SEMANTIC values only —
+      claude_supplier_name:   Claude's own visually-detected issuer name
+      claude_buyer_name:      Claude's own visually-detected buyer name
+      claude_stamp_detected:  whether Claude confirmed a stamp exists
+    — never a pixel coordinate. This function is the ONLY place those
+    values are ever turned into coordinates, always by matching them
+    against real Google Vision OCR word geometry (or, for the stamp,
+    Vision anchoring a nearby date + a scoped OpenCV red-ink search).
+    extracted_vendor_name (the separate extraction pipeline's value)
+    remains the fallback for invoice supplier matching when Claude
+    found nothing, and is still the ONLY source used for PO/GR.
 
     Returns a list of v7-schema dicts (see _build_box_entry), each
     already validated and safe to render as-is. Never contains two
@@ -466,8 +634,17 @@ def build_vision_evidence_boxes(document_id, document_type, image_bytes, extract
         results = []
         name_indices = None
 
-        if extracted_vendor_name:
-            name_words, name_conf, name_indices = match_supplier_name(extracted_vendor_name, words)
+        # Invoice prefers Claude's OWN visually-detected supplier name —
+        # the same AI pass whose image Vision OCR is analyzing here —
+        # falling back to the extraction pipeline's hint only if Claude
+        # found nothing. PO/GR are untouched: always extracted_vendor_name.
+        if document_type == 'invoice':
+            supplier_match_target = claude_supplier_name or extracted_vendor_name
+        else:
+            supplier_match_target = extracted_vendor_name
+
+        if supplier_match_target:
+            name_words, name_conf, name_indices = match_supplier_name(supplier_match_target, words)
             if name_words:
                 x1, y1, x2, y2 = _merge_bbox(name_words)
                 entry = _build_box_entry(
@@ -492,12 +669,21 @@ def build_vision_evidence_boxes(document_id, document_type, image_bytes, extract
                         if addr_entry:
                             results.append(addr_entry)
 
-        # ── Buyer / issuer / receiver — structural, never a name match. ──
+        # ── Buyer / issuer / receiver. ──
         supplier_block = words[name_indices[0]]['block_index'] if name_indices else None
         if document_type == 'invoice':
-            buyer_words, buyer_conf = find_buyer_block_by_label(words)
+            # v9: Claude's buyer_name, precisely located via the
+            # priority-ordered anchor search + fuzzy match. Falls back
+            # to the older blind label-block grab only when Claude
+            # found no buyer at all (e.g. the Gemini/fallback engine,
+            # which has no buyer_identity concept) or nothing matched
+            # near any anchor — never silently produces nothing when a
+            # reasonable best-effort location still exists.
+            buyer_words, buyer_conf = find_buyer_near_anchor(words, claude_buyer_name)
+            if not buyer_words:
+                buyer_words, buyer_conf = find_buyer_block_by_label(words)
             buyer_label = 'Buyer'
-        else:  # po, gr
+        else:  # po, gr — unchanged structural detection
             buyer_words, buyer_conf = find_buyer_block_by_top_position(words, supplier_block)
             buyer_label = 'PO Issuer / Buyer' if document_type == 'po' else 'Receiver'
         if buyer_words:
@@ -511,15 +697,27 @@ def build_vision_evidence_boxes(document_id, document_type, image_bytes, extract
 
         # ── Stamps — type-specific keyword sets only; PO carries none. ──
         if document_type == 'invoice':
-            stamp_words, stamp_conf = find_stamp_region(words, _INVOICE_STAMP_KEYWORDS)
-            if stamp_words:
-                sx1, sy1, sx2, sy2 = _merge_bbox(stamp_words)
-                entry = _build_box_entry(
-                    'buyer_received_stamp', 'Buyer Received Stamp', 1, page_width, page_height,
-                    _rect_polygon(sx1, sy1, sx2, sy2, pad=10), stamp_conf,
-                )
-                if entry:
-                    results.append(entry)
+            # v9: Claude must first confirm a stamp actually exists —
+            # Vision/OpenCV only ever REFINE a location Claude already
+            # semantically confirmed, never invent one on their own.
+            if claude_stamp_detected:
+                date_words = find_date_near(words)
+                if date_words:
+                    date_bbox = _merge_bbox(date_words)
+                    red_bbox = find_red_stamp_region(image_bytes, date_bbox, page_width, page_height)
+                    if red_bbox:
+                        sx1, sy1, sx2, sy2 = red_bbox
+                        entry = _build_box_entry(
+                            'buyer_received_stamp', 'Buyer Received Stamp', 1, page_width, page_height,
+                            _rect_polygon(sx1, sy1, sx2, sy2, pad=6), 0.85,
+                        )
+                        if entry:
+                            results.append(entry)
+                # No date anchor, or no red ink found near it: the stamp
+                # "cannot be located reliably" per spec — deliberately NO
+                # fallback to a different method here. The frontend shows
+                # "Location unavailable" (Claude confirmed it exists;
+                # this module just couldn't pin a trustworthy box).
         elif document_type == 'gr':
             qc_words, qc_conf = find_stamp_region(words, _GR_QC_STAMP_KEYWORDS, min_words=2)
             if qc_words:

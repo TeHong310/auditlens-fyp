@@ -267,6 +267,13 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return this.check?.ai_visual_result?.supplier_identity || null;
   }
 
+  // v9: Claude's own buyer detection (see helpers/claude_extractor.py's
+  // BUYER IDENTITY section) — null for a check run before this field
+  // existed, or by an engine that doesn't attempt it (Gemini/fallback).
+  get buyerIdentity(): any {
+    return this.check?.ai_visual_result?.buyer_identity || null;
+  }
+
   get integrityCheck(): any {
     return this.check?.ai_visual_result?.integrity_check || null;
   }
@@ -436,19 +443,32 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   get partyRows(): PartyRow[] {
     return this.partyRowDefs.map((def, i) => {
       const box = this.partyVisionBox(def.visionType);
-      // Only supplier/supplier_address have an independent (non-box)
-      // signal — Claude/Gemini's own supplier_identity detection.
-      // Buyer and every stamp type have no other source of truth in
-      // this app: a missing box for those honestly means "not
-      // detected", never "detected but unlocated".
+      // supplier/supplier_address/buyer have an independent (non-box)
+      // signal — Claude/Gemini's own supplier_identity/buyer_identity
+      // detection; for Invoice, buyer_stamp does too (Claude's own
+      // document_visual_evidence.stamp detection). qc_stamp/keyin_stamp
+      // (GR) have no other source of truth in this app: a missing box
+      // for those honestly means "not detected", never "detected but
+      // unlocated".
       let independentDetected: boolean | null = null;
       if (def.key === 'supplier') independentDetected = this.supplierNameStatus() === 'yes';
       else if (def.key === 'supplier_address') independentDetected = this.supplierAddressStatus() === 'yes';
+      else if (def.key === 'buyer') independentDetected = this.buyerIdentity?.status === 'detected';
+      else if (def.key === 'buyer_stamp') {
+        independentDetected = this.check?.ai_visual_result?.document_visual_evidence?.stamp?.status === 'detected';
+      }
       const detected = !!box || independentDetected === true;
+      // Invoice only: show the actual anchor Claude found ("Accounts
+      // Payable", "Ship To", etc.) instead of the generic default label,
+      // when one is known — the anchor used varies per document.
+      let label = def.label;
+      if (def.key === 'buyer' && this.buyerIdentity?.anchor) {
+        label = `Buyer (${this.buyerIdentity.anchor})`;
+      }
       return {
         key: def.key,
         number: i + 1,
-        label: def.label,
+        label,
         box,
         detected,
         locationUnavailable: detected && !box,
@@ -622,6 +642,12 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
       next: (res) => {
         this.check = res;
         this.isRechecking = false;
+        // A recheck regenerates every region from scratch (see
+        // run_authenticity_check's DB write — the whole `boxes` column
+        // is replaced, never merged) — clear any stale on-image
+        // emphasis from before the recheck rather than pointing at a
+        // key whose region may no longer exist.
+        this.emphasizedKey = null;
         this.cdr.detectChanges();
       },
       error: (err) => {

@@ -1,13 +1,19 @@
 """Regression tests for helpers/vision_evidence_boxes.py's v8 document-
-type-aware party/stamp detection — supplier/buyer matching, per-type
-stamp keyword sets, and the v7 box-validation rules. No real Google
-Vision API call: requests.post is monkey-patched with a hand-built
-DOCUMENT_TEXT_DETECTION response shaped like a real Coilcraft/EMITS
-document (the same example the feature spec itself uses), so
-match_supplier_name, find_address_near_name, find_buyer_block_by_label,
-find_buyer_block_by_top_position, find_stamp_region, and
-build_vision_evidence_boxes all run for real against realistic word
-geometry.
+type-aware party/stamp detection and v9 hybrid Invoice evidence
+location — supplier/buyer matching, per-type stamp keyword sets, the
+Claude-driven Invoice pipeline (anchor-priority buyer detection, Claude-
+preferred issuer matching, date+OpenCV received-stamp location), and
+the v7 box-validation rules.
+
+No real Google Vision API call: requests.post is monkey-patched with a
+hand-built DOCUMENT_TEXT_DETECTION response shaped like a real
+Coilcraft/EMITS document (the same example the feature spec itself
+uses). No real Anthropic call either — Claude's semantic outputs
+(claude_supplier_name/claude_buyer_name/claude_stamp_detected) are
+passed in directly, exactly as helpers/authenticity_check.py would
+after normalizing a real Claude response. OpenCV itself runs for real
+(no external API, no mocking needed) against synthetic PNG images built
+with cv2/numpy.
 
 Usage:
     python tests/extraction/test_vision_evidence_boxes.py
@@ -18,6 +24,9 @@ import sys
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+import numpy as np
+import cv2
 
 import helpers.vision_evidence_boxes as veb
 
@@ -79,19 +88,36 @@ def run_ocr(words_flat):
         return veb.run_google_vision_ocr_with_boxes(b'fake-png-bytes')
 
 
-def boxes_for(document_type, words_flat, extracted_vendor_name):
+def boxes_for(document_type, words_flat, extracted_vendor_name, image_bytes=b'fake-png-bytes', **claude_kwargs):
     with patch('helpers.vision_evidence_boxes.requests.post', side_effect=mock_post_for(words_flat)):
-        return veb.build_vision_evidence_boxes(1, document_type, b'fake-png-bytes', extracted_vendor_name)
+        return veb.build_vision_evidence_boxes(1, document_type, image_bytes, extracted_vendor_name, **claude_kwargs)
 
 
 def by_type(boxes, box_type):
     return next((b for b in boxes if b['type'] == box_type), None)
 
 
-# ══════════════════════════ INVOICE ══════════════════════════
+def make_test_image(width, height, red_rect=None):
+    """A plain white canvas PNG, optionally with a solid red rectangle
+    (x1, y1, x2, y2) drawn on it — stands in for a real scanned page's
+    red ink for the OpenCV-refinement tests, without needing a real
+    document image."""
+    img = np.full((height, width, 3), 255, dtype=np.uint8)
+    if red_rect:
+        x1, y1, x2, y2 = red_rect
+        img[y1:y2, x1:x2] = (0, 0, 220)  # BGR — a strong red
+    ok, buf = cv2.imencode('.png', img)
+    return buf.tobytes()
+
+
+# ══════════════════════════ INVOICE (v9 hybrid) ══════════════════════════
 # Coilcraft's own invoice: Coilcraft owns the top letterhead (supplier),
-# EMITS is a separately labelled "Bill To:" block (buyer), plus a lone
-# Buyer Received stamp lower on the page.
+# EMITS is under a "Bill To:" block (buyer). Claude's own semantic
+# outputs (never coordinates) are passed in explicitly, exactly as
+# helpers/authenticity_check.py would after normalizing a real response.
+
+CLAUDE_SUPPLIER_NAME = 'Coilcraft Singapore Pte Ltd'
+CLAUDE_BUYER_NAME = 'EMITS Technology Sdn. Bhd.'
 
 invoice_words = [
     # Block 0: supplier letterhead (top)
@@ -108,19 +134,18 @@ invoice_words = [
     word('Bhd.', 445, 335, 500, 363, 1, 1),
     # Block 2: page title containing "Invoice" (irrelevant noise word)
     word('INVOICE', 1400, 100, 1600, 135, 2, 0),
-    # Block 3: lone Buyer Received stamp
-    word('RECEIVED', 1300, 1900, 1550, 1950, 3, 0),
 ]
 
 
 def test_invoice():
-    boxes = boxes_for('invoice', invoice_words, 'Coilcraft Singapore Pte Ltd')
+    boxes = boxes_for('invoice', invoice_words, 'Coilcraft Singapore Pte Ltd',
+                       claude_supplier_name=CLAUDE_SUPPLIER_NAME, claude_buyer_name=CLAUDE_BUYER_NAME)
     types = {b['type'] for b in boxes}
     check('invoice: supplier_name found', 'supplier_name' in types, types)
     check('invoice: NO supplier_address ever built', 'supplier_address' not in types, types)
-    check('invoice: buyer_name found via Bill-To label', 'buyer_name' in types, types)
-    check('invoice: buyer_received_stamp found', 'buyer_received_stamp' in types, types)
-    check('invoice: exactly 3 boxes, no duplicates', len(boxes) == 3, [b['type'] for b in boxes])
+    check('invoice: buyer_name found via Bill-To anchor', 'buyer_name' in types, types)
+    check('invoice: NO stamp built (Claude did not confirm one exists)', 'buyer_received_stamp' not in types, types)
+    check('invoice: exactly 2 boxes, no duplicates', len(boxes) == 2, [b['type'] for b in boxes])
 
     supplier = by_type(boxes, 'supplier_name')
     buyer = by_type(boxes, 'buyer_name')
@@ -131,6 +156,226 @@ def test_invoice():
     for b in boxes:
         check(f'invoice: {b["type"]} has coordinate_source google_vision', b['coordinate_source'] == 'google_vision')
         check(f'invoice: {b["type"]} polygon has 4 points', len(b['polygon']) == 4)
+
+
+def test_invoice_no_stamp_box_when_claude_did_not_confirm_stamp():
+    # claude_stamp_detected defaults to False — even with a real date
+    # AND red ink present, no stamp box may appear unless Claude first
+    # semantically confirmed one exists.
+    date_and_red_words = invoice_words + [
+        word('04', 1260, 1900, 1300, 1940, 4, 0),
+        word('MAR', 1305, 1900, 1380, 1940, 4, 0),
+        word('2026', 1385, 1900, 1470, 1940, 4, 0),
+    ]
+    img = make_test_image(PAGE_W, PAGE_H, red_rect=(1200, 1830, 1520, 1960))
+    boxes = boxes_for('invoice', date_and_red_words, CLAUDE_SUPPLIER_NAME, image_bytes=img,
+                       claude_supplier_name=CLAUDE_SUPPLIER_NAME, claude_buyer_name=CLAUDE_BUYER_NAME,
+                       claude_stamp_detected=False)
+    check('invoice: no stamp box without claude_stamp_detected=True',
+          not any(b['type'] == 'buyer_received_stamp' for b in boxes), [b['type'] for b in boxes])
+
+
+def test_invoice_issuer_uses_claude_supplier_name_over_stale_extraction():
+    # extracted_vendor_name is deliberately WRONG/stale (doesn't match
+    # anything on the page) — Claude's OWN visually-detected name must
+    # still be used and still find the real supplier text.
+    boxes = boxes_for('invoice', invoice_words, 'Some Stale Old Vendor Pte Ltd',
+                       claude_supplier_name=CLAUDE_SUPPLIER_NAME, claude_buyer_name=CLAUDE_BUYER_NAME)
+    supplier = by_type(boxes, 'supplier_name')
+    check('invoice: supplier located via claude_supplier_name despite a stale extraction hint',
+          supplier is not None, supplier)
+    if supplier:
+        xs = [p['x'] for p in supplier['polygon']]
+        check('invoice: located supplier box covers the real Coilcraft text (not a guess)',
+              min(xs) < 500 and max(xs) < 550, supplier)
+
+
+def test_invoice_buyer_address_never_supplier_address():
+    # The buyer's own block includes an address-shaped line after the
+    # name — it must be merged into buyer_name (per "company name and
+    # nearby address"), and NEVER appear as a supplier_address box.
+    words_with_buyer_address = invoice_words + [
+        word('123', 100, 368, 140, 396, 1, 2),
+        word('Persiaran', 145, 368, 260, 396, 1, 2),
+        word('Industri', 265, 368, 360, 396, 1, 2),
+    ]
+    boxes = boxes_for('invoice', words_with_buyer_address, CLAUDE_SUPPLIER_NAME,
+                       claude_supplier_name=CLAUDE_SUPPLIER_NAME, claude_buyer_name=CLAUDE_BUYER_NAME)
+    types = {b['type'] for b in boxes}
+    check('invoice: still no supplier_address box even with buyer address text present',
+          'supplier_address' not in types, types)
+    buyer = by_type(boxes, 'buyer_name')
+    check('invoice: buyer box widens to include the nearby address line',
+          buyer and max(p['y'] for p in buyer['polygon']) > 390, buyer)
+
+
+def test_invoice_supplier_address_row_removed():
+    # Explicit, dedicated check (independent of what else is on the
+    # page) that an Invoice NEVER produces a supplier_address entry —
+    # the frontend must never render a legacy Supplier Address row.
+    for extra in ([], [word('Some', 100, 500, 200, 530, 5, 0), word('Address', 205, 500, 320, 530, 5, 0)]):
+        boxes = boxes_for('invoice', invoice_words + extra, CLAUDE_SUPPLIER_NAME,
+                           claude_supplier_name=CLAUDE_SUPPLIER_NAME, claude_buyer_name=CLAUDE_BUYER_NAME)
+        check('invoice: supplier_address type never present in any invoice result',
+              not any(b['type'] == 'supplier_address' for b in boxes), [b['type'] for b in boxes])
+
+
+def test_invoice_accounts_payable_anchor_priority():
+    # BOTH "Accounts Payable" (priority 1) and "Bill To" (priority 2)
+    # appear on the page. The real buyer name sits under Accounts
+    # Payable; a decoy company sits under Bill To. AP must win.
+    words = [
+        word('Coilcraft', 100, 100, 260, 135, 0, 0),
+        word('Singapore', 265, 100, 400, 135, 0, 0),
+        word('Pte', 405, 100, 450, 135, 0, 0),
+        word('Ltd', 455, 100, 500, 135, 0, 0),
+        # Accounts Payable block (priority 1) — the REAL buyer
+        word('Accounts', 100, 300, 220, 328, 1, 0),
+        word('Payable', 225, 300, 340, 328, 1, 0),
+        word('EMITS', 100, 335, 200, 363, 1, 1),
+        word('Technology', 205, 335, 380, 363, 1, 1),
+        word('Sdn.', 385, 335, 440, 363, 1, 1),
+        word('Bhd.', 445, 335, 500, 363, 1, 1),
+        # Bill To block (priority 2) — a DECOY, must be ignored since AP won
+        word('Bill', 100, 500, 160, 528, 2, 0),
+        word('To:', 165, 500, 210, 528, 2, 0),
+        word('Decoy', 100, 535, 220, 563, 2, 1),
+        word('Company', 225, 535, 360, 563, 2, 1),
+    ]
+    buyer_words, conf = veb.find_buyer_near_anchor(_flatten_for_ocr(words), CLAUDE_BUYER_NAME)
+    texts = [w['text'] for w in buyer_words] if buyer_words else []
+    check('accounts payable anchor wins over Bill To when both are present',
+          buyer_words is not None and 'Decoy' not in texts and 'EMITS' in texts, texts)
+
+
+def test_invoice_accounts_payable_anchor_falls_back_to_bill_to():
+    # Accounts Payable is present but the buyer name doesn't match
+    # anything near it (a different company sits there) — must fall
+    # through to Bill To rather than giving up.
+    words = [
+        word('Accounts', 100, 300, 220, 328, 0, 0),
+        word('Payable', 225, 300, 340, 328, 0, 0),
+        word('Unrelated', 100, 335, 240, 363, 0, 1),
+        word('Corp', 245, 335, 340, 363, 0, 1),
+        word('Bill', 100, 500, 160, 528, 1, 0),
+        word('To:', 165, 500, 210, 528, 1, 0),
+        word('EMITS', 100, 535, 200, 563, 1, 1),
+        word('Technology', 205, 535, 380, 563, 1, 1),
+        word('Sdn.', 385, 535, 440, 563, 1, 1),
+        word('Bhd.', 445, 535, 500, 563, 1, 1),
+    ]
+    buyer_words, conf = veb.find_buyer_near_anchor(_flatten_for_ocr(words), CLAUDE_BUYER_NAME)
+    texts = [w['text'] for w in buyer_words] if buyer_words else []
+    check('falls through to Bill To when AP block does not contain the buyer name',
+          buyer_words is not None and 'EMITS' in texts, texts)
+
+
+def _flatten_for_ocr(words_flat):
+    """Runs a flat word() list through the same page_from_words/parse
+    pipeline the mocked Vision response uses, without needing a full
+    build_vision_evidence_boxes() call — for testing find_buyer_near_anchor
+    etc. directly against realistic block/paragraph-indexed words."""
+    words, _, _ = run_ocr(words_flat)
+    return words
+
+
+_RED_STAMP_DATE_WORDS = [
+    word('04', 400, 700, 440, 730, 0, 0),
+    word('MAR', 445, 700, 510, 730, 0, 0),
+    word('2026', 515, 700, 590, 730, 0, 0),
+]
+
+
+def test_invoice_red_stamp_located_via_opencv():
+    # Claude confirms a stamp exists; Vision finds the "04 MAR 2026"
+    # date; a red rectangle (standing in for the real stamp ink) sits
+    # around/above that date. The resulting box must land on the red
+    # region, never a hard-coded position.
+    words = invoice_words + _RED_STAMP_DATE_WORDS
+    red_rect = (360, 620, 620, 735)  # encloses the date text itself, like a real stamp
+    img = make_test_image(PAGE_W, PAGE_H, red_rect=red_rect)
+    boxes = boxes_for('invoice', words, CLAUDE_SUPPLIER_NAME, image_bytes=img,
+                       claude_supplier_name=CLAUDE_SUPPLIER_NAME, claude_buyer_name=CLAUDE_BUYER_NAME,
+                       claude_stamp_detected=True)
+    stamp = by_type(boxes, 'buyer_received_stamp')
+    check('invoice: red stamp located via OpenCV when Claude confirmed + date found', stamp is not None, boxes)
+    if stamp:
+        xs = [p['x'] for p in stamp['polygon']]
+        ys = [p['y'] for p in stamp['polygon']]
+        rx1, ry1, rx2, ry2 = red_rect
+        check('invoice: located stamp box overlaps the actual red region',
+              min(xs) < rx2 and max(xs) > rx1 and min(ys) < ry2 and max(ys) > ry1,
+              (min(xs), min(ys), max(xs), max(ys)))
+        check('invoice: located stamp box is reasonably tight (not the whole page)',
+              (max(xs) - min(xs)) < PAGE_W * 0.5 and (max(ys) - min(ys)) < PAGE_H * 0.5, stamp)
+
+
+def test_invoice_stamp_location_unavailable_without_date():
+    # Claude confirms a stamp exists and there IS red ink on the page,
+    # but no date-shaped text anywhere — per spec, this must show
+    # "Location unavailable", never a guessed box.
+    img = make_test_image(PAGE_W, PAGE_H, red_rect=(1200, 1830, 1520, 1960))
+    boxes = boxes_for('invoice', invoice_words, CLAUDE_SUPPLIER_NAME, image_bytes=img,
+                       claude_supplier_name=CLAUDE_SUPPLIER_NAME, claude_buyer_name=CLAUDE_BUYER_NAME,
+                       claude_stamp_detected=True)
+    check('invoice: no stamp box when no date anchor exists',
+          not any(b['type'] == 'buyer_received_stamp' for b in boxes), [b['type'] for b in boxes])
+
+
+def test_invoice_stamp_location_unavailable_without_red_ink():
+    # A date IS found, but there is no red ink anywhere near it (plain
+    # white page) — must also show "Location unavailable", not fall
+    # back to a keyword-only guess.
+    words = invoice_words + _RED_STAMP_DATE_WORDS
+    img = make_test_image(PAGE_W, PAGE_H, red_rect=None)
+    boxes = boxes_for('invoice', words, CLAUDE_SUPPLIER_NAME, image_bytes=img,
+                       claude_supplier_name=CLAUDE_SUPPLIER_NAME, claude_buyer_name=CLAUDE_BUYER_NAME,
+                       claude_stamp_detected=True)
+    check('invoice: no stamp box when the date exists but no red ink is found near it',
+          not any(b['type'] == 'buyer_received_stamp' for b in boxes), [b['type'] for b in boxes])
+
+
+# ── Unit-level checks: find_date_near / find_red_stamp_region directly ──
+
+def test_find_date_near_three_token_form():
+    words = _flatten_for_ocr(_RED_STAMP_DATE_WORDS)
+    matched = veb.find_date_near(words)
+    check('find_date_near: matches split day/month/year tokens',
+          matched is not None and [w['text'] for w in matched] == ['04', 'MAR', '2026'], matched)
+
+
+def test_find_date_near_single_token_form():
+    words = _flatten_for_ocr([word('04-MAR-2026', 400, 700, 590, 730, 0, 0)])
+    matched = veb.find_date_near(words)
+    check('find_date_near: matches a single hyphenated date token',
+          matched is not None and len(matched) == 1, matched)
+
+
+def test_find_date_near_no_date_present():
+    words = _flatten_for_ocr(invoice_words)
+    matched = veb.find_date_near(words)
+    check('find_date_near: returns None when nothing date-shaped exists', matched is None, matched)
+
+
+def test_find_red_stamp_region_direct():
+    red_rect = (300, 600, 560, 720)
+    img = make_test_image(PAGE_W, PAGE_H, red_rect=red_rect)
+    result = veb.find_red_stamp_region(img, search_bbox=(400, 700, 590, 730),
+                                        page_width=PAGE_W, page_height=PAGE_H)
+    check('find_red_stamp_region: finds the red rectangle', result is not None, result)
+    if result:
+        x1, y1, x2, y2 = result
+        rx1, ry1, rx2, ry2 = red_rect
+        check('find_red_stamp_region: result closely matches the drawn rectangle',
+              abs(x1 - rx1) <= 3 and abs(y1 - ry1) <= 3 and abs(x2 - rx2) <= 3 and abs(y2 - ry2) <= 3,
+              (result, red_rect))
+
+
+def test_find_red_stamp_region_no_red_ink():
+    img = make_test_image(PAGE_W, PAGE_H, red_rect=None)
+    result = veb.find_red_stamp_region(img, search_bbox=(400, 700, 590, 730),
+                                        page_width=PAGE_W, page_height=PAGE_H)
+    check('find_red_stamp_region: returns None on a plain white page (no false positive)', result is None, result)
 
 
 # ══════════════════════════ PURCHASE ORDER ══════════════════════════
@@ -323,6 +568,20 @@ def test_find_stamp_region_min_words():
 
 if __name__ == '__main__':
     test_invoice()
+    test_invoice_no_stamp_box_when_claude_did_not_confirm_stamp()
+    test_invoice_issuer_uses_claude_supplier_name_over_stale_extraction()
+    test_invoice_buyer_address_never_supplier_address()
+    test_invoice_supplier_address_row_removed()
+    test_invoice_accounts_payable_anchor_priority()
+    test_invoice_accounts_payable_anchor_falls_back_to_bill_to()
+    test_invoice_red_stamp_located_via_opencv()
+    test_invoice_stamp_location_unavailable_without_date()
+    test_invoice_stamp_location_unavailable_without_red_ink()
+    test_find_date_near_three_token_form()
+    test_find_date_near_single_token_form()
+    test_find_date_near_no_date_present()
+    test_find_red_stamp_region_direct()
+    test_find_red_stamp_region_no_red_ink()
     test_po()
     test_po_missing_vendor_name_still_finds_buyer()
     test_gr()

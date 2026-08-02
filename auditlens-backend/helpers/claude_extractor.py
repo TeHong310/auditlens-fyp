@@ -280,7 +280,7 @@ def ask_claude_text(system_prompt, user_text, max_tokens=1024):
 # Bumped whenever this prompt/schema changes meaningfully — part of the
 # authenticity cache key (helpers/authenticity_cache.py) so a stale
 # cached result shaped for an older prompt version is never served.
-CLAUDE_AUTHENTICITY_PROMPT_VERSION = 'v5'
+CLAUDE_AUTHENTICITY_PROMPT_VERSION = 'v6'
 
 CLAUDE_AUTHENTICITY_PROMPT = """You are an enterprise AP (Accounts Payable) audit AI performing VISUAL
 document authenticity verification. You are NOT doing OCR/field
@@ -316,6 +316,27 @@ below for the exact priority order to use for THIS document:
   document, "uncertain" if something is present but ambiguous (e.g.
   multiple plausible company names, or the identity block is illegible).
 {document_type_block}{vendor_hint_block}
+
+BUYER IDENTITY — the counterparty company that RECEIVES/pays this
+document (the AP department's own organization), reported separately
+from supplier_identity — never the same company. Look for whichever of
+these anchor labels is present on the page, in this exact priority
+order (use the FIRST one that appears anywhere; only consider the next
+one if the previous ones are entirely absent):
+1. "Accounts Payable" (an AP department block — the buyer's own company
+   name is usually printed directly above or right next to it)
+2. "Bill To"
+3. "Sold To"
+4. "Customer"
+5. "Ship To"
+Report the exact anchor label you used (one of the 5 strings above,
+verbatim) in `anchor`, or "" if none of them appear anywhere on the
+document. `buyer_name` is the company name found under/near that
+anchor — correct obvious OCR/scan noise the same way as the supplier
+name. status is "detected" only when both an anchor was found AND a
+buyer company name was read near it; "not_found" otherwise. Do not
+report a bounding box for the buyer — a separate OCR pass locates it
+precisely from this text value alone.
 
 VISUAL EVIDENCE — for EACH of company_logo, company_name,
 supplier_address, stamp, signature, report a status ("detected" or
@@ -445,6 +466,11 @@ exactly this structure:
     "logo_detected": true or false,
     "address_detected": true or false,
     "contact_block_detected": true or false
+  }},
+  "buyer_identity": {{
+    "status": "detected" or "not_found",
+    "buyer_name": "string or null",
+    "anchor": "Accounts Payable" or "Bill To" or "Sold To" or "Customer" or "Ship To" or ""
   }},
   "document_visual_evidence": {{
     "company_logo":     {{"status": "detected" or "not_detected", "label": "string", "reason": "string", "confidence": 0-100, "boxes": [ymin, xmin, ymax, xmax] or null}},

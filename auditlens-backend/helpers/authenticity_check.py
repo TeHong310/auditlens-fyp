@@ -400,6 +400,7 @@ def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=N
 
     if engine == 'claude':
         supplier = raw.get('supplier_identity') or {}
+        buyer = raw.get('buyer_identity') or {}
         evidence_raw = raw.get('document_visual_evidence') or {}
         integrity = raw.get('integrity_check') or {}
         overall = raw.get('overall_result') or {}
@@ -440,6 +441,11 @@ def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=N
                 'logo_detected':                   bool(supplier.get('logo_detected', False)),
                 'address_detected':                bool(supplier.get('address_detected', False)),
                 'contact_block_detected':          bool(supplier.get('contact_block_detected', False)),
+            },
+            'buyer_identity': {
+                'status':     'detected' if buyer.get('status') == 'detected' and buyer.get('buyer_name') else 'not_found',
+                'buyer_name': buyer.get('buyer_name'),
+                'anchor':     buyer.get('anchor') or '',
             },
             'document_visual_evidence': evidence,
             'integrity_check': {
@@ -496,6 +502,14 @@ def _normalize_visual_result(engine, raw, document_type, extracted_vendor_name=N
             'logo_detected':                   logo,
             'address_detected':                False,
             'contact_block_detected':          False,
+        },
+        # Neither the Gemini fallback prompt nor the OCR-text-only path
+        # attempts buyer identification (the old 4-signal schema has no
+        # concept of it) — honestly "not found" rather than guessing.
+        'buyer_identity': {
+            'status':     'not_found',
+            'buyer_name': None,
+            'anchor':     '',
         },
         'document_visual_evidence': {
             'company_logo':     _entry('company_logo', logo, _box('has_company_logo')),
@@ -828,9 +842,23 @@ def run_authenticity_check(document_id, file_bytes, file_name, document_type, do
         # save_rendered_authenticity_image() cached for the preview, so
         # OCR and the displayed image are always identical pixels).
         # Never raises and returns [] on any failure — a Vision outage
-        # degrades to "no accurate highlight" for these 3 categories,
-        # it never breaks the authenticity check itself.
-        boxes = boxes + build_vision_evidence_boxes(document_id, document_type, image[1], extracted_vendor_name)
+        # degrades to "no accurate highlight" for these categories, it
+        # never breaks the authenticity check itself.
+        #
+        # v9 hybrid spec (Invoice only): Claude supplies the SEMANTIC
+        # values it just determined above — its own visually-detected
+        # supplier_name, the new buyer_identity.buyer_name, and whether
+        # it confirmed a stamp exists — never a coordinate. Google
+        # Vision (inside build_vision_evidence_boxes) is the only thing
+        # that ever turns those text values into pixel coordinates,
+        # against this exact same canonical image. PO/GR keep using
+        # extracted_vendor_name/structural buyer detection, unchanged.
+        boxes = boxes + build_vision_evidence_boxes(
+            document_id, document_type, image[1], extracted_vendor_name,
+            claude_supplier_name=visual['supplier_identity'].get('supplier_name'),
+            claude_buyer_name=visual['buyer_identity'].get('buyer_name'),
+            claude_stamp_detected=evidence['stamp']['detected'],
+        )
 
         conn = get_db_connection()
         cursor = conn.cursor()
