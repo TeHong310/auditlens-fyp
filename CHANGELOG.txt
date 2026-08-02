@@ -16652,3 +16652,214 @@ Rollback instructions:
   jszip dependency and restores the page's prior single-endpoint,
   no-staging-step upload flow exactly as it was. No backend, data, or
   schema implications either way.
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Root cause (all 3 confirmed problems traced to ONE shared function):
+    routes/ai_assistant.py::_build_case_context() already fed the SAME
+    `anomalies` table rows to the AI Assistant, Record Detail's Risk
+    Indicators, and the Workflow Timeline's "Anomaly Evaluation" step -
+    there was never a separate/fake data source (Section B answer: one
+    source of truth, confirmed empirically, nothing to unify). The bug
+    was purely in _classify_anomaly(), which treated ANY non-'pending'
+    anomaly (including 'reviewed') as "informational" and let downstream
+    wording drop it from PASS explanations entirely - producing exactly
+    the reported symptom: a real Round Amount anomaly on INV-NBI-2026-
+    0017, already reviewed, being described by the AI as if no anomaly
+    existed. Two further, independent bugs found by inspection/live
+    testing: (1) invoice_date/created_at reached jsonify() as raw
+    datetime objects, which Flask's default encoder mangles into
+    "Wed, 11 Feb 2026 00:00:00 GMT" instead of a real date - same class
+    of bug fixed on authenticity_checks in an earlier session, now also
+    fixed on GET /anomalies; (2) review_records.action had a live
+    Postgres CHECK constraint (review_records_action_check) limiting it
+    to approved/returned/resubmitted/closed - discovered ONLY during
+    live verification, when clicking "Need Review" 500'd with a check-
+    constraint violation the fake-DB unit tests could never have caught.
+  Backend (auditlens-backend/):
+    - routes/ai_assistant.py: _classify_anomaly() now short-circuits
+      'dismissed' -> dismissed and 'reviewed' -> non_blocking BEFORE the
+      severity/type check (unchanged blocking/non-blocking boundary -
+      only the wording bug is fixed, not which findings block approval,
+      per this repo's "surgical changes" rule). New _describe_non_
+      blocking_anomalies()/_describe_non_blocking_anomalies_for_
+      readiness() produce the exact required sentences; _compute_audit_
+      status() now returns PASS with that sentence (never silently "all
+      clear") whenever a non-blocking anomaly exists;  _clamp_approval_
+      assessment_result()'s Ready-readiness fallback does the same for
+      "Recommended Next Steps". _compute_risk_context_fallback() labels
+      now say "Reviewed" or "Pending" explicitly instead of a generic
+      "informational" bucket.
+    - helpers/ai_assistant.py: system preamble rewritten with explicit
+      Pending/Reviewed/Dismissed definitions and a banned-phrase list
+      ("no anomalies", "no risks", "not considered a concern", "no
+      further action required") for every action prompt that can see a
+      non-dismissed anomaly.
+    - routes/anomalies.py: GET /anomalies now .isoformat()s invoice_date/
+      created_at before jsonify(). GET /anomalies/stats adds a by_status
+      breakdown (already filter-independent - it takes no status/
+      severity/type query params at all, so Section A's "summary must
+      never read as 0 because of the active list filter" was already
+      true in the code; by_status is the new piece the Reviewed-only
+      empty-state message needed). _run_full_anomaly_analysis() (the
+      "Run Anomaly Analysis" button) now deletes only 'pending' anomalies
+      before redetecting a document, so a corrected/resubmitted package
+      never wipes an already-reviewed/dismissed finding's history.
+    - routes/reviews.py: approve_document() now marks any still-'pending'
+      anomaly for that document 'reviewed' (recording reviewed_by/at) as
+      part of the approve decision - already-reviewed/dismissed rows are
+      left untouched, nothing is ever deleted. return_document() left
+      unchanged (anomalies were already correctly untouched on send-
+      back) - a comment was added to make that explicit. New POST /
+      reviews/need-review/<id> (auditor-only, same under_review/
+      resubmitted guard as approve/return) logs the decision in
+      review_records without changing document status or any anomaly -
+      previously had a frontend label for this action with NO backend
+      route or click handler behind it at all.
+    - app.py: new _ensure_review_records_need_review_action() startup
+      migration widens review_records_action_check to also allow
+      'need_review' (idempotent DROP/ADD, same pattern as every other
+      _ensure_* migration in this file) - without it every Need Review
+      click 500s with a Postgres CheckViolation, found live.
+  Frontend (auditlens-frontend/):
+    - auditor-anomalies.component.ts/html/css: removed the Complete
+      Review / False Positive card actions entirely (dead buttons, no
+      backend calls left behind) - Investigate is now the only card
+      action; a status-note span still shows the anomaly's current
+      Pending/Reviewed/Dismissed status for context. Added a dedicated
+      empty-state for "Pending filter selected, genuinely 0 pending, but
+      N reviewed/dismissed anomalies exist" using the new by_status data
+      - message reads "No pending anomalies. N reviewed anomaly is
+      available under the Reviewed filter." instead of the generic
+      filter-mismatch message. Fixed the raw {{ a.invoice_date }}
+      binding to use a new formatInvoiceDate() (matches Record Detail's
+      existing en-MY "11 Feb 2026" format).
+    - auditor-record-detail.component.ts/html: new needReviewDocument()
+      wired to the Need Review button (previously a dead click handler).
+      New Case Summary card (reuses existing .exception-summary-card/
+      .risk-chip styling, no new CSS) with 4 explicitly separated rows -
+      Matching / Anomalies / Blocking / Decision - so "PASS" and "1
+      reviewed Round Amount finding" are never collapsed into one
+      ambiguous line. riskStatusLabel() relabeled Reviewed/Dismissed/
+      Pending (was Review Complete/False Positive/Pending, matching the
+      removed anomalies-page actions).
+  Tests (auditlens-backend/tests/):
+    - tests/extraction/test_ai_assistant.py: renamed/extended cases for
+      the new non_blocking classification (reviewed vs dismissed vs
+      pending are now asserted separately), new case asserting the exact
+      required PASS+non-blocking sentence byte-for-byte, updated risk-
+      context-fallback and approval-assessment prompt-rule assertions.
+    - tests/extraction/test_anomaly_detector.py: new case asserting the
+      pre-redetect DELETE is scoped to status='pending' (reviewed/
+      dismissed survive a re-run).
+    - New tests/extraction/test_anomaly_decision_mapping.py: real Flask
+      test client + JWT against a fake in-memory DB (same convention as
+      test_send_back_routes.py) - proves GET /anomalies/stats is
+      identical across 5 different filter query-string combinations and
+      matches the task's own worked numbers (Detected:1, Round Amount:1,
+      Pending:0), and that approve/return/need-review map onto anomaly
+      status exactly as specified (approve resolves pending only, send-
+      back and need-review touch nothing).
+    - tests/reviews/test_send_back_routes.py: added a no-op handler for
+      the new "UPDATE anomalies SET status = 'reviewed'" statement
+      approve_document() now issues (this file has no anomalies fixture
+      data, so 0 rows affected is correct here by design).
+    - tests/extraction/run_all.py: registered the new test file.
+
+Why:
+  User-reported inconsistency: a real, already-reviewed Round Amount
+  anomaly on INV-NBI-2026-0017 was being described by the AI Audit
+  Assistant as if cleared/non-existent, the Anomaly Detection summary
+  could read all-zero regardless of real data, the anomaly card offered
+  review actions that duplicated/bypassed the Auditor's actual final
+  decision, and Need Review had no working backend at all. The fix
+  reasserts one rule everywhere findings are surfaced: Reviewed means
+  "examined, finding still exists," never "cleared" - only Dismissed
+  means that - and the Auditor's Approve/Send Back/Need Review decision
+  on Record Detail is the only place an anomaly's status ever changes.
+
+Test results:
+  - python tests/extraction/run_all.py - 30/30 suites PASS (29 pre-
+    existing + the new test_anomaly_decision_mapping.py), including
+    after the app.py migration fix.
+  - npx ng build --configuration production - succeeded (exit 0; same
+    2 pre-existing per-component CSS budget warnings as prior entries,
+    unrelated to this change).
+  - Live Playwright verification (auditor account vision_fixture_
+    auditor@x.com, real running Flask + Angular dev servers, real
+    Postgres), against the existing INV-NBI-2026-0017 fixture
+    (document_id=3753, left exactly as found afterward - still
+    under_review, its anomaly still 'reviewed' - so it stays available
+    for manual inspection) plus one throwaway pending-anomaly fixture
+    seeded and torn down within the same run for the Approve check:
+    - Summary: Transactions Analysed >= 1, Anomalies Detected = 1, Round
+      Amount = 1, Pending Review = 0, Last Analysed a real timestamp -
+      matches the task's own worked example exactly.
+    - Default (Pending) filter: 0 cards, empty-state reads "No pending
+      anomalies. 1 reviewed anomaly is available under the Reviewed
+      filter." Reviewed filter: exactly 1 card, Round Amount.
+    - No "Complete Review"/"False Positive" anywhere on the page;
+      Investigate is the only card action and navigates to Record Detail
+      with the correct document_id.
+    - Case Summary shows Matching=PASS, Anomalies mentions "reviewed"
+      and "Round Amount", Blocking=None, Decision=Awaiting Auditor. No
+      raw GMT-style date string anywhere on the page; "11 Feb 2026"
+      renders correctly.
+    - Need Review: 500'd on the first live attempt (the review_records
+      CHECK constraint bug above, found and fixed here), then succeeded
+      - document stays "Awaiting Auditor" (not a final disposition).
+    - Approve (on the throwaway pending-anomaly fixture): succeeded live,
+      then verified directly against Postgres - document status flipped
+      to 'approved', the anomaly flipped from 'pending' to 'reviewed'
+      with reviewed_by recorded. Fixture fully deleted afterward.
+    - AI Assistant wording (Explain Exception / Approval Assessment)
+      could NOT be live-verified in this sandbox - it has no working AI
+      provider (ANTHROPIC_API_KEY unset; the configured Gemini key
+      returns 401 Unauthenticated on a direct connectivity test) - a
+      pre-existing environment credential limitation, not a defect from
+      this change. Confirmed instead that the failure degrades
+      gracefully (.ai-error-box, not a hang or JS exception); the exact
+      required wording (including the literal required PASS+non-
+      blocking sentence) is verified deterministically by
+      test_ai_assistant.py against a monkeypatched AI layer, which needs
+      no real provider.
+    - Zero unexpected console errors (the two expected 502s from the
+      AI-provider limitation above were the only console messages).
+      Dev servers (Flask + reloader, Angular CLI) stopped by exact PID
+      afterward; all throwaway fixtures deleted; INV-NBI-2026-0017 and
+      its anomaly confirmed unchanged from their original state.
+
+Build result:
+  Backend: 30/30 test suites pass. Frontend: clean production build,
+  exit 0. Live browser check: every scenario in the task's verification
+  list confirmed end-to-end against the real fixture and a real Postgres
+  database, except AI wording (blocked by a sandbox credential
+  limitation, covered instead by deterministic unit tests as above).
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 1 (a deliberate direct connectivity
+  test to confirm the 502s were a credential/environment issue, not a
+  bug in this change - returned 401 Unauthenticated, expected).
+
+Deployment instructions:
+  1. Push to GitHub - Render should auto-deploy both services.
+  2. Backend redeploy required (app.py, routes/, helpers/ all changed).
+     On first boot after deploy, watch the Render logs for "review_
+     records.action_check widened for 'need_review'" - confirms the new
+     migration ran; it's idempotent and safe to run on every future boot
+     too.
+  3. No manual database migration needed - the widened CHECK constraint
+     applies itself automatically via the new app.py startup migration,
+     same as every other schema change in this project's history.
+  4. Nothing new to configure - no new environment variables, no new
+     dependencies.
+
+Rollback instructions:
+  Revert this one commit. The review_records_action_check widening is
+  additive (adds 'need_review' to the allowed list) and harmless to
+  leave in place even after a revert - no 'need_review' rows will be
+  inserted once routes/reviews.py's endpoint is gone, and the earlier
+  4 action values remain valid. No data loss either way - every anomaly
+  row and its full history is untouched by this change or its rollback.

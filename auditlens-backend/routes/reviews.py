@@ -123,6 +123,23 @@ def approve_document(document_id):
             (document_id,)
         )
 
+        # Approving completes the transaction review — any anomaly still
+        # 'pending' for this invoice is marked 'reviewed' as PART OF that
+        # decision (the auditor has now looked at the whole case,
+        # including any recorded finding). This never touches an anomaly
+        # already 'reviewed' or 'dismissed' — every anomaly row, and its
+        # full detected_pattern/ai_explanation history, is preserved
+        # exactly as-is; only status/reviewed_by/reviewed_at change on
+        # the ones that were still pending. See routes/ai_assistant.py's
+        # _classify_anomaly — 'reviewed' is never treated as "cleared",
+        # so this does not silently make the finding disappear anywhere
+        # it's displayed.
+        cursor.execute(
+            '''UPDATE anomalies SET status = 'reviewed', reviewed_by = %s, reviewed_at = CURRENT_TIMESTAMP
+               WHERE invoice_document_id = %s AND status = 'pending' ''',
+            (user['user_id'], document_id)
+        )
+
         # If this record went through a send-back correction cycle
         # (Finance resubmitted it), resolve that cycle as 'approved' —
         # the cycle row itself (reason/instruction/response) is never
@@ -216,6 +233,12 @@ def return_document(document_id):
             conn.close()
             return jsonify({'error': f'Document is not under review. Current status: {doc[0]}'}), 400
 
+        # Sending back deliberately does NOT touch the anomalies table —
+        # the issue that prompted this return is not resolved, so any
+        # 'pending' anomaly for this invoice stays exactly 'pending'
+        # (unlike approve_document, which marks pending anomalies
+        # 'reviewed'). Anomalies already 'reviewed'/'dismissed' are also
+        # left untouched — full history preserved either way.
         cursor.execute(
             '''INSERT INTO review_records (document_id, reviewed_by, action, remarks)
                VALUES (%s, %s, %s, %s) RETURNING review_id''',
@@ -274,6 +297,72 @@ def return_document(document_id):
             'status':       'returned',
             'remarks':      remarks,
             'cycle_number': cycle_number,
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# MARK DOCUMENT AS NEEDING FURTHER REVIEW
+# POST /reviews/need-review/<document_id>
+# Auditor only
+#
+# The third of the Auditor's 3 final-decision controls on Record Detail
+# (Approve / Send Back / Need Review). Unlike Approve/Send Back, this is
+# not a workflow-ending disposition — the document stays exactly where
+# it is (still 'under_review'/'resubmitted', still actionable) and
+# anomalies stay exactly as they are ('pending' ones stay pending, the
+# same "the issue is not resolved" reasoning as Send Back). It only
+# records, in the SAME review_records audit trail Approve/Send Back
+# already use, that the auditor looked at this case and flagged it for
+# further investigation rather than deciding yet.
+# ------------------------------------------------------------
+@reviews_bp.route('/need-review/<int:document_id>', methods=['POST'])
+@jwt_required()
+def need_review_document(document_id):
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    if user['role'] != 'auditor':
+        return jsonify({'error': 'Access denied. Auditor only.'}), 403
+
+    data    = request.get_json() or {}
+    remarks = (data.get('remarks') or '').strip() or 'Marked for further review by auditor'
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('SELECT status FROM documents WHERE document_id = %s', (document_id,))
+        doc = cursor.fetchone()
+
+        if not doc:
+            conn.close()
+            return jsonify({'error': 'Document not found'}), 404
+
+        if doc[0] not in ('under_review', 'resubmitted'):
+            conn.close()
+            return jsonify({'error': f'Document is not under review. Current status: {doc[0]}'}), 400
+
+        cursor.execute(
+            '''INSERT INTO review_records (document_id, reviewed_by, action, remarks)
+               VALUES (%s, %s, %s, %s) RETURNING review_id''',
+            (document_id, user['user_id'], 'need_review', remarks)
+        )
+        review_id = cursor.fetchone()[0]
+
+        conn.commit()
+        conn.close()
+
+        log_audit(user['user_id'], 'NEED_REVIEW_DOCUMENT', 'documents', document_id,
+                  f'Auditor marked document {document_id} as needing further review: {remarks}')
+
+        return jsonify({
+            'message':     'Document marked as needing further review',
+            'document_id': document_id,
+            'review_id':   review_id,
+            'remarks':     remarks
         }), 200
 
     except Exception as e:

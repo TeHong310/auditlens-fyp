@@ -63,8 +63,20 @@ def get_anomalies():
                 LIMIT %s OFFSET %s''',
             params + [limit, offset]
         )
-        rows = cursor.fetchall()
+        rows = [dict(r) for r in cursor.fetchall()]
         conn.close()
+
+        # ef.invoice_date/a.created_at are raw date/datetime objects —
+        # Flask's default JSON encoder formats those as an HTTP-style
+        # "Wed, 11 Feb 2026 00:00:00 GMT" string instead of converting
+        # them, so they're explicitly isoformat()'d here (same fix
+        # already applied to authenticity_checks.created_at elsewhere in
+        # this app) rather than left for jsonify() to mangle.
+        for row in rows:
+            if row.get('invoice_date') is not None:
+                row['invoice_date'] = row['invoice_date'].isoformat()
+            if row.get('created_at') is not None:
+                row['created_at'] = row['created_at'].isoformat()
 
         return jsonify(rows), 200
 
@@ -126,13 +138,21 @@ def review_anomaly(anomaly_id):
 #
 # Re-runs the EXISTING per-document detection (helpers/anomaly_detector.
 # py::run_anomaly_detection — untouched) across every invoice that has
-# extracted fields, the same delete-then-redetect pattern already used
-# by routes/admin.py's single-document diagnostic endpoint and scripts/
-# backfill_anomaly_detection.py, just looped across every invoice
-# instead of one. Lets a vendor's baseline grow (more history since a
-# document was first uploaded) actually change that document's result
-# on demand, from the auditor-facing page, instead of only via the
-# admin-only diagnostic route or a manually-run script.
+# extracted fields, looped across every invoice instead of one. Lets a
+# vendor's baseline grow (more history since a document was first
+# uploaded), or a Finance correction, actually change that document's
+# result on demand, from the auditor-facing page.
+#
+# Only 'pending' anomalies for each document are cleared before
+# re-detecting — a 'reviewed' or 'dismissed' row is an auditor decision
+# already on the audit record and is NEVER deleted by a re-run, so
+# "preserve previous anomaly and review history before performing any
+# new analysis" holds even when a corrected package is re-screened.
+# routes/admin.py's single-document diagnostic endpoint and scripts/
+# backfill_anomaly_detection.py still use the older blanket-delete
+# behavior for their own explicit "wipe and redetect one document"
+# purpose — this route is the one auditors actually use day to day, so
+# only this one needed the history-preserving fix.
 # ------------------------------------------------------------
 def _run_full_anomaly_analysis():
     conn   = get_db_connection()
@@ -147,7 +167,10 @@ def _run_full_anomaly_analysis():
         try:
             conn   = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute('DELETE FROM anomalies WHERE invoice_document_id = %s', (document_id,))
+            cursor.execute(
+                "DELETE FROM anomalies WHERE invoice_document_id = %s AND status = 'pending'",
+                (document_id,)
+            )
             conn.commit()
             conn.close()
 
@@ -207,8 +230,15 @@ def get_anomaly_stats():
         cursor.execute('SELECT anomaly_type, COUNT(*) AS cnt FROM anomalies GROUP BY anomaly_type')
         by_type = {row['anomaly_type']: row['cnt'] for row in cursor.fetchall()}
 
-        cursor.execute("SELECT COUNT(*) AS cnt FROM anomalies WHERE status = 'pending'")
-        pending = cursor.fetchone()['cnt']
+        # by_status covers all 3 real status values regardless of the
+        # currently-selected list filter (section A: filter counts must
+        # never read as zero just because a different status/severity/
+        # type chip is active) — also what the Anomaly Detection page's
+        # "No pending anomalies, N reviewed anomaly available under the
+        # Reviewed filter" empty-state message is built from.
+        cursor.execute('SELECT status, COUNT(*) AS cnt FROM anomalies GROUP BY status')
+        by_status = {row['status']: row['cnt'] for row in cursor.fetchall()}
+        pending = by_status.get('pending', 0)
 
         # Every invoice with extracted fields has gone through detection
         # (run_anomaly_detection is auto-triggered right after extraction
@@ -230,6 +260,7 @@ def get_anomaly_stats():
             'total': total,
             'by_severity': {s: by_severity.get(s, 0) for s in VALID_SEVERITIES},
             'by_type': {t: by_type.get(t, 0) for t in VALID_TYPES},
+            'by_status': {s: by_status.get(s, 0) for s in ('pending', 'reviewed', 'dismissed')},
             'pending': pending,
             'transactions_analysed': transactions_analysed,
             'last_analysed': last_run.isoformat() if last_run else None,

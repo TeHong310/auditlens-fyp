@@ -364,10 +364,51 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return 'pill-low';
   }
 
+  // Canonical status wording — matches the actual status VALUE, same
+  // rename as auditor-anomalies.component.ts's statusLabel() so an
+  // anomaly reads identically on both pages. 'Reviewed' never implies
+  // "cleared" — only 'Dismissed' does.
   riskStatusLabel(status: string): string {
-    if (status === 'reviewed') return 'Review Complete';
-    if (status === 'dismissed') return 'False Positive';
-    return 'Pending Review';
+    if (status === 'reviewed') return 'Reviewed';
+    if (status === 'dismissed') return 'Dismissed';
+    return 'Pending';
+  }
+
+  // ── Case Summary (Matching Status / Anomalies / Blocking Issues /
+  // Final Decision) — a compact, ALWAYS-available snapshot built purely
+  // from data this page already loads on open (comparison, riskIndicators,
+  // reviewHistory), no AI call required. Keeps this factual summary
+  // clearly separate from the AI Assistant panel below it (which is only
+  // populated once the auditor explicitly asks for it), and from the
+  // Auditor's own Approve/Send Back/Need Review decision, which is what
+  // actually changes "Final Decision" away from "Awaiting Auditor". ──
+
+  get caseAnomalySummary(): string {
+    if (!this.riskIndicators.length) return 'No anomalies recorded.';
+    const active = this.riskIndicators.filter(a => a.classification !== 'dismissed');
+    if (!active.length) return 'No active anomalies — every finding was dismissed as a false positive.';
+    if (active.length === 1) {
+      const a = active[0];
+      const statusWord = a.status === 'reviewed' ? 'reviewed' : 'pending';
+      return `1 ${statusWord} ${this.riskTypeLabel(a.anomaly_type)} finding`;
+    }
+    const reviewedCount = active.filter(a => a.status === 'reviewed').length;
+    const pendingCount = active.filter(a => a.status === 'pending').length;
+    return `${active.length} findings recorded (${reviewedCount} reviewed, ${pendingCount} pending)`;
+  }
+
+  get caseBlockingIssues(): string {
+    const blocking = this.riskIndicators.filter(a => a.classification === 'blocking');
+    if (!blocking.length) return 'None';
+    return blocking.map(a => `${this.riskTypeLabel(a.anomaly_type)} (${a.severity} severity)`).join(', ');
+  }
+
+  get caseFinalDecision(): string {
+    if (!this.reviewHistory.length) return 'Awaiting Auditor';
+    const last = this.reviewHistory[this.reviewHistory.length - 1]; // ASC order from GET /reviews/history
+    if (last.action === 'approved') return 'Approved';
+    if (last.action === 'returned') return 'Sent Back to Finance';
+    return 'Awaiting Auditor';
   }
 
   // ── Send-Back cycles + review history (Features 4, 5) ───
@@ -552,6 +593,34 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
       error: (err) => {
         this.isSubmitting = false;
         this.errorMessage = err.error?.error || 'Failed to approve.';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  // The third final-decision control (see routes/reviews.py's POST
+  // /reviews/need-review/<id>). Unlike Approve/Send Back this is not a
+  // workflow-ending disposition — the document and its anomalies stay
+  // exactly as they are (any 'pending' anomaly stays pending, same as
+  // Send Back — the issue is not resolved) — so this stays ON the page
+  // and refreshes the review history instead of navigating away.
+  needReviewDocument() {
+    if (!this.documentId || this.isSubmitting) return;
+    this.isSubmitting = true;
+    this.http.post<any>(`${this.apiUrl}/reviews/need-review/${this.documentId}`,
+      { remarks: this.auditNote },
+      { headers: this.getHeaders() }
+    ).subscribe({
+      next: () => {
+        this.isSubmitting = false;
+        this.successMessage = 'Marked as needing further review.';
+        this.loadReviewHistory();
+        this.cdr.detectChanges();
+        setTimeout(() => { this.successMessage = ''; this.cdr.detectChanges(); }, 5000);
+      },
+      error: (err) => {
+        this.isSubmitting = false;
+        this.errorMessage = err.error?.error || 'Failed to mark as needing review.';
         this.cdr.detectChanges();
       }
     });
@@ -837,6 +906,16 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     // both are "needs attention, not a hard failure" states; only the
     // text differs (see getBannerText/getBannerSubtitle).
     return 'banner-partial';
+  }
+
+  // Case Summary's compact Matching chip reuses the SAME .risk-chip
+  // pill family Risk Indicators/AI Assistant already use elsewhere on
+  // this page (risk-high/risk-medium/risk-low), not the full-banner
+  // gradient classes above — a small pill needs a small-pill palette.
+  matchingStatusChipClass(): string {
+    if (this.overallStatus === 'PASS') return 'risk-low';
+    if (this.overallStatus === 'FAIL') return 'risk-high';
+    return 'risk-medium';
   }
 
   getBannerIcon(): string {

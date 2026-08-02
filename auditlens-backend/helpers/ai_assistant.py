@@ -61,15 +61,37 @@ AUDIT STATUS INTERPRETATION RULES:
   conflicting verdict.
 - When audit_status is "PASS", describe the document as "validated" or
   having "passed core checks" — never as a failed or incomplete audit.
-- Each entry in "anomalies" already has a "classification": "blocking"
-  (requires action — an unresolved high-risk, duplicate, or amount-
-  inconsistency finding) or "informational" (a historical/low-risk
-  finding, or one already reviewed/dismissed). Mention "informational"
-  anomalies only briefly as background context — NEVER as a reason the
-  audit failed or needs action.
+  If "audit_status_reasons" mentions a non-blocking anomaly (it does
+  whenever one exists — see below), you MUST still name it: a "PASS"
+  verdict means core checks passed, NOT that nothing is on record.
+- Each entry in "anomalies" already has a "classification":
+    - "blocking": requires action before approval — an unresolved
+      high-risk, duplicate, or amount-inconsistency finding.
+    - "non_blocking": a real, currently-recorded finding that does NOT
+      by itself block approval — it may have status "pending" (not yet
+      reviewed) or "reviewed" (an auditor has already examined it and
+      the finding still stands on the record). EITHER WAY it is an
+      EXISTING finding, never a cleared one. State its own status
+      ("pending" or "reviewed") explicitly whenever you mention it.
+    - "dismissed": the auditor explicitly ruled this finding a false
+      positive. This is the ONLY classification you may describe as
+      dismissed, cleared, ruled out, or no longer relevant.
+  Mention "non_blocking" anomalies briefly as background context, not
+  as a reason the audit failed — but NEVER omit, hide, or reword them
+  as if they don't exist. A "reviewed" anomaly is not a "dismissed" one
+  and must never be described using dismissed/cleared language.
+- Banned phrasing whenever at least one "blocking" or "non_blocking"
+  anomaly is present (i.e. anything not "dismissed"): "no anomalies",
+  "no risks", "not considered a concern", "no further action
+  required", or any equivalent implying nothing is on record. These
+  phrases are only accurate when EVERY anomaly for this case is
+  "dismissed" or the anomalies list is empty.
 - Only "blocking" anomalies and the items listed in
-  "audit_status_reasons" may be described as requiring attention. Do
-  not invent or imply any other exception.
+  "audit_status_reasons" may be described as requiring attention before
+  approval. Do not invent or imply any other exception — but a "non_
+  blocking" anomaly still gets named as an existing, non-blocking
+  finding, never invented as a blocker and never erased from the
+  narrative either.
 - "send_back_cycle" (when present) is the auditor's own structured
   return request for this case — its reason_category/auditor_
   instruction/required_actions/priority are the actual reason this
@@ -117,13 +139,19 @@ _ACTION_INSTRUCTIONS = {
         'already-computed "audit_status" verbatim.\n'
         'reason: 2-4 sentences covering what the invoice is (vendor, '
         'amount), the three-way matching/authenticity/missing-document/'
-        'send-back status, and any BLOCKING anomaly. Mention informational '
-        'anomalies only briefly as context, never as a reason for '
-        '"REVIEW REQUIRED". If audit_status is "PASS", describe the '
-        'document as validated / having passed core checks.\n'
+        'send-back status, and any BLOCKING anomaly. Mention non_blocking '
+        'anomalies only briefly as context (state whether each is '
+        '"pending" or "reviewed" — a reviewed finding still exists, it is '
+        'not cleared), never as a reason for "REVIEW REQUIRED", and never '
+        'omit one that is present. If audit_status is "PASS", describe the '
+        'document as validated / having passed core checks — but if a '
+        'non_blocking anomaly exists, say so explicitly rather than '
+        'implying nothing is on record.\n'
         'recommended_action: one short sentence — what the auditor should '
-        'do next (e.g. "No action required, ready for approval" when '
-        'audit_status is "PASS").\n'
+        'do next (e.g. "No action required, ready for approval" ONLY when '
+        'audit_status is "PASS" AND there is no non_blocking anomaly on '
+        'record; otherwise something like "Ready for final Auditor '
+        'decision — review the recorded anomaly before finalizing").\n'
         'Return ONLY: {"audit_status": "PASS" or "REVIEW REQUIRED", '
         '"reason": "string", "recommended_action": "string"}'
     ),
@@ -135,9 +163,11 @@ _ACTION_INSTRUCTIONS = {
         'and the reasons that justify it only on audit_status/'
         'audit_status_reasons and any "blocking" anomaly (name its '
         'anomaly_type and severity explicitly, e.g. "a high-severity '
-        'duplicate-invoice finding") — an "informational" anomaly alone '
+        'duplicate-invoice finding") — a "non_blocking" anomaly alone '
         'must NOT raise the risk level, but should still be named briefly '
-        'in potential_impact as low-risk background rather than omitted. '
+        'in potential_impact as low-risk background (state whether it is '
+        '"pending" or "reviewed" — reviewed does not mean cleared) rather '
+        'than omitted. '
         'If an authenticity check has status "warning", name it as a '
         'reason. If audit_status is "PASS", the risk level should '
         'normally be "Low".\n'
@@ -168,29 +198,39 @@ _ACTION_INSTRUCTIONS = {
         'blocking_issues: unresolved problems that actually prevent '
         'approval right now (a missing document, a mismatch, an '
         'authenticity concern, an unresolved BLOCKING risk finding) — '
-        'empty only when this case is otherwise clean. An informational, '
-        'already-reviewed, or otherwise non-blocking anomaly is NEVER a '
-        'blocking issue — put it in risk_context instead, never here.\n'
+        'empty only when this case is otherwise clean. A "non_blocking" '
+        'anomaly (whether "pending" or already "reviewed") is NEVER a '
+        'blocking issue — put it in risk_context instead, never here. Only '
+        'a "dismissed" anomaly may be treated as fully resolved.\n'
         'passed_checks: the checks that ARE already satisfied, e.g. '
         '"Vendor name matches", "Amount matches the Purchase Order", '
         '"All required documents uploaded", "Authenticity check '
         'passed". Only list checks that genuinely passed — never repeat '
         'a blocking issue or a risk_context item here.\n'
-        'risk_context: non-blocking or informational findings worth the '
-        'auditor knowing about even though they do NOT prevent approval '
-        '— e.g. a weekend-dated invoice, a low-severity unusual-amount '
-        'pattern, an already-reviewed/historical duplicate pattern, or '
-        'any other informational risk finding. Empty when there are '
-        'none — do not invent one. NEVER put a blocking issue here, and '
-        'do NOT suggest resolving a risk_context item in recommended_'
-        'next_steps unless that same item is ALSO listed in blocking_'
-        'issues.\n'
+        'risk_context: every non-blocking ("non_blocking") finding worth '
+        'the auditor knowing about even though it does NOT prevent '
+        'approval — e.g. a '
+        'weekend-dated invoice, a low-severity unusual-amount pattern, or '
+        'an unusually round amount. State each one\'s own status '
+        '("pending" or "reviewed") explicitly — a reviewed finding is '
+        'STILL a real finding on the record, never describe it as '
+        'resolved, cleared, or no longer relevant (only a "dismissed" '
+        'finding may be described that way, and dismissed findings do '
+        'not belong in risk_context at all). Empty when there are none — '
+        'do not invent one. NEVER put a blocking issue here, and do NOT '
+        'suggest resolving a risk_context item in recommended_next_steps '
+        'unless that same item is ALSO listed in blocking_issues.\n'
         'recommended_next_steps: the concrete next step(s) the auditor '
         'should take before deciding — e.g. request a specific missing '
         'document, verify an amount with Finance/the vendor, review a '
         'flagged BLOCKING risk finding. Never recommend action on a '
-        'non-blocking risk_context item. If nothing is blocking, the '
-        'only step is that no further action is needed.\n'
+        'non-blocking risk_context item. If nothing is blocking AND there '
+        'is no non_blocking anomaly on record either, the only step is '
+        'that no further action is needed. If nothing is blocking BUT a '
+        'non_blocking anomaly IS on record, say the case is ready for the '
+        'Auditor\'s final decision while still naming that anomaly — never '
+        'say "no further action required" while a non_blocking anomaly '
+        'exists.\n'
         'You are assessing readiness, not deciding — approval_readiness '
         'in your response is informational only and will be verified '
         'against the case\'s own deterministic status before being shown '
@@ -206,8 +246,11 @@ _ACTION_INSTRUCTIONS = {
         "Write a short, professional auditor remark (2-4 sentences) "
         "suitable to paste directly into this case's Remarks/Notes field. "
         'If audit_status is "PASS", state that the document passed core '
-        'checks / is validated (an informational anomaly, if any, may be '
-        'mentioned briefly but not as a blocker). If audit_status is '
+        'checks / is validated (a non_blocking anomaly, if any, may be '
+        'mentioned briefly but not as a blocker — state whether it is '
+        '"pending" or "reviewed"; a reviewed finding is still on record, '
+        'never call it dismissed or cleared unless its status is actually '
+        '"dismissed"). If audit_status is '
         '"REVIEW REQUIRED", name the SPECIFIC item(s) actually driving '
         'that status from audit_status_reasons instead of a generic '
         '"needs review" statement — e.g. the mismatched field from '

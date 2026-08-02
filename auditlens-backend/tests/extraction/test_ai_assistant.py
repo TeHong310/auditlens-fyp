@@ -559,15 +559,26 @@ def run_case_require_finance_owner_404_for_missing_document():
 
 
 # ============================================================
-# routes/ai_assistant.py — _classify_anomaly() blocking vs informational
+# routes/ai_assistant.py — _classify_anomaly() blocking vs non_blocking
+# vs dismissed (task: "Reviewed" must never be treated like
+# "Dismissed" — a reviewed finding is still on the record, just no
+# longer an ACTIVE blocker; only "Dismissed" means cleared)
 # ============================================================
 
-def run_case_classify_anomaly_reviewed_is_always_informational():
-    print('Case: a reviewed/dismissed anomaly is informational regardless of severity or type')
-    check('reviewed high-severity duplicate -> informational',
-          ra._classify_anomaly({'status': 'reviewed', 'severity': 'high', 'anomaly_type': 'duplicate'}) == 'informational')
-    check('dismissed high-severity amount -> informational',
-          ra._classify_anomaly({'status': 'dismissed', 'severity': 'high', 'anomaly_type': 'amount'}) == 'informational')
+def run_case_classify_anomaly_reviewed_is_non_blocking_not_dismissed():
+    print('Case: a reviewed anomaly is non_blocking (still an existing finding) — NOT the same as dismissed')
+    check('reviewed high-severity duplicate -> non_blocking (not blocking, not dismissed)',
+          ra._classify_anomaly({'status': 'reviewed', 'severity': 'high', 'anomaly_type': 'duplicate'}) == 'non_blocking')
+    check('reviewed low-severity round-number anomaly -> non_blocking',
+          ra._classify_anomaly({'status': 'reviewed', 'severity': 'low', 'anomaly_type': 'round'}) == 'non_blocking')
+
+
+def run_case_classify_anomaly_dismissed_is_dismissed():
+    print('Case: a dismissed anomaly is classified "dismissed" — the ONLY status that may be described as cleared')
+    check('dismissed high-severity amount -> dismissed regardless of severity/type',
+          ra._classify_anomaly({'status': 'dismissed', 'severity': 'high', 'anomaly_type': 'amount'}) == 'dismissed')
+    check('dismissed low-severity round anomaly -> dismissed',
+          ra._classify_anomaly({'status': 'dismissed', 'severity': 'low', 'anomaly_type': 'round'}) == 'dismissed')
 
 
 def run_case_classify_anomaly_pending_high_severity_is_blocking():
@@ -584,12 +595,12 @@ def run_case_classify_anomaly_pending_duplicate_or_amount_is_blocking():
           ra._classify_anomaly({'status': 'pending', 'severity': 'medium', 'anomaly_type': 'amount'}) == 'blocking')
 
 
-def run_case_classify_anomaly_pending_low_pattern_is_informational():
-    print('Case: a pending low/medium-severity round/weekend pattern is informational')
-    check('pending low-severity round-number pattern -> informational',
-          ra._classify_anomaly({'status': 'pending', 'severity': 'low', 'anomaly_type': 'round'}) == 'informational')
-    check('pending medium-severity weekend pattern -> informational',
-          ra._classify_anomaly({'status': 'pending', 'severity': 'medium', 'anomaly_type': 'weekend'}) == 'informational')
+def run_case_classify_anomaly_pending_low_pattern_is_non_blocking():
+    print('Case: a pending low/medium-severity round/weekend pattern is non_blocking')
+    check('pending low-severity round-number pattern -> non_blocking',
+          ra._classify_anomaly({'status': 'pending', 'severity': 'low', 'anomaly_type': 'round'}) == 'non_blocking')
+    check('pending medium-severity weekend pattern -> non_blocking',
+          ra._classify_anomaly({'status': 'pending', 'severity': 'medium', 'anomaly_type': 'weekend'}) == 'non_blocking')
 
 
 # ============================================================
@@ -629,8 +640,31 @@ def run_case_audit_status_full_pass_with_historical_reviewed_duplicate_is_still_
         context = ra._build_case_context(cursor, 1)
     check('audit_status is still PASS despite the historical duplicate finding',
           context['audit_status'] == 'PASS', context)
-    check('the anomaly is classified informational, not blocking',
-          context['anomalies'][0]['classification'] == 'informational', context['anomalies'])
+    check('the anomaly is classified non_blocking, not dismissed/blocking (it was REVIEWED, not dismissed)',
+          context['anomalies'][0]['classification'] == 'non_blocking', context['anomalies'])
+    check('audit_status_reasons NAMES the reviewed finding — never silently omitted as if nothing is on record',
+          'reviewed' in context['audit_status_reasons'][0].lower() and 'duplicate' in context['audit_status_reasons'][0].lower(),
+          context['audit_status_reasons'])
+    check('audit_status_reasons never uses "no blocking findings" wording once a non-dismissed anomaly exists',
+          'no blocking findings' not in context['audit_status_reasons'][0].lower(), context['audit_status_reasons'])
+
+
+def run_case_audit_status_pass_with_reviewed_round_amount_matches_exact_required_wording():
+    print('Case: PASS + one reviewed Round Amount anomaly -> the EXACT wording required by the task (INV-NBI-2026-0017 case)')
+    doc_row = {'document_id': 1, 'uploaded_at': None, 'status': 'under_review'}
+    reviewed_round = {'anomaly_type': 'round', 'severity': 'medium', 'detected_pattern': {'amount': 1500.0},
+                       'ai_explanation': 'x', 'status': 'reviewed'}
+    cursor = _FakeCursor(doc_row=doc_row, authenticity_rows=[{'document_type': 'invoice', 'authenticity_status': 'passed', 'risk_level': 'low'}],
+                          anomaly_rows=[reviewed_round], history_rows=[])
+    with _Patched(ra, build_comparison=lambda c, d: _pass_comparison(), _classify_exception=lambda c, d, cmp: None):
+        context = ra._build_case_context(cursor, 1)
+    check('audit_status is PASS', context['audit_status'] == 'PASS', context)
+    check('audit_status_reasons matches the exact required sentence',
+          context['audit_status_reasons'] == [
+              'Audit status is PASS with one non-blocking reviewed Round Amount anomaly. '
+              'The anomaly remains part of the audit record and should be considered by the '
+              'Auditor before the final transaction decision.'
+          ], context['audit_status_reasons'])
 
 
 def run_case_audit_status_missing_po_gr_document():
@@ -819,7 +853,7 @@ def run_case_clamp_approval_assessment_fills_blank_fields():
     check('recommended_next_steps is non-empty', bool(clamped['recommended_next_steps']), clamped)
     check('recommended_next_steps is not the PASS message for a Not Ready case',
           'ready for approval' not in clamped['recommended_next_steps'][0].lower(), clamped)
-    check('risk_context stays empty (no informational anomalies in context) — not forced with filler text',
+    check('risk_context stays empty (no non_blocking anomalies in context) — not forced with filler text',
           clamped['risk_context'] == [], clamped)
 
 
@@ -832,7 +866,7 @@ def run_case_clamp_approval_assessment_handles_none_result():
     check('blocking_issues is non-empty', bool(clamped['blocking_issues']), clamped)
     check('passed_checks is non-empty', bool(clamped['passed_checks']), clamped)
     check('recommended_next_steps is non-empty', bool(clamped['recommended_next_steps']), clamped)
-    check('risk_context is present (empty list, not a crash) even with no informational anomalies',
+    check('risk_context is present (empty list, not a crash) even with no non_blocking anomalies',
           clamped['risk_context'] == [], clamped)
 
 
@@ -880,63 +914,72 @@ def run_case_clamp_approval_assessment_caps_at_4_points_per_section():
 
 # ============================================================
 # routes/ai_assistant.py — _compute_risk_context_fallback() (Risk
-# Context — non-blocking/informational anomalies, independent of
-# approval_readiness)
+# Context — non_blocking anomalies, independent of approval_readiness)
 # ============================================================
 
-def run_case_risk_context_fallback_translates_informational_anomalies():
-    print('Case: informational anomalies are translated into plain language, capped at 4, regardless of approval_readiness')
+def run_case_risk_context_fallback_translates_non_blocking_anomalies():
+    print('Case: non_blocking anomalies are translated into plain language WITH their own status, capped at 4, regardless of approval_readiness')
     context = {'anomalies': [
-        {'anomaly_type': 'weekend', 'severity': 'low', 'status': 'pending', 'classification': 'informational'},
-        {'anomaly_type': 'duplicate', 'severity': 'medium', 'status': 'reviewed', 'classification': 'informational'},
+        {'anomaly_type': 'weekend', 'severity': 'low', 'status': 'pending', 'classification': 'non_blocking'},
+        {'anomaly_type': 'duplicate', 'severity': 'medium', 'status': 'reviewed', 'classification': 'non_blocking'},
     ]}
     fallback = ra._compute_risk_context_fallback(context)
     check('weekend anomaly translated to plain language', any('weekend' in f.lower() for f in fallback), fallback)
     check('duplicate anomaly translated to plain language', any('duplicate' in f.lower() for f in fallback), fallback)
+    check('the pending finding states "Pending" explicitly', any(f.startswith('Pending') for f in fallback), fallback)
+    check('the reviewed finding states "Reviewed" explicitly, never described as cleared',
+          any(f.startswith('Reviewed') for f in fallback), fallback)
     check('no raw field names (anomaly_type/severity) leak into the output',
           all('anomaly_type' not in f and 'severity' not in f for f in fallback), fallback)
     check('severity is stated as "risk", not the raw word "severity"', all('risk' in f.lower() for f in fallback), fallback)
 
 
-def run_case_risk_context_fallback_excludes_blocking_anomalies():
-    print('Case: a BLOCKING anomaly never appears in the Risk Context fallback (it belongs in blocking_issues instead)')
+def run_case_risk_context_fallback_excludes_blocking_and_dismissed_anomalies():
+    print('Case: a BLOCKING anomaly (belongs in blocking_issues) and a DISMISSED one (fully cleared) never appear in Risk Context')
     context = {'anomalies': [
         {'anomaly_type': 'duplicate', 'severity': 'high', 'status': 'pending', 'classification': 'blocking'},
-        {'anomaly_type': 'weekend', 'severity': 'low', 'status': 'pending', 'classification': 'informational'},
+        {'anomaly_type': 'amount', 'severity': 'high', 'status': 'dismissed', 'classification': 'dismissed'},
+        {'anomaly_type': 'weekend', 'severity': 'low', 'status': 'pending', 'classification': 'non_blocking'},
     ]}
     fallback = ra._compute_risk_context_fallback(context)
-    check('only the informational anomaly appears', len(fallback) == 1, fallback)
+    check('only the non_blocking anomaly appears', len(fallback) == 1, fallback)
     check('the blocking anomaly is excluded', all('duplicate' not in f.lower() for f in fallback), fallback)
+    check('the dismissed anomaly is excluded (dismissed findings are not "risk context", they are cleared)',
+          all('amount' not in f.lower() for f in fallback), fallback)
 
 
-def run_case_risk_context_fallback_empty_when_no_informational_anomalies():
-    print('Case: no informational anomalies at all -> Risk Context fallback is genuinely empty (not a placeholder)')
+def run_case_risk_context_fallback_empty_when_no_non_blocking_anomalies():
+    print('Case: no non_blocking anomalies at all -> Risk Context fallback is genuinely empty (not a placeholder)')
     context = {'anomalies': []}
     check('fallback is an empty list', ra._compute_risk_context_fallback(context) == [], context)
 
     context_blocking_only = {'anomalies': [
         {'anomaly_type': 'amount', 'severity': 'high', 'status': 'pending', 'classification': 'blocking'}
     ]}
-    check('fallback is empty when every anomaly is blocking (none informational)',
+    check('fallback is empty when every anomaly is blocking (none non_blocking)',
           ra._compute_risk_context_fallback(context_blocking_only) == [], context_blocking_only)
 
 
 def run_case_clamp_approval_assessment_risk_context_independent_of_readiness():
-    print("Case: risk_context surfaces informational anomalies even for a Ready (PASS) record — it's independent of approval_readiness")
+    print("Case: risk_context surfaces non_blocking anomalies even for a Ready (PASS) record — it's independent of approval_readiness")
     context = {'audit_status': 'PASS', 'audit_status_reasons': [], 'missing_documents': [], 'authenticity': {},
-               'anomalies': [{'anomaly_type': 'weekend', 'severity': 'low', 'status': 'pending', 'classification': 'informational'}],
+               'anomalies': [{'anomaly_type': 'weekend', 'severity': 'low', 'status': 'pending', 'classification': 'non_blocking'}],
                'matching_status': 'PASS'}
     clamped = ra._clamp_approval_assessment_result(None, context)
     check('readiness is still Ready', clamped['approval_readiness'] == 'Ready', clamped)
     check('blocking_issues is still empty for Ready', clamped['blocking_issues'] == [], clamped)
-    check('risk_context still surfaces the informational anomaly despite Ready',
+    check('risk_context still surfaces the non_blocking anomaly despite Ready',
           len(clamped['risk_context']) == 1 and 'weekend' in clamped['risk_context'][0].lower(), clamped)
+    check('recommended_next_steps names the non-blocking anomaly instead of "no further action needed"',
+          'no further action needed' not in clamped['recommended_next_steps'][0].lower()
+          and 'weekend' not in clamped['recommended_next_steps'][0].lower()
+          and 'timing' in clamped['recommended_next_steps'][0].lower(), clamped)
 
 
 def run_case_clamp_approval_assessment_risk_context_from_ai_passes_through():
     print("Case: the AI's own risk_context content is used as-is when it provides something usable")
     context = {'audit_status': 'PASS', 'audit_status_reasons': [], 'missing_documents': [], 'authenticity': {},
-               'anomalies': [{'anomaly_type': 'weekend', 'severity': 'low', 'status': 'pending', 'classification': 'informational'}],
+               'anomalies': [{'anomaly_type': 'weekend', 'severity': 'low', 'status': 'pending', 'classification': 'non_blocking'}],
                'matching_status': 'PASS'}
     ai_result = {'approval_readiness': 'Ready', 'blocking_issues': [], 'passed_checks': ['ok'],
                  'risk_context': ["Invoice was submitted on a Saturday — worth noting, doesn't block approval"],
@@ -984,11 +1027,13 @@ def run_case_approval_assessment_prompt_defines_risk_context_rules():
     with _Patched(haa, ask_claude_text=fake_ask_claude_text, call_gemini_sdk=lambda *a, **k: None):
         haa.ask_ai_assistant('approval_assessment', {'invoice_number': 'INV-1'})
     up = captured.get('user_prompt', '')
-    check('prompt describes risk_context as non-blocking/informational findings',
+    check('prompt describes risk_context as non-blocking findings',
           'risk_context' in up and 'non-blocking' in up.lower(), up)
-    check('prompt gives concrete risk_context examples (weekend, low-severity, historical duplicate)',
-          'weekend' in up.lower() and 'duplicate' in up.lower(), up)
-    check('prompt explicitly forbids putting an informational/non-blocking finding under blocking_issues',
+    check('prompt gives concrete risk_context examples (weekend, low-severity unusual amount, round amount)',
+          'weekend' in up.lower() and 'round' in up.lower(), up)
+    check('prompt requires each risk_context entry to state its own pending/reviewed status, never described as cleared',
+          'pending' in up.lower() and 'reviewed' in up.lower() and 'cleared' in up.lower(), up)
+    check('prompt explicitly forbids putting a non-blocking finding under blocking_issues',
           'never a blocking issue' in up.lower() or 'never put a blocking issue' in up.lower(), up)
     check('prompt explicitly forbids recommending action on a non-blocking risk_context item',
           'never recommend action on a' in up.lower() or 'do not recommend' in up.lower(), up)
@@ -1026,7 +1071,7 @@ def run_case_approval_assessment_round_trips_through_run_action():
 
     context = {'audit_status': 'PASS', 'audit_status_reasons': [], 'missing_documents': [],
                'authenticity': {},
-               'anomalies': [{'anomaly_type': 'weekend', 'severity': 'low', 'status': 'pending', 'classification': 'informational'}],
+               'anomalies': [{'anomaly_type': 'weekend', 'severity': 'low', 'status': 'pending', 'classification': 'non_blocking'}],
                'matching_status': 'PASS'}
     ai_result = {'approval_readiness': 'Not Ready', 'blocking_issues': ['hallucinated'],
                  'passed_checks': ['Vendor matches'], 'risk_context': [],
@@ -1047,7 +1092,7 @@ def run_case_approval_assessment_round_trips_through_run_action():
     check('blocking_issues is forced empty for the deterministic Ready verdict',
           response['blocking_issues'] == [], response)
     check('passed_checks passed through from the AI result', response['passed_checks'] == ['Vendor matches'], response)
-    check('risk_context falls back to the informational anomaly (AI returned an empty list)',
+    check('risk_context falls back to the non_blocking anomaly (AI returned an empty list)',
           len(response['risk_context']) == 1 and 'weekend' in response['risk_context'][0].lower(), response)
 
 
@@ -1171,13 +1216,15 @@ if __name__ == '__main__':
     run_case_require_finance_owner_rejects_non_finance_role()
     run_case_require_finance_owner_404_for_missing_document()
 
-    run_case_classify_anomaly_reviewed_is_always_informational()
+    run_case_classify_anomaly_reviewed_is_non_blocking_not_dismissed()
+    run_case_classify_anomaly_dismissed_is_dismissed()
     run_case_classify_anomaly_pending_high_severity_is_blocking()
     run_case_classify_anomaly_pending_duplicate_or_amount_is_blocking()
-    run_case_classify_anomaly_pending_low_pattern_is_informational()
+    run_case_classify_anomaly_pending_low_pattern_is_non_blocking()
 
     run_case_audit_status_full_pass_document()
     run_case_audit_status_full_pass_with_historical_reviewed_duplicate_is_still_pass()
+    run_case_audit_status_pass_with_reviewed_round_amount_matches_exact_required_wording()
     run_case_audit_status_missing_po_gr_document()
     run_case_audit_status_duplicate_invoice_document()
     run_case_audit_status_sent_back_document()
@@ -1200,9 +1247,9 @@ if __name__ == '__main__':
     run_case_clamp_approval_assessment_ignores_non_string_junk()
     run_case_clamp_approval_assessment_caps_at_4_points_per_section()
 
-    run_case_risk_context_fallback_translates_informational_anomalies()
-    run_case_risk_context_fallback_excludes_blocking_anomalies()
-    run_case_risk_context_fallback_empty_when_no_informational_anomalies()
+    run_case_risk_context_fallback_translates_non_blocking_anomalies()
+    run_case_risk_context_fallback_excludes_blocking_and_dismissed_anomalies()
+    run_case_risk_context_fallback_empty_when_no_non_blocking_anomalies()
     run_case_clamp_approval_assessment_risk_context_independent_of_readiness()
     run_case_clamp_approval_assessment_risk_context_from_ai_passes_through()
 

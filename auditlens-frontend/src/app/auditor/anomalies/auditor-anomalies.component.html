@@ -121,7 +121,17 @@
     </div>
   </div>
 
-  <div class="empty-state" *ngIf="!isLoading && !errorMessage && anomalies.length === 0 && stats.total > 0">
+  <!-- Pending filter selected, genuinely nothing pending, but real
+       anomalies exist under Reviewed/Dismissed — a more precise message
+       than the generic filter-mismatch one below, since the reason is
+       exactly knowable from stats.by_status (filter-independent). -->
+  <div class="empty-state" *ngIf="!isLoading && !errorMessage && anomalies.length === 0 && stats.total > 0 && pendingFilterEmptyReason as reason">
+    <p class="empty-icon"><i class="ph-duotone ph-check-circle"></i></p>
+    <p class="empty-text empty-text-success">No pending anomalies.</p>
+    <p class="empty-subtext">{{ pendingFilterEmptyDetail }}</p>
+  </div>
+
+  <div class="empty-state" *ngIf="!isLoading && !errorMessage && anomalies.length === 0 && stats.total > 0 && !pendingFilterEmptyReason">
     <p class="empty-icon"><i class="ph-duotone ph-funnel"></i></p>
     <p class="empty-text empty-text-neutral">No anomalies match the selected filters.</p>
     <p class="empty-subtext">Try adjusting the filters.</p>
@@ -144,7 +154,7 @@
 
       <div class="card-meta-row" *ngIf="(a.amount !== null && a.amount !== undefined) || a.invoice_date">
         <span class="meta-item" *ngIf="a.amount !== null && a.amount !== undefined">Amount: {{ formatAmount(a.amount) }}</span>
-        <span class="meta-item" *ngIf="a.invoice_date">Invoice Date: {{ a.invoice_date }}</span>
+        <span class="meta-item" *ngIf="a.invoice_date">Invoice Date: {{ formatInvoiceDate(a.invoice_date) }}</span>
       </div>
 
       <div class="pattern-box">
@@ -176,15 +186,15 @@
         <p class="rec-text" *ngIf="a.ai_recommendation">{{ a.ai_recommendation }}</p>
       </div>
 
-      <div class="card-actions" *ngIf="a.status === 'pending'">
+      <!-- Review/dismiss is no longer a card action here — the Auditor's
+           Approve / Send Back / Need Review decision on Record Detail is
+           now the single place that changes an anomaly's status (see
+           routes/reviews.py). This page stays read-only: Investigate to
+           open the case, and the anomaly's current status for context. -->
+      <div class="card-actions">
         <button class="btn-investigate" (click)="investigate(a)">Investigate →</button>
-        <button class="btn-reviewed" [disabled]="actionInFlight === a.anomaly_id" (click)="review(a, 'reviewed')"><i class="ph-duotone ph-check"></i> Complete Review</button>
-        <button class="btn-dismiss" [disabled]="actionInFlight === a.anomaly_id" (click)="review(a, 'dismissed')"><i class="ph-duotone ph-x"></i> False Positive</button>
-      </div>
-      <div class="card-actions" *ngIf="a.status !== 'pending'">
-        <button class="btn-investigate" (click)="investigate(a)">Investigate →</button>
-        <span class="status-note">
-          <i class="ph-duotone" [ngClass]="a.status === 'reviewed' ? 'ph-check' : 'ph-x'"></i>
+        <span class="status-note" [ngClass]="'status-note-' + a.status">
+          <i class="ph-duotone" [ngClass]="a.status === 'dismissed' ? 'ph-x' : 'ph-check'"></i>
           {{ statusLabel(a.status) }}
         </span>
       </div>

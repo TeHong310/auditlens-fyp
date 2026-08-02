@@ -109,6 +109,34 @@
       </div>
     </div>
 
+    <!-- Case Summary — a compact, always-available snapshot (no AI call
+         needed) that keeps 4 distinct facts clearly separate: the
+         deterministic matching result, what anomalies exist on record
+         (never implying "reviewed" means "cleared"), which of those
+         actually block approval, and whether the Auditor has made a
+         final decision yet. See caseAnomalySummary/caseBlockingIssues/
+         caseFinalDecision — all derived from data this page already
+         loads (comparison, riskIndicators, reviewHistory). -->
+    <div class="exception-summary-card" *ngIf="comparison">
+      <p class="es-heading"><i class="ph-duotone ph-clipboard-text"></i> Case Summary</p>
+      <div class="es-row">
+        <span class="es-label">Matching</span>
+        <span class="risk-chip" [ngClass]="matchingStatusChipClass()">{{ overallStatus }}</span>
+      </div>
+      <div class="es-row">
+        <span class="es-label">Anomalies</span>
+        <span class="es-value">{{ caseAnomalySummary }}</span>
+      </div>
+      <div class="es-row">
+        <span class="es-label">Blocking</span>
+        <span class="es-value">{{ caseBlockingIssues }}</span>
+      </div>
+      <div class="es-row">
+        <span class="es-label">Decision</span>
+        <span class="es-value">{{ caseFinalDecision }}</span>
+      </div>
+    </div>
+
     <!-- Risk Indicators — anomaly findings (weekend transaction, amount
          anomaly, duplicate invoice, round amount, etc.) for THIS
          document, from the SAME anomalies data the Document Workflow
@@ -788,7 +816,7 @@
 
         <!-- Action Buttons -->
         <div class="action-buttons" *ngIf="userRole === 'auditor'">
-          <button class="btn-need-review" [disabled]="isSubmitting">
+          <button class="btn-need-review" (click)="needReviewDocument()" [disabled]="isSubmitting">
             <i class="ph-duotone ph-warning"></i> Need Review
           </button>
           <button class="btn-return" (click)="openSendBackModal()" [disabled]="isSubmitting">

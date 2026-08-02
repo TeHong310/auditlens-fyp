@@ -375,45 +375,31 @@
   margin-top: 4px;
 }
 
-.btn-investigate, .btn-reviewed, .btn-dismiss {
+.btn-investigate {
   padding: 8px 16px;
   border-radius: 8px;
   font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
   border: none;
-  transition: all .2s ease;
-}
-
-.btn-investigate {
   background: linear-gradient(135deg, var(--accent), var(--accent));
   color: var(--text-primary);
   transition: all .2s ease;
 }
 .btn-investigate:hover { background: linear-gradient(135deg, var(--accent-soft), var(--accent)); }
 
-.btn-reviewed {
-  background: var(--success-bg);
-  color: var(--success);
-  border: 1.5px solid var(--success);
-  transition: all .2s ease;
-}
-.btn-reviewed:hover:not(:disabled) { background: var(--success-bg); }
-
-.btn-dismiss {
-  background: var(--danger-bg);
-  color: var(--danger);
-  border: 1.5px solid var(--danger);
-}
-.btn-dismiss:hover:not(:disabled) { background: var(--danger-bg); }
-
-.btn-reviewed:disabled, .btn-dismiss:disabled { opacity: 0.5; cursor: not-allowed; }
-
 .status-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text-muted);
 }
+
+.status-note-reviewed { color: var(--success); }
+.status-note-dismissed { color: var(--danger); }
+.status-note-pending   { color: var(--warning); }
 
 /* Empty / Loading / Error */
 .empty-state {

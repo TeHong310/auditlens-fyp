@@ -67,6 +67,14 @@ class FakeCursor:
             self.db['documents'][params[0]]['status'] = 'approved'
         elif s.startswith('UPDATE exceptions'):
             pass
+        elif s.startswith("UPDATE anomalies SET status = 'reviewed'"):
+            # approve_document() marks any still-pending anomaly for this
+            # document 'reviewed' as part of the approve decision — this
+            # test file has no anomalies fixture data at all, so this is
+            # correctly a no-op (0 rows affected), same as UPDATE
+            # exceptions above; the routes/reviews.py behavior itself is
+            # covered by tests/extraction/test_anomaly_decision_mapping.py.
+            pass
 
         elif s.startswith('SELECT cycle_id, cycle_number FROM send_back_cycles'):
             doc_id = params[0]

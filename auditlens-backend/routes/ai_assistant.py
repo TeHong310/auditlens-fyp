@@ -28,25 +28,110 @@ ai_assistant_bp = Blueprint('ai_assistant', __name__)
 
 
 def _classify_anomaly(anomaly):
-    """Blocking vs informational — a DETERMINISTIC classification (never
-    left to the AI to judge), so a historical/already-handled anomaly
-    can never be narrated as an active exception:
-      - 'informational': already reviewed or dismissed by an auditor
-        (status != 'pending'), or a pending low/medium-severity finding
-        of a type that isn't inherently high-stakes (e.g. a round-number
-        or weekend-submission pattern).
-      - 'blocking': still pending AND either high severity, or an
+    """Blocking vs non-blocking vs dismissed — a DETERMINISTIC
+    classification (never left to the AI to judge). The boundary between
+    'blocking' and 'non_blocking' is unchanged from before this fix
+    (still governed by status == 'pending' + severity/type) — what this
+    fix actually corrects is that a non-blocking finding is NEVER again
+    omitted or misdescribed as if it doesn't exist (see _compute_audit_
+    status, _compute_risk_context_fallback, and the system prompt below,
+    all of which now always NAME a non_blocking finding and its real
+    status instead of silently dropping it):
+      - 'dismissed': the auditor explicitly ruled this finding a false
+        positive (status == 'dismissed'). The ONLY classification that
+        may be described as cleared/no-longer-relevant.
+      - 'blocking': status == 'pending' AND either high severity, or an
         amount/duplicate finding — types that map directly to the
-        task's "unresolved duplicate" / "amount inconsistency" /
-        "high risk anomaly" categories.
+        task's "unresolved duplicate" / "amount inconsistency" / "high
+        risk anomaly" categories. Once an anomaly is 'reviewed' the
+        auditor has already accounted for it as part of their own
+        decision (see routes/reviews.py::approve_document, which marks
+        every still-pending anomaly 'reviewed' AS PART OF approving) —
+        it stops actively blocking a NEW approval decision, but it does
+        NOT stop being a real, nameable finding — see 'non_blocking'.
+      - 'non_blocking': 'reviewed' (regardless of severity/type — see
+        above), OR 'pending' but not high-severity/duplicate/amount
+        (e.g. a round-number or weekend-submission pattern). A real,
+        currently-recorded finding that does not currently prevent
+        approval. Never described as "no anomaly" or "cleared" — only
+        'dismissed' may be described that way.
     """
-    if anomaly.get('status') != 'pending':
-        return 'informational'  # already reviewed issue
+    if anomaly.get('status') == 'dismissed':
+        return 'dismissed'
+    if anomaly.get('status') == 'reviewed':
+        return 'non_blocking'  # already accounted for in a prior decision, but still a real finding
     if anomaly.get('severity') == 'high':
-        return 'blocking'  # high risk anomaly requiring action
+        return 'blocking'  # unresolved high risk anomaly requiring action
     if anomaly.get('anomaly_type') in ('duplicate', 'amount'):
         return 'blocking'  # unresolved duplicate / amount inconsistency
-    return 'informational'  # low risk pattern
+    return 'non_blocking'  # low-risk pending pattern, but still an existing finding
+
+
+# Short, auditor-facing labels — deliberately the SAME wording as the
+# Anomaly Detection page's type filter chips (auditor-anomalies.
+# component.ts's typeFilters), so an anomaly reads identically whether
+# an auditor is looking at the full Anomaly Detection page or this
+# deterministic PASS-with-anomaly message.
+_ANOMALY_SHORT_LABEL = {
+    'amount':    'Unusual Amount',
+    'round':     'Round Amount',
+    'weekend':   'Timing',
+    'duplicate': 'Duplicate',
+}
+
+
+def _describe_non_blocking_anomalies(non_blocking_anomalies):
+    """Builds the required auditor-facing sentence pair for a PASS
+    verdict that still has one or more non-blocking (pending or
+    reviewed, never dismissed) anomalies on record — e.g. 'Audit status
+    is PASS with one non-blocking reviewed Round Amount anomaly. The
+    anomaly remains part of the audit record and should be considered
+    by the Auditor before the final transaction decision.' Never
+    invoked for a genuinely clean case (no non-blocking anomalies) or
+    for dismissed-only findings — those keep the plain 'All core checks
+    passed' message, since only a still-recorded finding needs this
+    reminder."""
+    n = len(non_blocking_anomalies)
+    noun = 'anomaly' if n == 1 else 'anomalies'
+    count_word = 'one' if n == 1 else str(n)
+
+    if n == 1:
+        a = non_blocking_anomalies[0]
+        status_word = 'reviewed' if a.get('status') == 'reviewed' else 'pending'
+        type_label = _ANOMALY_SHORT_LABEL.get(a.get('anomaly_type'), 'additional')
+        detail = f'{status_word} {type_label}'
+    else:
+        parts = []
+        for a in non_blocking_anomalies:
+            status_word = 'reviewed' if a.get('status') == 'reviewed' else 'pending'
+            type_label = _ANOMALY_SHORT_LABEL.get(a.get('anomaly_type'), 'additional')
+            parts.append(f'{status_word} {type_label}')
+        detail = ', '.join(parts)
+
+    pronoun = 'anomaly remains' if n == 1 else 'anomalies remain'
+    return (
+        f'Audit status is PASS with {count_word} non-blocking {detail} {noun}. '
+        f'The {pronoun} part of the audit record and should be considered by the '
+        f'Auditor before the final transaction decision.'
+    )
+
+
+def _describe_non_blocking_anomalies_for_readiness(non_blocking_anomalies):
+    """Builds the Approval Assessment's recommended_next_steps sentence
+    for a 'Ready' verdict that still has a non-blocking anomaly on
+    record — e.g. 'Ready for final Auditor decision. One reviewed non-
+    blocking Round Amount anomaly remains recorded.' A distinct wording
+    from _describe_non_blocking_anomalies() above (different field,
+    different exact phrasing required), built from the SAME
+    _ANOMALY_SHORT_LABEL data so the two never disagree on WHAT is
+    being described, only how the sentence reads."""
+    n = len(non_blocking_anomalies)
+    if n == 1:
+        a = non_blocking_anomalies[0]
+        status_word = 'reviewed' if a.get('status') == 'reviewed' else 'pending'
+        type_label = _ANOMALY_SHORT_LABEL.get(a.get('anomaly_type'), 'additional')
+        return f'Ready for final Auditor decision. One {status_word} non-blocking {type_label} anomaly remains recorded.'
+    return f'Ready for final Auditor decision. {n} non-blocking anomalies remain recorded.'
 
 
 def _compute_audit_status(comparison, authenticity, missing_documents, document_status, anomalies):
@@ -96,6 +181,16 @@ def _compute_audit_status(comparison, authenticity, missing_documents, document_
 
     if reasons:
         return 'REVIEW REQUIRED', reasons
+
+    # A PASS verdict can still coexist with a non-blocking anomaly still
+    # on record (pending or reviewed, never dismissed — see
+    # _classify_anomaly) — that finding must stay visible to the
+    # auditor, never silently folded into "no blocking findings" as if
+    # it doesn't exist. Dismissed-only (or zero) non-blocking anomalies
+    # keep the plain clean-record message.
+    non_blocking_anomalies = [a for a in anomalies if a.get('classification') == 'non_blocking']
+    if non_blocking_anomalies:
+        return 'PASS', [_describe_non_blocking_anomalies(non_blocking_anomalies)]
     return 'PASS', ['All core checks passed and no blocking findings']
 
 
@@ -354,7 +449,7 @@ def _clamp_explain_exception_result(result, context):
     regardless of what the AI narrated. This is what actually prevents
     the AI from describing a clean record (matching PASS, authenticity
     PASS, no missing documents, no unresolved send-back, no blocking
-    anomaly) as a failed audit just because an informational/already-
+    anomaly) as a failed audit just because a non-blocking/already-
     reviewed anomaly happens to exist — the wording can vary, but the
     Audit Status label itself can never be wrong."""
     result = result or {}
@@ -364,10 +459,19 @@ def _clamp_explain_exception_result(result, context):
     if not reason:
         reason = '; '.join(context.get('audit_status_reasons') or []) or 'See case details.'
 
+    # A PASS record with a still-recorded non-blocking anomaly must
+    # never fall back to "No action required" — that phrase reads as
+    # "nothing to look at", which contradicts a finding that is still
+    # part of the audit record (see _describe_non_blocking_anomalies).
+    non_blocking_anomalies = [a for a in (context.get('anomalies') or []) if a.get('classification') == 'non_blocking']
     recommended_action = (result.get('recommended_action') or '').strip()
     if not recommended_action:
-        recommended_action = ('No action required — ready for approval.' if audit_status == 'PASS'
-                               else 'Review the flagged items before approving.')
+        if audit_status == 'PASS' and not non_blocking_anomalies:
+            recommended_action = 'No action required — ready for approval.'
+        elif audit_status == 'PASS':
+            recommended_action = 'Ready for final Auditor decision — review the recorded anomaly before finalizing.'
+        else:
+            recommended_action = 'Review the flagged items before approving.'
 
     return {
         'audit_status':        audit_status,
@@ -437,21 +541,29 @@ _ANOMALY_TYPE_PLAIN_LABEL = {
 def _compute_risk_context_fallback(context):
     """Deterministic fallback for 'Risk Context' when the AI doesn't
     return anything usable — plain-language translations of every
-    INFORMATIONAL (non-blocking) anomaly already computed for this case
-    (see _classify_anomaly in this same file: already reviewed/
-    dismissed, or a low-risk pattern that isn't inherently high-
-    stakes). A 'blocking' anomaly is NEVER included here — that
+    NON-BLOCKING anomaly already computed for this case (see
+    _classify_anomaly in this same file: a pending or reviewed finding
+    that isn't inherently high-stakes — never dismissed, that's excluded
+    entirely). A 'blocking' anomaly is NEVER included here — that
     belongs in blocking_issues via _compute_approval_readiness instead.
-    Returns [] when there are no informational anomalies at all — an
-    empty Risk Context is the CORRECT result in that case (the
-    frontend simply doesn't render the card), not a fallback failure."""
-    informational = [a for a in (context.get('anomalies') or []) if a.get('classification') == 'informational']
+    Each entry states its OWN review status explicitly (Reviewed/
+    Pending) — a non-blocking finding is a real, still-recorded finding
+    either way, never described as cleared just because it was already
+    reviewed (only a 'dismissed' anomaly, excluded here, may be
+    described that way). Returns [] when there are no non-blocking
+    anomalies at all — an empty Risk Context is the CORRECT result in
+    that case (the frontend simply doesn't render the card), not a
+    fallback failure."""
+    non_blocking = [a for a in (context.get('anomalies') or []) if a.get('classification') == 'non_blocking']
     labels = []
-    for a in informational:
-        label = _ANOMALY_TYPE_PLAIN_LABEL.get(a.get('anomaly_type'), 'Additional informational risk pattern noted')
+    for a in non_blocking:
+        label = _ANOMALY_TYPE_PLAIN_LABEL.get(a.get('anomaly_type'), 'Additional non-blocking risk pattern noted')
+        status_word = 'Reviewed' if a.get('status') == 'reviewed' else 'Pending'
         severity = a.get('severity')
         if severity:
-            label = f'{label} ({severity} risk, non-blocking)'
+            label = f'{status_word} — {label} ({severity} risk, non-blocking)'
+        else:
+            label = f'{status_word} — {label}'
         labels.append(label)
     return labels[:_APPROVAL_ASSESSMENT_MAX_POINTS]
 
@@ -466,16 +578,19 @@ def _clamp_approval_assessment_result(result, context):
     (blocking_factors/evidence/recommended_actions renamed to blocking_
     issues/passed_checks/recommended_next_steps, each capped at 4 short
     points; risk_context added as a 4th, independent field for non-
-    blocking/informational anomalies).
+    blocking anomalies).
 
     blocking_issues falls back to audit_status_reasons (the same
     authoritative list used everywhere else) when the AI returns
     nothing usable, and is forced empty for a 'Ready' verdict no matter
     what the AI said. risk_context falls back to _compute_risk_context_
-    fallback() above — grounded in the SAME informational-anomaly data,
+    fallback() above — grounded in the SAME non-blocking-anomaly data,
     never fabricated — and, unlike the other 3 fields, is allowed to
-    stay genuinely empty (no informational anomalies is a real, correct
-    state, not a blank-response failure). passed_checks/recommended_
+    stay genuinely empty (no non-blocking anomalies is a real, correct
+    state, not a blank-response failure). recommended_next_steps for a
+    'Ready' verdict still names any non-blocking anomaly on record
+    rather than defaulting to "no further action needed" (see
+    _describe_non_blocking_anomalies_for_readiness). passed_checks/recommended_
     next_steps fall back to a minimal safe default rather than an empty
     list, so those two are never blank. Every list is capped at
     _APPROVAL_ASSESSMENT_MAX_POINTS items even if the AI ignores the
@@ -504,8 +619,17 @@ def _clamp_approval_assessment_result(result, context):
 
     recommended_next_steps = [s for s in (result.get('recommended_next_steps') or []) if isinstance(s, str) and s.strip()]
     if not recommended_next_steps:
-        recommended_next_steps = (['No further action needed — ready for approval.'] if readiness == 'Ready'
-                                   else ['Review the flagged items before approving.'])
+        non_blocking_for_readiness = [a for a in (context.get('anomalies') or []) if a.get('classification') == 'non_blocking']
+        if readiness != 'Ready':
+            recommended_next_steps = ['Review the flagged items before approving.']
+        elif non_blocking_for_readiness:
+            # 'Ready' does not mean nothing is on record — a non-blocking
+            # anomaly still exists and must stay visible in the recommended
+            # step, never collapsed into "no further action needed" (which
+            # reads as "nothing to look at").
+            recommended_next_steps = [_describe_non_blocking_anomalies_for_readiness(non_blocking_for_readiness)]
+        else:
+            recommended_next_steps = ['No further action needed — ready for approval.']
     recommended_next_steps = recommended_next_steps[:_APPROVAL_ASSESSMENT_MAX_POINTS]
 
     return {

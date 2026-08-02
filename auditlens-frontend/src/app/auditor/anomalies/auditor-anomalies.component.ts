@@ -22,6 +22,7 @@ export class AuditorAnomaliesComponent implements OnInit {
     total: 0,
     by_severity: { high: 0, medium: 0, low: 0 },
     by_type: { amount: 0, round: 0, weekend: 0, duplicate: 0 },
+    by_status: { pending: 0, reviewed: 0, dismissed: 0 },
     pending: 0,
     transactions_analysed: 0,
     last_analysed: null,
@@ -30,7 +31,6 @@ export class AuditorAnomaliesComponent implements OnInit {
   isLoading: boolean = false;
   isRunningAnalysis: boolean = false;
   errorMessage: string = '';
-  actionInFlight: number | null = null;
 
   activeSeverity: Severity = 'all';
   activeType: AnomalyType = 'all';
@@ -146,28 +146,16 @@ export class AuditorAnomaliesComponent implements OnInit {
     this.loadAnomalies();
   }
 
+  // The only card action this page offers — reviewing/dismissing an
+  // anomaly is now exclusively the Auditor's Approve/Send Back/Need
+  // Review decision on Record Detail (see routes/reviews.py), which
+  // maps to the anomaly's status there. This page stays a read-only
+  // view of the SAME persisted anomaly records, using invoice_
+  // document_id so Investigate always lands on the exact case this
+  // anomaly was raised against.
   investigate(anomaly: any) {
     this.router.navigate(['/auditor/record-detail'], {
       queryParams: { document_id: anomaly.invoice_document_id }
-    });
-  }
-
-  review(anomaly: any, status: 'reviewed' | 'dismissed') {
-    this.actionInFlight = anomaly.anomaly_id;
-    this.http.post<any>(`${this.apiUrl}/anomalies/${anomaly.anomaly_id}/review`,
-      { status },
-      { headers: this.getHeaders() }
-    ).subscribe({
-      next: () => {
-        this.actionInFlight = null;
-        this.anomalies = this.anomalies.filter(a => a.anomaly_id !== anomaly.anomaly_id);
-        this.cdr.detectChanges();
-      },
-      error: (err) => {
-        this.actionInFlight = null;
-        this.errorMessage = err.error?.error || 'Failed to update anomaly.';
-        this.cdr.detectChanges();
-      }
     });
   }
 
@@ -198,6 +186,15 @@ export class AuditorAnomaliesComponent implements OnInit {
   formatAmount(v: any): string {
     if (v === null || v === undefined) return '-';
     return 'RM ' + Number(v).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  // Same "11 Feb 2026" format as Record Detail's formatDate() — dates
+  // must never be shown raw (a raw date/datetime reaching the browser
+  // renders as "Wed, 11 Feb 2026 00:00:00 GMT", Flask's default JSON
+  // encoding of an un-isoformat()'d value, not a real date format).
+  formatInvoiceDate(dateStr: string): string {
+    if (!dateStr) return '-';
+    return new Date(dateStr).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' });
   }
 
   // Non-duplicate types are comparative/statistical signals, not binary
@@ -308,10 +305,15 @@ export class AuditorAnomaliesComponent implements OnInit {
     }
   }
 
+  // Canonical status wording — matches the actual status VALUE (never a
+  // synonym like the previous "Review Complete"/"False Positive") so
+  // this page, Record Detail's Risk Indicators, and the AI Assistant
+  // all describe the same anomaly the same way. 'Reviewed' is never
+  // implied to mean "cleared" — only 'Dismissed' is.
   statusLabel(status: string): string {
-    if (status === 'reviewed') return 'Review Complete';
-    if (status === 'dismissed') return 'False Positive';
-    return status;
+    if (status === 'reviewed') return 'Reviewed';
+    if (status === 'dismissed') return 'Dismissed';
+    return 'Pending';
   }
 
   relativeTime(dateStr: string): string {
@@ -380,5 +382,37 @@ export class AuditorAnomaliesComponent implements OnInit {
     const noun = n === 1 ? 'transaction' : 'transactions';
     const verb = n === 1 ? 'was' : 'were';
     return `${n} ${noun} ${verb} screened successfully.`;
+  }
+
+  // "Pending" filter selected, the filtered list is genuinely empty,
+  // but anomalies DO exist under a different status — the filter/status
+  // counts (stats.by_status) come from the SAME unfiltered /anomalies/
+  // stats call as the rest of the summary bar, so this never depends on
+  // what's currently in `anomalies`. Distinct from the generic "No
+  // anomalies match the selected filters" message (still shown for any
+  // OTHER filter combination that comes up empty) because here the
+  // reason is precisely knowable: every real anomaly has already been
+  // reviewed and/or dismissed.
+  get pendingFilterEmptyReason(): { reviewed: number; dismissed: number } | null {
+    if (this.activeStatus !== 'pending' || this.anomalies.length > 0) return null;
+    const reviewed = this.stats.by_status?.reviewed || 0;
+    const dismissed = this.stats.by_status?.dismissed || 0;
+    if (reviewed === 0 && dismissed === 0) return null;
+    return { reviewed, dismissed };
+  }
+
+  get pendingFilterEmptyDetail(): string {
+    const reason = this.pendingFilterEmptyReason;
+    if (!reason) return '';
+    const parts: string[] = [];
+    if (reason.reviewed > 0) {
+      const noun = reason.reviewed === 1 ? 'anomaly is' : 'anomalies are';
+      parts.push(`${reason.reviewed} reviewed ${noun} available under the Reviewed filter`);
+    }
+    if (reason.dismissed > 0) {
+      const noun = reason.dismissed === 1 ? 'anomaly is' : 'anomalies are';
+      parts.push(`${reason.dismissed} dismissed ${noun} available under the Dismissed filter`);
+    }
+    return parts.join(' ') + '.';
   }
 }

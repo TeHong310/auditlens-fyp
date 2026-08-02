@@ -114,7 +114,7 @@ class _FakeCursorDelete:
         self.log = log
 
     def execute(self, sql, params=None):
-        self.log.append(('DELETE', params[0] if params else None))
+        self.log.append(('DELETE', params[0] if params else None, ' '.join(sql.split())))
 
 
 class _FakeConnSimple:
@@ -182,11 +182,22 @@ def run_case_loops_every_invoice_and_deletes_before_redetect():
     check('run_anomaly_detection called once per document, in order',
           p.detection_calls == [1, 2, 3], p.detection_calls)
     check('DELETE issued for every document before its redetect',
-          [d for _, d in p.delete_log] == [1, 2, 3], p.delete_log)
+          [d for _, d, _sql in p.delete_log] == [1, 2, 3], p.delete_log)
     check('documents_analyzed reflects the real count', result['documents_analyzed'] == 3, result)
     check('anomalies_found aggregates across all documents (1+0+2=3)',
           result['anomalies_found'] == 3, result)
     check('errors is 0 when nothing raises', result['errors'] == 0, result)
+
+
+def run_case_delete_only_clears_pending_anomalies_preserving_review_history():
+    print('Case: the pre-redetect DELETE only targets pending anomalies — reviewed/dismissed rows (audit history) are never wiped by a re-run')
+    with _PatchedRun([1], {1: []}) as p:
+        ra._run_full_anomaly_analysis()
+    check('exactly one DELETE issued', len(p.delete_log) == 1, p.delete_log)
+    _, doc_id, sql = p.delete_log[0]
+    check('DELETE targets the right document', doc_id == 1, p.delete_log)
+    check("DELETE is scoped to status = 'pending' — reviewed/dismissed anomalies survive a re-run",
+          "status = 'pending'" in sql, sql)
 
 
 def run_case_one_document_failure_does_not_abort_the_batch():
@@ -214,6 +225,7 @@ if __name__ == '__main__':
     run_case_log_detection_run_inserts_a_row()
     run_case_log_detection_run_swallows_db_errors()
     run_case_loops_every_invoice_and_deletes_before_redetect()
+    run_case_delete_only_clears_pending_anomalies_preserving_review_history()
     run_case_one_document_failure_does_not_abort_the_batch()
     run_case_no_invoices_is_a_clean_noop()
 

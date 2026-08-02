@@ -603,6 +603,30 @@ def _ensure_ai_assistant_cache_table():
         print(f'WARNING: could not create ai_assistant_cache table: {type(e).__name__}: {e}')
 
 
+def _ensure_review_records_need_review_action():
+    """review_records.action has a CHECK constraint (review_records_
+    action_check) limiting it to 'approved'/'returned'/'resubmitted'/
+    'closed' — predating routes/reviews.py::need_review_document(),
+    which inserts 'need_review'. Without this, every Need Review click
+    fails with a Postgres CheckViolation. Widens the constraint to also
+    allow 'need_review'; safe to run on every boot (DROP/ADD is
+    idempotent — dropping a constraint that doesn't exist is a no-op
+    under IF EXISTS, and re-adding the same definition is harmless)."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('ALTER TABLE review_records DROP CONSTRAINT IF EXISTS review_records_action_check')
+        cursor.execute('''
+            ALTER TABLE review_records ADD CONSTRAINT review_records_action_check
+                CHECK (action IN ('approved', 'returned', 'resubmitted', 'closed', 'need_review'))
+        ''')
+        conn.commit()
+        conn.close()
+        print("review_records.action_check widened for 'need_review'")
+    except Exception as e:
+        print(f'WARNING: could not widen review_records_action_check: {type(e).__name__}: {e}')
+
+
 def _ensure_document_relationships_table():
     """Enterprise V3 Phase 1: flexible many-to-many document relationships
     (PO<->Invoice, PO<->GR, Invoice<->GR), additive to the existing
@@ -824,6 +848,7 @@ _ensure_authenticity_cache_table()
 _ensure_send_back_cycles_table()
 _ensure_calendar_tasks_table()
 _ensure_ai_assistant_cache_table()
+_ensure_review_records_need_review_action()
 _ensure_document_relationships_table()
 _ensure_document_relationships_v2_columns()
 _ensure_transaction_packages_table()
