@@ -6,6 +6,7 @@ import { forkJoin, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { Chart, registerables } from 'chart.js';
 import { environment } from '../../../environments/environment';
+import { isSameMalaysiaMonth, malaysiaMonthIndex } from '../../shared/datetime.util';
 import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
 import { FinanceUserMenuComponent } from '../shared/finance-user-menu.component';
 
@@ -172,16 +173,9 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
       next: (res) => {
         this.allDocuments = res.documents;
 
-        // Current month filter
-        const now = new Date();
-        const currentMonth = now.getMonth();
-        const currentYear = now.getFullYear();
-
-        const thisMonthDocs = res.documents.filter((d: any) => {
-          const date = new Date(d.uploaded_at);
-          return date.getMonth() === currentMonth &&
-            date.getFullYear() === currentYear;
-        });
+        // Current month filter — Malaysia calendar month, not the
+        // browser's own local timezone (see shared/datetime.util.ts).
+        const thisMonthDocs = res.documents.filter((d: any) => isSameMalaysiaMonth(d.uploaded_at));
         this.thisMonthDocsCache = thisMonthDocs;
 
         // Stats Cards — current month only
@@ -367,11 +361,7 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
   // (loadPoGrLists above) — all filtered to this month for consistency
   // with the KPI cards and the rest of the secondary chart row.
   private computeDocumentTypeDistribution() {
-    const now = new Date();
-    const inMonth = (dateStr: string) => {
-      const d = new Date(dateStr);
-      return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-    };
+    const inMonth = (dateStr: string) => isSameMalaysiaMonth(dateStr);
     const invoiceCount = this.allDocuments.filter((d: any) => inMonth(d.uploaded_at)).length;
     const poCount = this.poList.filter((p: any) => inMonth(p.uploaded_at)).length;
     const grCount = this.grList.filter((g: any) => inMonth(g.uploaded_at)).length;
@@ -389,11 +379,9 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
   private computeCorrectionAnalysis() {
     if (!this.poGrLoaded || !this.cyclesLoaded) return;
 
-    const now = new Date();
     const returned = this.allDocuments.filter((d: any) => {
       if (d.status !== 'returned') return false;
-      const date = new Date(d.uploaded_at);
-      return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+      return isSameMalaysiaMonth(d.uploaded_at);
     });
 
     let missingPO = 0, missingGR = 0, lowOcr = 0, invalidAmount = 0, duplicate = 0;
@@ -466,7 +454,9 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
     const uploadCounts: { [key: string]: number } = {};
     const ocrCounts: { [key: string]: number } = {};
     this.allDocuments.forEach(doc => {
-      const key = months[new Date(doc.uploaded_at).getMonth()];
+      const monthIdx = malaysiaMonthIndex(doc.uploaded_at);
+      if (monthIdx === null) return;
+      const key = months[monthIdx];
       uploadCounts[key] = (uploadCounts[key] || 0) + 1;
       if (ocrProcessedStatuses.includes(doc.status)) {
         ocrCounts[key] = (ocrCounts[key] || 0) + 1;
@@ -528,11 +518,7 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
     if (!this.viewReady || !this.ocrPerfChartRef) return;
     if (this.ocrPerfChartInstance) this.ocrPerfChartInstance.destroy();
 
-    const now = new Date();
-    const thisMonthDocs = this.allDocuments.filter(d => {
-      const date = new Date(d.uploaded_at);
-      return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
-    });
+    const thisMonthDocs = this.allDocuments.filter(d => isSameMalaysiaMonth(d.uploaded_at));
     const last10 = thisMonthDocs.filter(d => d.ocr_confidence).slice(-10);
     const labels = last10.map((_, i) => `Doc ${i + 1}`);
     const data = last10.map(d => parseFloat(d.ocr_confidence));
@@ -599,11 +585,7 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
     if (!this.viewReady || !this.ocrConfidenceChartRef) return;
     if (this.ocrConfidenceChartInstance) this.ocrConfidenceChartInstance.destroy();
 
-    const now = new Date();
-    const thisMonthDocs = this.allDocuments.filter(d => {
-      const date = new Date(d.uploaded_at);
-      return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear() && d.ocr_confidence;
-    });
+    const thisMonthDocs = this.allDocuments.filter(d => isSameMalaysiaMonth(d.uploaded_at) && d.ocr_confidence);
 
     const buckets = [
       { label: '90-100', min: 90, max: 101, color: CHART_PALETTE.green },

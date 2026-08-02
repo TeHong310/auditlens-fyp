@@ -13,3 +13,4 @@ psutil==7.2.2
 anthropic==0.117.0
 numpy==2.4.4
 opencv-python-headless==4.13.0.92
+tzdata==2026.3

@@ -32,3 +32,47 @@ export function formatMalaysiaDateTime(isoString: string | null | undefined): st
   if (isNaN(d.getTime())) return '-';
   return MYT_DATETIME_FORMATTER.format(d);
 }
+
+// ── Malaysia date-key helpers — for GROUPING/BUCKETING a timestamp by
+// day or month (Finance's dashboard charts, which compute their own
+// "this month"/monthly-trend buckets client-side from raw document
+// lists, unlike Auditor's which are pre-bucketed server-side via
+// helpers/time_format.py's malaysia_date_sql()). 'en-CA' happens to
+// format as plain YYYY-MM-DD, which is what makes toMalaysiaDateKey()
+// a reliable, locale-formatting-free string to slice/compare — NOT
+// Date.getMonth()/getFullYear()/getDate(), which use whatever timezone
+// the VIEWER's own machine happens to be set to, not necessarily
+// Malaysia (the frontend equivalent of the backend's UTC-vs-session-
+// timezone bug this whole fix is about).
+
+const MYT_DATE_KEY_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  timeZone: MYT_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+});
+
+/** UTC ISO string (or Date) -> 'YYYY-MM-DD', the Malaysia calendar date
+ * it falls on. Returns null for a missing/invalid value. */
+export function toMalaysiaDateKey(value: string | Date | null | undefined): string | null {
+  if (!value) return null;
+  const d = typeof value === 'string' ? new Date(value) : value;
+  if (isNaN(d.getTime())) return null;
+  return MYT_DATE_KEY_FORMATTER.format(d);
+}
+
+/** True if `value`'s Malaysia calendar date falls in the same
+ * (year, month) as `reference` (default: right now). */
+export function isSameMalaysiaMonth(value: string | Date | null | undefined, reference: Date = new Date()): boolean {
+  const key = toMalaysiaDateKey(value);
+  const refKey = toMalaysiaDateKey(reference);
+  if (!key || !refKey) return false;
+  return key.slice(0, 7) === refKey.slice(0, 7);
+}
+
+/** `value`'s Malaysia calendar month as a 0-based index (0=Jan,
+ * 11=Dec) — matching Date.getMonth()'s convention, so it can drop
+ * straight into a `months[...]` lookup. null for a missing/invalid
+ * value. */
+export function malaysiaMonthIndex(value: string | Date | null | undefined): number | null {
+  const key = toMalaysiaDateKey(value);
+  if (!key) return null;
+  return parseInt(key.slice(5, 7), 10) - 1;
+}

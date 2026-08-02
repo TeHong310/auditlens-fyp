@@ -17739,3 +17739,189 @@ Rollback instructions:
   restores the previous ambiguous (no explicit UTC marker) serialization
   and each page's own ad-hoc, viewer-local-timezone-assuming display
   logic.
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Follow-up to the previous commit (fix: standardize Malaysia timezone
+  display), which fixed individual timestamp DISPLAY but not day-level
+  GROUPING. Root cause (confirmed by direct Postgres query, not
+  assumed): `DATE(some_naive_utc_column)` and `TO_CHAR(..., 'YYYY-MM')`
+  extract the calendar unit directly from the column's raw UTC digits -
+  correct for "what UTC date/month is this", wrong for "what Malaysia
+  date/month is this", which is what every chart/trend/"today" concept
+  in this app actually means. A review at 21:19 UTC (05:19 the next
+  Malaysia morning) was landing in the PREVIOUS UTC day's bucket, so any
+  chart's rightmost/most-recent bucket could lag Malaysia's real "today"
+  by up to a day. Investigated the actual architecture behind every
+  named Auditor and Finance area before touching anything: Auditor's
+  charts (Dashboard Audit Trend, Review Volume, Report & Log's own
+  trend) all trace to ONE backend endpoint (/auditor/report/summary)
+  that already SQL-day-buckets server-side; Finance's charts (Home's
+  Upload Trend + 5 other "this month"-scoped charts) have NO backend
+  aggregation at all - every Finance page fetches raw, un-aggregated
+  document/package lists and buckets them client-side in TypeScript, an
+  architecture confirmed by grep across the entire finance/ directory,
+  not assumed. Given that split, and after presenting the tradeoff to
+  the user (build new backend aggregation endpoints for Finance to
+  literally match "one shared backend helper", vs. keep Finance's
+  existing frontend-grouping architecture but make it explicitly
+  Malaysia-aware instead of implicitly browser-local), the user chose
+  the smaller, lower-risk frontend fix for Finance - so this commit is
+  a backend fix for Auditor and a frontend fix for Finance, each
+  reusing exactly one new shared helper on its own side.
+
+  Backend (auditlens-backend/) - Auditor only, nothing here touches
+  Finance's endpoints since none of them aggregate by date server-side:
+    - helpers/time_format.py gained 4 new shared functions alongside
+      the existing UTC-Z display helpers: malaysia_today() (today's
+      real Asia/Kuala_Lumpur calendar date, computed from the current
+      UTC instant - not server-local time, which could be any timezone
+      depending on where the process happens to run), to_malaysia_date()
+      (Python-side: naive UTC datetime -> its Malaysia calendar date),
+      malaysia_midnight_utc() (Malaysia local midnight on a given date,
+      converted to the naive UTC datetime needed as a WHERE-clause
+      bound - Malaysia midnight is 16:00 UTC the PREVIOUS day), and
+      malaysia_date_sql() (a SQL fragment - `(col AT TIME ZONE 'UTC' AT
+      TIME ZONE 'Asia/Kuala_Lumpur')::date` - the one shared way every
+      day-bucketed query must GROUP BY, instead of Postgres's own
+      DATE(...)). Requires the zoneinfo stdlib module's IANA database;
+      added tzdata==2026.3 to requirements.txt since Windows (unlike
+      Render's Linux container) doesn't ship it and zoneinfo.ZoneInfo(
+      'Asia/Kuala_Lumpur') would otherwise raise ZoneInfoNotFoundError
+      on a dev machine - confirmed by hitting exactly that error first,
+      not assumed.
+    - routes/auditor.py: _period_start('today') (drives Report & Log's
+      Approved/Sent Back/Pending/Exceptions KPI cards when the "Today"
+      filter is active) now returns malaysia_midnight_utc(malaysia_
+      today()) instead of datetime.utcnow().replace(hour=0,...) - the
+      old version started "today" at UTC midnight, up to 8 hours before
+      Malaysia's actual midnight. ('week'/'month' were left as rolling
+      windows from real "now" - subtracting a fixed duration from now()
+      gives the same instant regardless of which timezone "now" is
+      expressed in, so there was nothing to fix there.)
+    - get_report_summary()'s 30-day timeline (backs Dashboard Audit
+      Trend, Review Volume, and Report & Log's Audit Activity Trend -
+      confirmed to be the exact same endpoint/response, not 3 separate
+      implementations) now anchors its 30-day window on malaysia_today()
+      instead of datetime.utcnow(), and its two GROUP BY DATE(...)
+      queries (review_records.reviewed_at, documents.uploaded_at) now
+      GROUP BY malaysia_date_sql(...) instead - so the timeline's last
+      bucket is always Malaysia's real "today", and each day's counts
+      reflect what actually happened during that Malaysia calendar day.
+    - _audit_trail_query()'s start_date/end_date (the Audit Trail
+      date-range picker) arrive as plain 'YYYY-MM-DD' strings meaning
+      whole Malaysia calendar days; comparing them directly against the
+      naive-UTC reviewed_at column implicitly treated them as UTC
+      midnight, silently dropping the first ~8 Malaysia-morning hours of
+      start_date and cutting end_date off ~8 hours before Malaysia's own
+      end of day. Now converted through malaysia_midnight_utc() - the
+      end bound uses the FOLLOWING day's Malaysia midnight as an
+      exclusive upper bound, so the selected end_date's entire Malaysia
+      calendar day is included, not just up to its own midnight.
+
+  Frontend (auditlens-frontend/) - Finance only:
+    - shared/datetime.util.ts gained 3 new functions alongside the
+      existing formatMalaysiaDateTime(): toMalaysiaDateKey() (UTC
+      ISO string/Date -> 'YYYY-MM-DD' in Asia/Kuala_Lumpur, via
+      Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }) -
+      confirmed empirically, not assumed, that 'en-CA' formats as plain
+      YYYY-MM-DD with no locale-punctuation surprises), isSameMalaysiaMonth()
+      (compares two values' Malaysia year+month), and malaysiaMonthIndex()
+      (0-based Malaysia month index, for a direct `months[...]` lookup).
+    - finance-home.component.ts: replaced all 6 call sites that computed
+      "this month"/a chart's month bucket via `new Date(x).getMonth()`/
+      `.getFullYear()` (which use whichever timezone the VIEWER's own
+      machine happens to be set to - only "correct" by coincidence for a
+      viewer whose machine is already on Malaysia time, exactly the same
+      class of bug the previous commit fixed for individual timestamp
+      display) with the new shared helpers: loadDocuments()'s
+      thisMonthDocs filter (feeds the KPI cards, Document Status
+      Overview, Priority Finance Action panel), computeDocumentTypeDistribution(),
+      computeCorrectionAnalysis(), renderUploadTrendChart()'s month
+      bucketing, renderOcrPerfChart(), and renderOcrConfidenceChart().
+      finance-report.component.ts/finance-transactions.component.ts/
+      finance-corrections.component.ts were checked and confirmed to
+      have no date/month-comparison logic of their own (grep across the
+      whole finance/ directory found zero other getMonth()/getFullYear()/
+      getDate() call sites) - their charts are purely categorical
+      (status/vendor/match breakdowns), nothing to fix there.
+    - Date-only business fields untouched throughout: grepped the full
+      diff for invoice_date/po_date/receipt_date/response_due_date/
+      gr_date and confirmed zero matches.
+
+Why:
+  Individual timestamps already displayed correctly in Asia/Kuala_Lumpur
+  (the previous commit's fix), but charts and daily summaries were still
+  grouping by the raw UTC calendar date/month underneath - so a chart
+  could visibly end "yesterday" by Malaysia's clock even though every
+  individual timestamp on the same page was already showing the right
+  Malaysia time. Fixing this required converting to Asia/Kuala_Lumpur
+  BEFORE extracting the calendar unit used for grouping, not just before
+  display - a distinct bug class from the previous commit, worth its own
+  shared helper.
+
+Build result:
+  Backend: all 33 suites in tests/extraction/run_all.py pass, plus
+  `python -c "import app"` clean (none of the touched logic is exercised
+  by mocked-DB tests, so this is confirming no import/syntax regression,
+  not functional coverage - the functional proof is the live
+  verification below). Frontend: `ng build --configuration development`
+  and `ng build --configuration production` both clean (the production
+  budget warnings printed are pre-existing, unrelated to this change).
+
+  Live verification against the real local dev stack (python app.py +
+  ng serve, real Postgres, real login): inserted review_records.
+  reviewed_at = '2026-08-02 21:19:00' (the exact value from the task's
+  verification requirement) for INV-NBI-2026-0017, action='approved'.
+  GET /auditor/report/summary?period=month: the returned timeline's
+  2026-08-03 entry showed approved=1 and its 2026-08-02 entry showed
+  approved=0 - confirmed the UTC instant is grouped under 03 Aug 2026,
+  exactly as required, and the timeline's LAST entry is 2026-08-03 (not
+  02 Aug) - Malaysia's real "today". GET /auditor/report/summary?
+  period=today: stats.approved=1 - confirmed the "Today" KPI filter
+  also correctly includes it. GET /auditor/report/audit-trail with
+  start_date=end_date=2026-08-03 included the entry; the identical
+  query for 2026-08-02 did not - confirmed the Audit Trail date-range
+  filter's day boundary is exact, not just "loosely inclusive". In the
+  actual browser: Auditor Home and Report & Log both rendered their
+  trend charts with zero console errors, screenshot-confirmed the
+  Activity Trend chart's rightmost data point on 03 Aug reflecting the
+  inserted entry. Logged in as a fresh finance_executive fixture
+  account and confirmed Finance Home renders cleanly with zero console
+  errors (this account had no uploaded documents, so this proves the
+  refactored code path doesn't break on empty data, not the month-
+  boundary arithmetic itself - that was verified directly via Node
+  against the exact 16:00 UTC / Malaysia-midnight boundary: 15:59 UTC ->
+  02 Aug, 16:00 UTC -> 03 Aug, matching malaysia_midnight_utc()'s Python
+  math exactly). All test data (the review_records row, the finance
+  fixture account and its audit_logs row) deleted afterward; both dev
+  servers stopped by exact PID.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub - Render should auto-deploy both the backend
+     (Docker web service) and the frontend static site.
+  2. Backend redeploy required (helpers/time_format.py, requirements.txt,
+     routes/auditor.py changed) - the new tzdata dependency needs
+     `pip install` to run as part of that redeploy (already handled by
+     the existing Dockerfile's `pip install -r requirements.txt`, no
+     manual step).
+  3. No schema/migration, no new environment variables.
+  4. Nothing retroactive: this changes how NEW aggregation queries
+     compute their day/month buckets and how NEW frontend chart
+     groupings compute "this month" - it doesn't rewrite any stored
+     data, so every chart simply reflects the correct Malaysia grouping
+     from this deploy forward.
+
+Rollback instructions:
+  Revert this one commit. No schema or data change either way -
+  reverting restores the previous UTC-calendar-unit grouping in
+  /auditor/report/summary's timeline and _period_start('today'), the
+  previous unbounded-by-Malaysia Audit Trail date-range comparison, and
+  Finance Home's previous browser-local-timezone "this month"/month-
+  bucket logic. The tzdata dependency can stay even after a rollback -
+  it's inert unless something imports zoneinfo.

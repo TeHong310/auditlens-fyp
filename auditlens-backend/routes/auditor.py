@@ -18,7 +18,7 @@ from helpers.transaction_packages import (
     get_transaction_authenticity_summary, get_package, get_package_documents, get_relationship_preview,
 )
 from config import Config
-from helpers.time_format import to_utc_iso
+from helpers.time_format import to_utc_iso, malaysia_today, malaysia_midnight_utc, malaysia_date_sql
 
 auditor_bp = Blueprint('auditor', __name__)
 
@@ -1693,9 +1693,12 @@ def get_auditor_transaction_detail(package_id):
 # Auditor only
 # ------------------------------------------------------------
 def _period_start(period):
-    now = datetime.utcnow()
     if period == 'today':
-        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Malaysia midnight, not UTC midnight (16:00 UTC the previous
+        # day) - a plain `datetime.utcnow().replace(hour=0, ...)` would
+        # start "today" up to 8 hours too early for a Malaysia auditor.
+        return malaysia_midnight_utc(malaysia_today())
+    now = datetime.utcnow()
     if period == 'week':
         return now - timedelta(days=7)
     if period == 'month':
@@ -1809,29 +1812,32 @@ def get_report_summary():
             },
         }
 
-        # ── Timeline: always the last 30 days, regardless of `period` ──
-        thirty_days_ago = datetime.utcnow() - timedelta(days=29)
-        thirty_days_ago = thirty_days_ago.replace(hour=0, minute=0, second=0, microsecond=0)
+        # ── Timeline: always the last 30 Malaysia calendar days
+        # (including today), regardless of `period` ──
+        thirty_days_ago_myt = malaysia_today() - timedelta(days=29)
+        thirty_days_ago_utc = malaysia_midnight_utc(thirty_days_ago_myt)
+        reviewed_day_sql = malaysia_date_sql('rr.reviewed_at')
+        uploaded_day_sql = malaysia_date_sql('uploaded_at')
 
         cursor.execute(
-            '''SELECT DATE(rr.reviewed_at) AS day, rr.action, COUNT(*) AS cnt
+            f'''SELECT {reviewed_day_sql} AS day, rr.action, COUNT(*) AS cnt
                FROM review_records rr
                JOIN users u ON rr.reviewed_by = u.user_id
                WHERE u.role = 'auditor' AND rr.action IN ('approved', 'returned')
                  AND rr.reviewed_at >= %s
-               GROUP BY DATE(rr.reviewed_at), rr.action''',
-            (thirty_days_ago,)
+               GROUP BY {reviewed_day_sql}, rr.action''',
+            (thirty_days_ago_utc,)
         )
         action_by_day = {}
         for row in cursor.fetchall():
             action_by_day.setdefault(row['day'], {})[row['action']] = row['cnt']
 
         cursor.execute(
-            '''SELECT DATE(uploaded_at) AS day, COUNT(*) AS cnt
+            f'''SELECT {uploaded_day_sql} AS day, COUNT(*) AS cnt
                FROM documents
                WHERE status IN ('under_review', 'resubmitted') AND uploaded_at >= %s
-               GROUP BY DATE(uploaded_at)''',
-            (thirty_days_ago,)
+               GROUP BY {uploaded_day_sql}''',
+            (thirty_days_ago_utc,)
         )
         pending_by_day = {row['day']: row['cnt'] for row in cursor.fetchall()}
 
@@ -1839,7 +1845,7 @@ def get_report_summary():
 
         timeline = []
         for i in range(30):
-            day = (thirty_days_ago + timedelta(days=i)).date()
+            day = thirty_days_ago_myt + timedelta(days=i)
             day_actions = action_by_day.get(day, {})
             timeline.append({
                 'date':      day.isoformat(),
@@ -1877,12 +1883,21 @@ def _audit_trail_query(action_filter, start_date, end_date):
             where.append('rr.action = %s')
             params.append(db_action)
 
+    # start_date/end_date arrive as plain 'YYYY-MM-DD' strings from the
+    # Audit Trail date-range picker - the auditor means whole Malaysia
+    # calendar days, not UTC ones. Comparing the naive-UTC reviewed_at
+    # column directly against those strings would implicitly treat them
+    # as UTC midnight (up to 8h into the Malaysia morning), silently
+    # dropping the first part of start_date and cutting off end_date
+    # ~8 hours before Malaysia's own end of day. end_date's bound is
+    # exclusive (< the FOLLOWING Malaysia midnight) so it correctly
+    # includes the entire selected day, not just up to its own midnight.
     if start_date:
         where.append('rr.reviewed_at >= %s')
-        params.append(start_date)
+        params.append(malaysia_midnight_utc(date.fromisoformat(start_date)))
     if end_date:
-        where.append('rr.reviewed_at <= %s')
-        params.append(end_date)
+        where.append('rr.reviewed_at < %s')
+        params.append(malaysia_midnight_utc(date.fromisoformat(end_date) + timedelta(days=1)))
 
     where_clause = ' AND '.join(where)
     base = f'''FROM review_records rr
