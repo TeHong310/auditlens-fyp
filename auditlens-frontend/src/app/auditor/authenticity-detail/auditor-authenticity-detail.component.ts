@@ -1056,6 +1056,15 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   // either. ──
 
   get supportingEvidenceItems(): SupportingEvidenceItem[] {
+    // Invoice: the Supporting Evidence card is entirely redundant with
+    // the Invoice Parties panel above (Issuer/Buyer/Stamp already shown
+    // there, each with its own precise location) — its only remaining
+    // content would be the logo/signature rows, which already live in
+    // View Full Analysis > Document Evidence (signature already reads
+    // "Not Required" there, since it's never a required signal). PO/GR
+    // are untouched — their Supporting Evidence card still summarizes
+    // company_logo/supplier-info positives that have no other home.
+    if (this.documentType === 'invoice') return [];
     const items: SupportingEvidenceItem[] = [];
     for (const row of this.documentEvidenceRows) {
       if (items.length >= 3) break;

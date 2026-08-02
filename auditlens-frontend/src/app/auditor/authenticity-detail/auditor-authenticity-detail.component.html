@@ -215,7 +215,10 @@
           <!-- 3. Supporting Evidence — up to 3 concise items outside the
                new Parties panel (company logo, signature) — never
                repeats Issuer/Buyer/Stamp, which the Parties panel above
-               already shows with a precise location. -->
+               already shows with a precise location. Never rendered for
+               Invoice at all (supportingEvidenceItems returns [] for
+               that type) — entirely redundant with Invoice Parties;
+               PO/GR are unaffected. -->
           <div class="checklist-box evidence-card" *ngIf="supportingEvidenceItems.length">
             <p class="section-label"><i class="ph-duotone ph-check-circle"></i> Supporting Evidence</p>
             <div class="attention-row"
