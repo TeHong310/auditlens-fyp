@@ -39,7 +39,10 @@
       </div>
     </div>
 
-    <!-- Overall Status Banner -->
+    <!-- Overall Status Banner — priority: Send Back > Need Review > a
+         pending Medium/High anomaly > the matching result, see
+         getBannerClass()/Text()/Subtitle() for the cascade. A PASS
+         match never displays "Ready for approval" on its own. -->
     <div class="status-banner" [ngClass]="getBannerClass()">
       <span class="banner-icon"><i class="ph-duotone" [ngClass]="getBannerIcon()"></i></span>
       <div class="banner-text">
@@ -49,6 +52,22 @@
           Uploaded {{ formatDate(comparison.invoice.uploaded_at) }}
           <span *ngIf="comparison.invoice.ocr_confidence !== null"> • OCR Confidence {{ comparison.invoice.ocr_confidence }}%</span>
         </p>
+      </div>
+    </div>
+
+    <!-- Risk Panel — a standalone, always-visible callout whenever a
+         pending Medium/High anomaly exists on this case, independent of
+         whatever the banner above is currently showing (so it stays
+         visible even once a Need Review/Send Back decision is also
+         reflected there). Reuses the SAME advisory-banner styling as
+         the Authenticity Warning above, not new CSS. Never shown for a
+         low-severity or already reviewed/dismissed anomaly — not every
+         anomaly is treated as requiring follow-up. -->
+    <div class="authenticity-warning-banner" *ngIf="hasMaterialFinding">
+      <span class="banner-icon"><i class="ph-duotone ph-warning-octagon"></i></span>
+      <div class="banner-text">
+        <p class="banner-title">Risk Follow-up Required</p>
+        <p class="banner-subtitle">{{ materialFindingsPanelText }}</p>
       </div>
     </div>
 
@@ -110,13 +129,18 @@
     </div>
 
     <!-- Case Summary — a compact, always-available snapshot (no AI call
-         needed) that keeps 4 distinct facts clearly separate: the
-         deterministic matching result, what anomalies exist on record
-         (never implying "reviewed" means "cleared"), which of those
-         actually block approval, and whether the Auditor has made a
-         final decision yet. See caseAnomalySummary/caseBlockingIssues/
-         caseFinalDecision — all derived from data this page already
-         loads (comparison, riskIndicators, reviewHistory). -->
+         needed) that keeps 5 distinct facts clearly separate: the
+         deterministic matching result (Matching — untouched by anything
+         below it), what the Auditor actually decided or hasn't yet
+         (Audit Decision), how risky the open findings look (Overall
+         Risk), what's still open on record (never implying "reviewed"
+         means "cleared"), and which of those actually block approval.
+         Matching may read PASS while Audit Decision reads NEED REVIEW —
+         that's the point: a clean match is never read as a final
+         decision. See caseFinalDecision/openFindingsSummary/
+         overallRiskLevel/caseBlockingIssues — all derived from data
+         this page already loads (comparison, riskIndicators,
+         reviewHistory). -->
     <div class="exception-summary-card" *ngIf="comparison">
       <p class="es-heading"><i class="ph-duotone ph-clipboard-text"></i> Case Summary</p>
       <div class="es-row">
@@ -124,16 +148,20 @@
         <span class="risk-chip" [ngClass]="matchingStatusChipClass()">{{ overallStatus }}</span>
       </div>
       <div class="es-row">
-        <span class="es-label">Anomalies</span>
-        <span class="es-value">{{ caseAnomalySummary }}</span>
+        <span class="es-label">Audit Decision</span>
+        <span class="risk-chip" [ngClass]="auditDecisionChipClass()">{{ caseFinalDecision | uppercase }}</span>
+      </div>
+      <div class="es-row">
+        <span class="es-label">Overall Risk</span>
+        <span class="risk-chip" [ngClass]="overallRiskChipClass()">{{ overallRiskLevel }}</span>
+      </div>
+      <div class="es-row">
+        <span class="es-label">Open Findings</span>
+        <span class="es-value">{{ openFindingsSummary }}</span>
       </div>
       <div class="es-row">
         <span class="es-label">Blocking</span>
         <span class="es-value">{{ caseBlockingIssues }}</span>
-      </div>
-      <div class="es-row">
-        <span class="es-label">Decision</span>
-        <span class="es-value">{{ caseFinalDecision }}</span>
       </div>
     </div>
 

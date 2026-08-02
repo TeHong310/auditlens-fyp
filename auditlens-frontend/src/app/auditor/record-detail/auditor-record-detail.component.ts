@@ -374,27 +374,22 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return 'Pending';
   }
 
-  // ── Case Summary (Matching Status / Anomalies / Blocking Issues /
-  // Final Decision) — a compact, ALWAYS-available snapshot built purely
-  // from data this page already loads on open (comparison, riskIndicators,
-  // reviewHistory), no AI call required. Keeps this factual summary
-  // clearly separate from the AI Assistant panel below it (which is only
-  // populated once the auditor explicitly asks for it), and from the
-  // Auditor's own Approve/Send Back/Need Review decision, which is what
-  // actually changes "Final Decision" away from "Awaiting Auditor". ──
+  // ── Case Summary (Matching Status / Audit Decision / Overall Risk /
+  // Open Findings / Blocking Issues) — a compact, ALWAYS-available
+  // snapshot built purely from data this page already loads on open
+  // (comparison, riskIndicators, reviewHistory), no AI call required.
+  // Matching (the matching engine's own PASS/REVIEW/PARTIAL verdict)
+  // and Audit Decision (what the Auditor actually decided, or hasn't
+  // yet) are DELIBERATELY two separate facts here — a PASS match never
+  // implies "Ready for approval" on its own; see getBannerText/
+  // Subtitle below, which apply the SAME Send Back > Need Review >
+  // material-finding priority to the page's main status banner. ──
 
-  get caseAnomalySummary(): string {
-    if (!this.riskIndicators.length) return 'No anomalies recorded.';
-    const active = this.riskIndicators.filter(a => a.classification !== 'dismissed');
-    if (!active.length) return 'No active anomalies — every finding was dismissed as a false positive.';
-    if (active.length === 1) {
-      const a = active[0];
-      const statusWord = a.status === 'reviewed' ? 'reviewed' : 'pending';
-      return `1 ${statusWord} ${this.riskTypeLabel(a.anomaly_type)} finding`;
-    }
-    const reviewedCount = active.filter(a => a.status === 'reviewed').length;
-    const pendingCount = active.filter(a => a.status === 'pending').length;
-    return `${active.length} findings recorded (${reviewedCount} reviewed, ${pendingCount} pending)`;
+  // Single source of truth for "what did the Auditor last decide" —
+  // reviewHistory is ASC-ordered (GET /reviews/history), so the last
+  // element is the most recent action; null before any decision.
+  private get latestReviewAction(): string | null {
+    return this.reviewHistory.length ? this.reviewHistory[this.reviewHistory.length - 1].action : null;
   }
 
   get caseBlockingIssues(): string {
@@ -404,11 +399,71 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   }
 
   get caseFinalDecision(): string {
-    if (!this.reviewHistory.length) return 'Awaiting Auditor';
-    const last = this.reviewHistory[this.reviewHistory.length - 1]; // ASC order from GET /reviews/history
-    if (last.action === 'approved') return 'Approved';
-    if (last.action === 'returned') return 'Sent Back to Finance';
+    const action = this.latestReviewAction;
+    if (action === 'approved') return 'Approved';
+    if (action === 'returned') return 'Sent Back to Finance';
+    if (action === 'need_review') return 'Need Review';
     return 'Awaiting Auditor';
+  }
+
+  auditDecisionChipClass(): string {
+    const action = this.latestReviewAction;
+    if (action === 'returned') return 'risk-high';
+    if (action === 'need_review') return 'risk-medium';
+    return 'risk-low'; // approved, or no decision yet — neither is itself a risk signal
+  }
+
+  // "Open" = every anomaly still on record that wasn't dismissed as a
+  // false positive (pending OR reviewed) — reviewed never means
+  // cleared, so it stays counted as an open finding here too.
+  get openFindings(): any[] {
+    return this.riskIndicators.filter(a => a.status !== 'dismissed');
+  }
+
+  get openFindingsSummary(): string {
+    if (!this.openFindings.length) return 'None';
+    if (this.openFindings.length === 1) {
+      const a = this.openFindings[0];
+      return `1 ${this.riskStatusLabel(a.status)} ${this.riskTypeLabel(a.anomaly_type)}`;
+    }
+    return this.openFindings.map(a => `${this.riskStatusLabel(a.status)} ${this.riskTypeLabel(a.anomaly_type)}`).join(', ');
+  }
+
+  get overallRiskLevel(): string {
+    if (this.openFindings.some(a => a.severity === 'high')) return 'HIGH';
+    if (this.openFindings.some(a => a.severity === 'medium')) return 'MEDIUM';
+    if (this.openFindings.length) return 'LOW';
+    return 'NONE';
+  }
+
+  overallRiskChipClass(): string {
+    if (this.overallRiskLevel === 'HIGH') return 'risk-high';
+    if (this.overallRiskLevel === 'MEDIUM') return 'risk-medium';
+    return 'risk-low'; // LOW or NONE
+  }
+
+  // "Material" = pending AND medium/high severity — the bar for the
+  // amber "Risk Review Required" banner state and the prominent risk
+  // panel below. Deliberately NOT every anomaly (a low-severity or
+  // already reviewed/dismissed finding never trips this) — the task
+  // this implements explicitly rules out auto-classifying every
+  // anomaly as blocking/urgent.
+  get materialFindings(): any[] {
+    return this.riskIndicators.filter(a => a.status === 'pending' && (a.severity === 'medium' || a.severity === 'high'));
+  }
+
+  get hasMaterialFinding(): boolean {
+    return this.materialFindings.length > 0;
+  }
+
+  get materialFindingsPanelText(): string {
+    if (!this.materialFindings.length) return '';
+    if (this.materialFindings.length === 1) {
+      const a = this.materialFindings[0];
+      const severityWord = a.severity === 'high' ? 'High' : 'Medium';
+      return `1 pending ${severityWord} ${this.riskTypeLabel(a.anomaly_type)} anomaly requires Auditor follow-up.`;
+    }
+    return `${this.materialFindings.length} pending Medium/High anomalies require Auditor follow-up.`;
   }
 
   // ── Send-Back cycles + review history (Features 4, 5) ───
@@ -899,7 +954,18 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return this.comparison?.match_result?.overall_status || 'PARTIAL';
   }
 
+  // Priority cascade — Send Back > Need Review > a pending Medium/High
+  // anomaly > the underlying matching result. Deliberately checked
+  // BEFORE overallStatus in every method below: a PASS matching result
+  // must never override an outstanding Auditor decision or an
+  // unresolved material finding just because the fields themselves
+  // matched. Matching (Case Summary's own "Matching" row/chip, and
+  // matchingStatusChipClass() below) is intentionally untouched by any
+  // of this — it always reflects the raw matching engine verdict.
   getBannerClass(): string {
+    const action = this.latestReviewAction;
+    if (action === 'returned') return 'banner-fail';
+    if (action === 'need_review' || this.hasMaterialFinding) return 'banner-partial';
     if (this.overallStatus === 'PASS') return 'banner-pass';
     if (this.overallStatus === 'FAIL') return 'banner-fail';
     // REVIEW reuses the same amber styling as PARTIAL (banner-partial) —
@@ -919,12 +985,19 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   }
 
   getBannerIcon(): string {
+    const action = this.latestReviewAction;
+    if (action === 'returned') return 'ph-x-circle';
+    if (action === 'need_review' || this.hasMaterialFinding) return 'ph-warning';
     if (this.overallStatus === 'PASS') return 'ph-check-circle';
     if (this.overallStatus === 'FAIL') return 'ph-x-circle';
     return 'ph-warning';
   }
 
   getBannerText(): string {
+    const action = this.latestReviewAction;
+    if (action === 'returned') return 'Correction Required';
+    if (action === 'need_review') return 'Further Review Required';
+    if (this.hasMaterialFinding) return 'Risk Review Required';
     if (this.overallStatus === 'PASS') return 'All Fields Match';
     if (this.overallStatus === 'FAIL') return 'Mismatch Detected';
     if (this.overallStatus === 'REVIEW') return 'Review Required';
@@ -932,6 +1005,10 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   }
 
   getBannerSubtitle(): string {
+    const action = this.latestReviewAction;
+    if (action === 'returned') return 'Sent back to Finance — awaiting correction';
+    if (action === 'need_review') return 'Marked by Auditor for further review before a final decision';
+    if (this.hasMaterialFinding) return this.materialFindingsPanelText;
     if (this.overallStatus === 'PASS') return 'Ready for approval';
     if (this.overallStatus === 'FAIL') return 'Review required — see highlighted rows';
     if (this.overallStatus === 'REVIEW') return 'Some fields differ — see highlighted rows';

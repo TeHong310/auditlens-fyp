@@ -5,18 +5,22 @@ import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 
-type RiskBucket = 'missing_docs' | 'high_risk' | 'passed' | 'pending';
-type Filter = 'all' | 'pending' | 'high_risk' | 'missing_docs' | 'passed';
+type RiskBucket = 'missing_docs' | 'high_risk' | 'needs_review' | 'passed' | 'pending';
+type Filter = 'all' | 'pending' | 'high_risk' | 'needs_review' | 'missing_docs' | 'passed';
 
 // Enterprise V3 Phase 13 — dedicated auditor Review Queue page (UI
 // only). Reads the SAME GET /auditor/transactions endpoint the
 // existing Auditor Home dashboard already uses (Phase 6) — no new
-// backend route, no new matching/risk calculation. matching_status is
-// the existing Enterprise Matching V2-derived verdict computed server-
-// side; the "risk level" shown here is a pure client-side bucketing of
-// that existing status plus the existing po_count/gr_count fields
-// (missing documents outranks a matching review, which outranks a
-// clean pass) — never a new assessment of the underlying documents.
+// backend route, no new matching/risk calculation of its own.
+// matching_status (shown in its own "Matching Status" column) is the
+// existing Enterprise Matching V2-derived verdict, deliberately left
+// untouched by any of this — the "risk level" bucketing below instead
+// reads the server-computed workflow_status/anomaly_risk_level/
+// has_material_finding fields (an explicit Auditor Need Review
+// decision or a pending Medium/High anomaly outranks missing
+// documents, which outranks a matching review, which outranks a clean
+// pass), so Matching can read PASS while Risk Level still flags the
+// case for another look.
 @Component({
   selector: 'app-auditor-review-queue',
   standalone: true,
@@ -73,15 +77,32 @@ export class AuditorReviewQueueComponent implements OnInit {
   // routes/auditor.py's own _classify_exception() already uses
   // (mismatch/review outranks missing_document outranks a clean case). ──
 
+  // 'needs_review' outranks everything else — an explicit Auditor Need
+  // Review decision, or a pending Medium/High anomaly, means this
+  // transaction needs another look regardless of matching_status/
+  // po_count/gr_count. Never every anomaly: a low-severity or already
+  // reviewed/dismissed finding doesn't set has_material_finding, so a
+  // clean case still reaches 'passed' as before.
   riskBucket(txn: any): RiskBucket {
+    if (txn.workflow_status === 'NEED REVIEW' || txn.has_material_finding) return 'needs_review';
     if (!txn.po_count || !txn.gr_count) return 'missing_docs';
     if (txn.matching_status === 'REVIEW') return 'high_risk';
     if (txn.matching_status === 'PASS') return 'passed';
     return 'pending';
   }
 
+  // needs_review's severity is read from the real anomaly data instead
+  // of a fixed label, so a Medium anomaly reads "Medium Risk" here —
+  // the same figure Record Detail's own Overall Risk shows for the
+  // same case, never overstated to "High Risk".
   riskLabel(txn: any): string {
-    switch (this.riskBucket(txn)) {
+    const bucket = this.riskBucket(txn);
+    if (bucket === 'needs_review') {
+      if (txn.anomaly_risk_level === 'HIGH') return 'High Risk';
+      if (txn.anomaly_risk_level === 'MEDIUM') return 'Medium Risk';
+      return 'Needs Review';
+    }
+    switch (bucket) {
       case 'missing_docs': return 'Medium Risk';
       case 'high_risk':    return 'High Risk';
       case 'passed':       return 'Low Risk';
@@ -90,7 +111,11 @@ export class AuditorReviewQueueComponent implements OnInit {
   }
 
   riskClass(txn: any): string {
-    switch (this.riskBucket(txn)) {
+    const bucket = this.riskBucket(txn);
+    if (bucket === 'needs_review') {
+      return txn.anomaly_risk_level === 'HIGH' ? 'risk-high' : 'risk-medium';
+    }
+    switch (bucket) {
       case 'missing_docs': return 'risk-medium';
       case 'high_risk':    return 'risk-high';
       case 'passed':       return 'risk-low';
@@ -104,6 +129,10 @@ export class AuditorReviewQueueComponent implements OnInit {
 
   get highRiskCount(): number {
     return this.transactions.filter(t => this.riskBucket(t) === 'high_risk').length;
+  }
+
+  get needsReviewCount(): number {
+    return this.transactions.filter(t => this.riskBucket(t) === 'needs_review').length;
   }
 
   get missingDocsCount(): number {

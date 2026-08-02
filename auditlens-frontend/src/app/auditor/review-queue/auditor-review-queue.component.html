@@ -33,6 +33,15 @@
     <div class="stat-card">
       <div class="stat-top">
         <span class="stat-dot orange"></span>
+        <span class="stat-label">Needs Review</span>
+      </div>
+      <p class="stat-value">{{ needsReviewCount }}</p>
+      <p class="stat-sub">Auditor decision or pending anomaly</p>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-top">
+        <span class="stat-dot orange"></span>
         <span class="stat-label">Missing Documents</span>
       </div>
       <p class="stat-value">{{ missingDocsCount }}</p>
@@ -61,6 +70,9 @@
       </button>
       <button class="filter-chip" [class.active]="activeFilter === 'high_risk'" (click)="setFilter('high_risk')">
         High Risk <span class="chip-count">{{ highRiskCount }}</span>
+      </button>
+      <button class="filter-chip" [class.active]="activeFilter === 'needs_review'" (click)="setFilter('needs_review')">
+        Needs Review <span class="chip-count">{{ needsReviewCount }}</span>
       </button>
       <button class="filter-chip" [class.active]="activeFilter === 'missing_docs'" (click)="setFilter('missing_docs')">
         Missing Documents <span class="chip-count">{{ missingDocsCount }}</span>

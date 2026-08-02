@@ -1473,6 +1473,66 @@ def _get_transaction_matching_summary(cursor, package_id):
     }
 
 
+def _latest_review_action_for_documents(cursor, document_ids):
+    """The action of the single most recent review_records row across
+    ALL given document_ids (a transaction package can have several
+    invoices; a standalone row has one) — 'need_review'/'returned'/
+    'approved', or None if the case has never been decided on. Always
+    the LATEST action regardless of history, so a need_review later
+    superseded by an approve/send-back is correctly excluded from being
+    counted as still needing review."""
+    if not document_ids:
+        return None
+    cursor.execute(
+        '''SELECT action FROM review_records
+           WHERE document_id = ANY(%s)
+           ORDER BY reviewed_at DESC LIMIT 1''',
+        (document_ids,)
+    )
+    row = cursor.fetchone()
+    return row['action'] if row else None
+
+
+def _anomaly_risk_for_documents(cursor, document_ids):
+    """(risk_level, has_material_finding) computed from every non-
+    dismissed anomaly across document_ids — mirrors Record Detail's own
+    Overall Risk / material-finding rules (see auditor-record-detail.
+    component.ts) so the dashboard/queue never disagrees with the
+    record's own page about how risky it is. has_material_finding is
+    specifically "pending AND medium/high severity" — the same bar
+    Record Detail uses for its amber 'Risk Review Required' state; a
+    low-severity or already-reviewed/dismissed anomaly never counts, so
+    this never classifies every anomaly as material."""
+    if not document_ids:
+        return 'NONE', False
+    cursor.execute(
+        '''SELECT severity, status FROM anomalies
+           WHERE invoice_document_id = ANY(%s) AND status != 'dismissed' ''',
+        (document_ids,)
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return 'NONE', False
+    severities = {r['severity'] for r in rows}
+    risk_level = 'HIGH' if 'high' in severities else 'MEDIUM' if 'medium' in severities else 'LOW'
+    has_material = any(r['status'] == 'pending' and r['severity'] in ('medium', 'high') for r in rows)
+    return risk_level, has_material
+
+
+def _workflow_status_for(matching_status, latest_review_action):
+    """The Auditor's actual decision state, distinct from matching_
+    status (the matching engine's own PASS/REVIEW/PARTIAL verdict,
+    left completely untouched elsewhere in this file) — a Send Back or
+    Need Review decision always outranks a clean matching PASS, so a
+    record the auditor explicitly flagged never displays as if nothing
+    were outstanding."""
+    if latest_review_action == 'returned':
+        return 'SEND BACK'
+    if latest_review_action == 'need_review':
+        return 'NEED REVIEW'
+    return matching_status
+
+
 # ------------------------------------------------------------
 # TRANSACTION QUEUE (Auditor Dashboard)
 # GET /auditor/transactions
@@ -1508,6 +1568,14 @@ def get_auditor_transactions():
             else:
                 matching_status = 'REVIEW'
 
+            # The Auditor's actual decision (review_records) and open-
+            # anomaly risk, both scoped across every invoice in this
+            # package — matching_status above is left untouched (still
+            # the pure matching-engine verdict; "Matching may remain
+            # PASS" per the Record Detail fix this mirrors).
+            latest_review_action = _latest_review_action_for_documents(cursor, invoice_ids)
+            anomaly_risk_level, has_material_finding = _anomaly_risk_for_documents(cursor, invoice_ids)
+
             rows.append({
                 'kind':                  'transaction_package',
                 'transaction_package_id': pkg['id'],
@@ -1518,6 +1586,10 @@ def get_auditor_transactions():
                 'po_count':              len(docs['purchase_orders']),
                 'gr_count':              len(docs['goods_receipts']),
                 'matching_status':       matching_status,
+                'latest_review_action':  latest_review_action,
+                'workflow_status':       _workflow_status_for(matching_status, latest_review_action),
+                'anomaly_risk_level':    anomaly_risk_level,
+                'has_material_finding':  has_material_finding,
                 'package_status':        pkg['status'],
                 'created_at':            pkg['created_at'].isoformat() if pkg['created_at'] else None,
                 'primary_document_id':   invoice_ids[0] if invoice_ids else None,
@@ -1539,6 +1611,8 @@ def get_auditor_transactions():
             matching_status = _matching_status_for_comparison(comparison) if comparison else 'PENDING'
             po = comparison.get('po') if comparison else None
             gr = comparison.get('gr') if comparison else None
+            latest_review_action = _latest_review_action_for_documents(cursor, [doc['document_id']])
+            anomaly_risk_level, has_material_finding = _anomaly_risk_for_documents(cursor, [doc['document_id']])
             rows.append({
                 'kind':                  'standalone_invoice',
                 'transaction_package_id': None,
@@ -1549,6 +1623,10 @@ def get_auditor_transactions():
                 'po_count':              1 if po else 0,
                 'gr_count':              1 if gr else 0,
                 'matching_status':       matching_status,
+                'latest_review_action':  latest_review_action,
+                'workflow_status':       _workflow_status_for(matching_status, latest_review_action),
+                'anomaly_risk_level':    anomaly_risk_level,
+                'has_material_finding':  has_material_finding,
                 'package_status':        doc['status'],
                 'created_at':            doc['uploaded_at'].isoformat() if doc['uploaded_at'] else None,
                 'primary_document_id':   doc['document_id'],

@@ -51,6 +51,7 @@ def check(label, condition, detail=''):
 class _Fixture:
     def __init__(self):
         self.doc_ids, self.po_ids, self.gr_ids, self.package_ids = [], [], [], []
+        self.anomaly_ids, self.review_record_ids = [], []
         self.uid_finance = None
         self.uid_auditor = None
 
@@ -129,9 +130,39 @@ class _Fixture:
         self.package_ids.append(pkg['id'])
         return pkg
 
+    def anomaly(self, invoice_doc_id, anomaly_type, severity, status='pending'):
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO anomalies (invoice_document_id, anomaly_type, severity, status) "
+            "VALUES (%s, %s, %s, %s) RETURNING anomaly_id",
+            (invoice_doc_id, anomaly_type, severity, status))
+        anomaly_id = cur.fetchone()[0]
+        conn.commit()
+        conn.close()
+        self.anomaly_ids.append(anomaly_id)
+        return anomaly_id
+
+    def review_record(self, document_id, action):
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO review_records (document_id, reviewed_by, action, remarks) "
+            "VALUES (%s, %s, %s, 'test') RETURNING review_id",
+            (document_id, self.uid_auditor, action))
+        review_id = cur.fetchone()[0]
+        conn.commit()
+        conn.close()
+        self.review_record_ids.append(review_id)
+        return review_id
+
     def __exit__(self, *exc):
         conn = get_db_connection()
         cur = conn.cursor()
+        if self.review_record_ids:
+            cur.execute('DELETE FROM review_records WHERE review_id = ANY(%s)', (self.review_record_ids,))
+        if self.anomaly_ids:
+            cur.execute('DELETE FROM anomalies WHERE anomaly_id = ANY(%s)', (self.anomaly_ids,))
         if self.doc_ids:
             cur.execute('DELETE FROM authenticity_checks WHERE document_id = ANY(%s)', (self.doc_ids,))
         if self.package_ids:
@@ -392,12 +423,88 @@ def run_case_authenticity_summary_no_false_failures():
         check('overall_status becomes REVIEW REQUIRED with a genuine warning', summary2['overall_status'] == 'REVIEW REQUIRED', summary2)
 
 
+# ============================================================
+# Additional Requirement: /auditor/transactions surfaces the Auditor's
+# own Need Review decision and anomaly-driven risk, separately from
+# matching_status (which stays the pure matching-engine verdict) — the
+# exact INV-NBI-2026-0017 scenario (matching PASS, one pending Medium
+# Round Amount anomaly, latest decision is need_review).
+# ============================================================
+
+@_skip_if_db_unavailable
+def run_case_workflow_status_reflects_need_review_not_matching():
+    print('Additional Requirement: a Need Review decision + pending Medium anomaly shows up as workflow_status/anomaly_risk_level, matching_status stays PASS')
+    with _Fixture() as fx:
+        inv = fx.invoice('INV-NR-1', 'Acme Corp', 100.0, 10, 'PO-NR-1')
+        fx.po(inv, 'PO-NR-1', 'Acme Corp', 10, 100.0)
+        fx.gr(inv, 'GR-NR-1', 'Acme Corp', 10, 'PO-NR-1')
+        # Deliberately no package — hits the standalone_invoice branch,
+        # the same one INV-NBI-2026-0017 itself goes through.
+        fx.anomaly(inv, 'round', 'medium', status='pending')
+        fx.review_record(inv, 'need_review')
+
+        headers = _auditor_headers(fx)
+        resp = _test_client.get('/auditor/transactions', headers=headers)
+        check('200 OK', resp.status_code == 200, resp.get_json())
+        row = next((r for r in resp.get_json() if r.get('primary_document_id') == inv), None)
+        check('row found', row is not None, resp.get_json())
+        if row:
+            check('matching_status is still PASS (untouched by the decision)', row['matching_status'] == 'PASS', row)
+            check('latest_review_action is need_review', row['latest_review_action'] == 'need_review', row)
+            check('workflow_status is NEED REVIEW', row['workflow_status'] == 'NEED REVIEW', row)
+            check('anomaly_risk_level is MEDIUM', row['anomaly_risk_level'] == 'MEDIUM', row)
+            check('has_material_finding is True', row['has_material_finding'] is True, row)
+
+
+@_skip_if_db_unavailable
+def run_case_approve_after_need_review_supersedes_it():
+    print('Additional Requirement: an Approve decision AFTER a Need Review supersedes it — workflow_status reverts to the matching result')
+    with _Fixture() as fx:
+        inv = fx.invoice('INV-NR-2', 'Acme Corp', 100.0, 10, 'PO-NR-2')
+        fx.po(inv, 'PO-NR-2', 'Acme Corp', 10, 100.0)
+        fx.gr(inv, 'GR-NR-2', 'Acme Corp', 10, 'PO-NR-2')
+        fx.review_record(inv, 'need_review')
+        fx.review_record(inv, 'approved')  # later action supersedes
+
+        headers = _auditor_headers(fx)
+        resp = _test_client.get('/auditor/transactions', headers=headers)
+        row = next((r for r in resp.get_json() if r.get('primary_document_id') == inv), None)
+        check('row found', row is not None, resp.get_json())
+        if row:
+            check('latest_review_action is approved (the LATEST action, not need_review)',
+                  row['latest_review_action'] == 'approved', row)
+            check('workflow_status falls back to the matching result (PASS) — not stuck on NEED REVIEW',
+                  row['workflow_status'] == 'PASS', row)
+
+
+@_skip_if_db_unavailable
+def run_case_low_severity_pending_anomaly_is_not_material():
+    print('Additional Requirement: a low-severity pending anomaly does NOT count as a material finding — not every anomaly is treated as blocking')
+    with _Fixture() as fx:
+        inv = fx.invoice('INV-NR-3', 'Acme Corp', 100.0, 10, 'PO-NR-3')
+        fx.po(inv, 'PO-NR-3', 'Acme Corp', 10, 100.0)
+        fx.gr(inv, 'GR-NR-3', 'Acme Corp', 10, 'PO-NR-3')
+        fx.anomaly(inv, 'weekend', 'low', status='pending')
+
+        headers = _auditor_headers(fx)
+        resp = _test_client.get('/auditor/transactions', headers=headers)
+        row = next((r for r in resp.get_json() if r.get('primary_document_id') == inv), None)
+        check('row found', row is not None, resp.get_json())
+        if row:
+            check('anomaly_risk_level is LOW', row['anomaly_risk_level'] == 'LOW', row)
+            check('has_material_finding is False for a low-severity anomaly', row['has_material_finding'] is False, row)
+            check('workflow_status stays the matching result (PASS)', row['workflow_status'] == 'PASS', row)
+
+
 if __name__ == '__main__':
     run_case1_normal_workflow_unchanged()
     run_case2_enterprise_one_transaction_pass_allocated_ai_understands()
     run_case3_returned_correction_keeps_transaction_context()
     run_case4_legacy_invoice_no_package_still_works()
     run_case_authenticity_summary_no_false_failures()
+    run_case_workflow_status_reflects_need_review_not_matching()
+    run_case_approve_after_need_review_supersedes_it()
+    run_case_low_severity_pending_anomaly_is_not_material()
 
     print()
     if FAILURES:

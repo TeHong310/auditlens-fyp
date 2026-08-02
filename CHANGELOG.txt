@@ -16966,3 +16966,165 @@ Rollback instructions:
   anomalies-page frontend files. No data or schema implications either
   way; reverting restores the prior (pre-JOIN) query shape and the
   silent-zeros frontend behavior on a stats failure.
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Root cause: Matching Status (the matching engine's own PASS/REVIEW/
+  PARTIAL verdict) and Audit Decision (what the Auditor actually
+  decided, via review_records - or a system-flagged pending anomaly)
+  were conflated everywhere a case's status was shown. Record Detail's
+  banner/Case Summary "Decision" row only recognized 'approved'/
+  'returned' actions, silently falling back to "Awaiting Auditor" for
+  'need_review' (added in an earlier session, never wired into this
+  display logic). The Auditor Dashboard's "Need Review" KPI and the
+  Review Queue's status/risk columns read ONLY GET /auditor/
+  transactions' matching_status - a field that has never known
+  anything about review_records or anomalies - so a PASS-matching
+  transaction with an explicit Need Review decision and a pending
+  anomaly displayed as if nothing were outstanding everywhere except
+  the History log itself.
+  Backend (auditlens-backend/routes/auditor.py):
+    - New _latest_review_action_for_documents() - the action of the
+      single most recent review_records row across a transaction's
+      invoice document_id(s) (a package can have several); a later
+      approve/send-back naturally supersedes an earlier need_review
+      since it's always the LATEST action, never a union of history.
+    - New _anomaly_risk_for_documents() - (risk_level, has_material_
+      finding) from every non-dismissed anomaly across those same
+      document_ids. has_material_finding is specifically "pending AND
+      medium/high severity" - a low-severity or already reviewed/
+      dismissed anomaly never trips it, so this never auto-classifies
+      every anomaly as urgent.
+    - New _workflow_status_for() - 'SEND BACK'/'NEED REVIEW' when the
+      latest decision says so, else the untouched matching_status.
+    - GET /auditor/transactions (both the transaction-package and
+      standalone-invoice branches) now returns 4 new fields per row:
+      latest_review_action, workflow_status, anomaly_risk_level,
+      has_material_finding - matching_status itself is completely
+      unchanged, still the pure matching-engine verdict.
+  Frontend (auditlens-frontend/src/app/auditor/record-detail/):
+    - auditor-record-detail.component.ts: caseFinalDecision fixed to
+      recognize 'need_review' -> 'Need Review' (was silently falling
+      through to 'Awaiting Auditor'). New auditDecisionChipClass/
+      overallRiskLevel/overallRiskChipClass/openFindings/
+      openFindingsSummary/materialFindings/hasMaterialFinding/
+      materialFindingsPanelText. getBannerClass/Icon/Text/Subtitle now
+      apply a priority cascade - Send Back > Need Review > a pending
+      Medium/High anomaly > the matching result - checked BEFORE
+      overallStatus, so a PASS match never overrides an outstanding
+      decision or unresolved material finding. matchingStatusChipClass
+      (Case Summary's "Matching" chip) is deliberately untouched.
+    - auditor-record-detail.component.html: new standalone Risk Panel
+      (reuses the existing advisory-banner styling, no new CSS) shown
+      whenever hasMaterialFinding, independent of whatever the banner
+      above is currently displaying. Case Summary's old plain-text
+      "Decision" row replaced with a chip-style "Audit Decision" row
+      (uppercase, colored by decision) plus a new "Overall Risk" chip
+      row; "Anomalies" renamed "Open Findings" using the new summary
+      getter. "Matching" row and "Blocking" row unchanged.
+  Frontend (auditlens-frontend/src/app/auditor/dashboard/):
+    - auditor-dashboard.component.ts: the "Need Review" KPI card now
+      counts workflow_status === 'NEED REVIEW' (was matching_status ===
+      'REVIEW' - a completely different, matching-engine-only signal,
+      still separately shown via the untouched Status Breakdown rings).
+      computePriorityItems() now also flags workflow_status ===
+      'NEED REVIEW' / has_material_finding. riskLevelFor() and
+      issuesFor() now factor in anomaly_risk_level/has_material_finding/
+      workflow_status, not only matching_status/missing documents.
+  Frontend (auditlens-frontend/src/app/auditor/review-queue/):
+    - auditor-review-queue.component.ts/html/css: new 'needs_review'
+      risk bucket (workflow_status === 'NEED REVIEW' or has_material_
+      finding, outranking missing-docs/matching-review) with its own
+      severity-aware label/color (reads the real anomaly_risk_level -
+      e.g. "Medium Risk" for a Medium anomaly, never overstated to
+      "High Risk") - shown ONLY in the "Risk Level" column; the
+      "Matching Status" column stays exactly what its label promises,
+      always the raw matching_status. New "Needs Review" stat card +
+      filter chip alongside the 4 existing ones (grid widened to 5
+      columns to match).
+  Tests (auditlens-backend/tests/extraction/
+  test_transaction_auditor_integration.py):
+    - _Fixture extended with anomaly()/review_record() helpers (fully
+      cleaned up in __exit__, same convention as every other fixture
+      method in this file).
+    - 3 new cases against the real local Postgres DB: a Need Review
+      decision + pending Medium anomaly on a standalone invoice shows
+      up as workflow_status/anomaly_risk_level/has_material_finding
+      while matching_status stays PASS; a later Approve supersedes an
+      earlier Need Review (workflow_status falls back to the matching
+      result); a low-severity pending anomaly does NOT set has_
+      material_finding (not every anomaly is treated as blocking).
+
+Why:
+  User-reported: Need Review was saving correctly (visible in History)
+  but every OTHER surface - Record Detail's own banner/Case Summary,
+  the Auditor Dashboard's Need Review count, the Review Queue's status/
+  risk columns - kept showing as if the case were clean and ready for
+  approval, because none of them had ever been taught what a
+  review_records action or an anomaly meant; they only ever looked at
+  the matching engine's PASS/REVIEW verdict. Fixed by explicitly
+  separating "did the fields match" from "what did the Auditor decide /
+  what's still open" everywhere both are shown, and computing the
+  latter consistently (server-side, in ONE place, mirrored 1:1 in
+  Record Detail's own client-side priority cascade) instead of letting
+  each page infer it differently or not at all.
+
+Test results:
+  - python tests/extraction/run_all.py - 30/30 suites PASS.
+  - npx ng build --configuration production - succeeded (exit 0; same
+    2 pre-existing per-component CSS budget warnings as prior entries,
+    unrelated to this change).
+  - Live Playwright verification (auditor account vision_fixture_
+    auditor@x.com, real running Flask + Angular dev servers, real
+    Postgres) against the existing INV-NBI-2026-0017 fixture
+    (document_id=3753, its anomaly reset to 'pending' to match this
+    task's exact stated scenario - "One pending Medium Round Amount
+    anomaly exists" - since an earlier session's live testing had left
+    it 'reviewed'; its latest review_records action was already
+    'need_review' from that same earlier testing):
+    - Record Detail: header banner amber ("Further Review Required"),
+      Case Summary shows Matching=PASS / Audit Decision=NEED REVIEW /
+      Overall Risk=MEDIUM / Open Findings="1 Pending Round Amount", and
+      the new Risk Panel reads exactly "1 pending Medium Round Amount
+      anomaly requires Auditor follow-up." 8/8 checks passed.
+    - GET /auditor/transactions for this case: matching_status=PASS,
+      workflow_status=NEED REVIEW, anomaly_risk_level=MEDIUM, has_
+      material_finding=true; exactly 1 transaction dashboard-wide
+      counts as Need Review. 6/6 checks passed, zero console errors.
+    - Auditor Dashboard UI: Need Review KPI card shows 1; Priority
+      Review Queue lists INV-NBI-2026-0017 with "MEDIUM RISK" and
+      "Needs Review (Auditor), Pending Anomaly" (screenshot-verified).
+    - Review Queue UI: Matching Status column still shows PASS; Risk
+      Level column shows "Medium Risk" (not the old "Low Risk"); new
+      Needs Review stat card/filter chip show 1 (screenshot-verified).
+    - Dev servers (Flask + reloader, Angular CLI) stopped by exact PID
+      afterward.
+
+Build result:
+  Backend: 30/30 test suites pass. Frontend: clean production build,
+  exit 0. Live browser check: every scenario in the task's verification
+  list confirmed end-to-end against the real fixture and a real
+  Postgres database.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub - Render should auto-deploy both services.
+  2. Backend redeploy required (routes/auditor.py changed). No new
+     database migration, environment variable, or dependency needed -
+     every new field is computed from existing tables (review_records,
+     anomalies) already in production.
+  3. No manual steps - matching_status/existing fields are unchanged,
+     so nothing already depending on this endpoint's prior shape breaks;
+     the 4 new fields are purely additive.
+
+Rollback instructions:
+  Revert this one commit - confined to routes/auditor.py, the 3
+  auditor-page frontend components (record-detail, dashboard, review-
+  queue), and their test file. No data or schema implications either
+  way; reverting restores the prior matching-status-only status/risk
+  display and the "Awaiting Auditor" fallback for a Need Review
+  decision on Record Detail.

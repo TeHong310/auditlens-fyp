@@ -157,7 +157,13 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         this.transactions   = res || [];
         this.totalRecords   = this.transactions.length;
         this.fullMatch      = this.transactions.filter((t: any) => t.matching_status === 'PASS').length;
-        this.needReview     = this.transactions.filter((t: any) => t.matching_status === 'REVIEW').length;
+        // Counts the Auditor's own Need Review DECISION (latest
+        // review_records action), never the matching engine's own
+        // REVIEW verdict — those are two different signals (see Status
+        // Breakdown below, still purely matching-based). A transaction
+        // later approved/sent back naturally drops out, since
+        // workflow_status always reflects the LATEST action.
+        this.needReview     = this.transactions.filter((t: any) => t.workflow_status === 'NEED REVIEW').length;
         this.missingDocuments = this.transactions.filter((t: any) => !t.po_count || !t.gr_count).length;
         this.isLoading       = false;
         this.computeStatusBreakdown();
@@ -179,7 +185,14 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   }
 
   private computePriorityItems() {
-    const flagged = this.transactions.filter(t => t.matching_status === 'REVIEW' || !t.po_count || !t.gr_count);
+    // Need Review and a pending Medium/High anomaly both surface a
+    // transaction here even when matching itself came back PASS and
+    // both documents are present — the whole point of separating Audit
+    // Decision/risk from the matching result.
+    const flagged = this.transactions.filter(t =>
+      t.matching_status === 'REVIEW' || !t.po_count || !t.gr_count ||
+      t.workflow_status === 'NEED REVIEW' || t.has_material_finding
+    );
     flagged.sort((a, b) => {
       const rankDiff = this.riskRank(b) - this.riskRank(a);
       if (rankDiff !== 0) return rankDiff;
@@ -188,10 +201,15 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     this.priorityItems = flagged.slice(0, 4);
   }
 
+  // Risk here considers the Auditor's own decision and open anomalies,
+  // not only the matching result — a clean PASS with a pending Need
+  // Review decision or a material anomaly is never read as LOW.
   riskLevelFor(t: any): 'HIGH' | 'MEDIUM' | 'LOW' {
     const missingOne = !t.po_count || !t.gr_count;
+    if (t.anomaly_risk_level === 'HIGH') return 'HIGH';
     if (t.matching_status === 'REVIEW' && missingOne) return 'HIGH';
     if (t.matching_status === 'REVIEW') return 'MEDIUM';
+    if (t.workflow_status === 'NEED REVIEW' || t.has_material_finding) return 'MEDIUM';
     if (missingOne) return 'MEDIUM';
     return 'LOW';
   }
@@ -205,7 +223,9 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     const parts: string[] = [];
     if (!t.po_count) parts.push('Missing PO');
     if (!t.gr_count) parts.push('Missing GR');
-    if (t.matching_status === 'REVIEW' && t.po_count && t.gr_count) parts.push('Needs Review');
+    if (t.workflow_status === 'NEED REVIEW') parts.push('Needs Review (Auditor)');
+    else if (t.matching_status === 'REVIEW' && t.po_count && t.gr_count) parts.push('Needs Review');
+    if (t.has_material_finding) parts.push('Pending Anomaly');
     return parts.length ? parts.join(', ') : '—';
   }
 
