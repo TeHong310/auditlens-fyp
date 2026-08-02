@@ -144,6 +144,62 @@ def _ensure_authenticity_v3_columns():
         print(f'WARNING: could not migrate authenticity_checks to v3: {type(e).__name__}: {e}')
 
 
+def _ensure_authenticity_evidence_corrections_table():
+    """Human-in-the-Loop evidence-location editing (v10 spec). A
+    NEW table, not new columns on authenticity_checks — deliberately
+    separate from authenticity_checks.boxes (the AI-only region list),
+    since a recheck REPLACES that column wholesale (fresh Claude/Vision/
+    OpenCV run) while an auditor's correction must survive every
+    recheck untouched. Being a separate table also gives each
+    correction its own real row-level audit metadata (corrected_by/
+    corrected_at) rather than bolting that onto a JSONB blob.
+
+    One row per (document_id, document_type, evidence_type) — the
+    UNIQUE constraint below is exactly what makes "the latest correction
+    for this evidence type always wins" an upsert instead of an
+    ever-growing history table. original_ai_box is a JSONB SNAPSHOT of
+    whatever AI box existed at the moment of correction (not a live
+    reference) — the AI box itself may be replaced entirely by a later
+    recheck, so a snapshot is the only stable "what was this corrected
+    FROM" record. source='auditor_deleted' rows (x/y/width/height all
+    NULL) record that the auditor explicitly removed a location, distinct
+    from "no correction has ever been made" (no row at all) — this is
+    what lets "Needs Location" and "no correction yet" behave
+    differently in the frontend. Same auto-create-on-startup pattern as
+    every other _ensure_ function (no migration runner in this repo)."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS authenticity_evidence_corrections (
+                correction_id SERIAL PRIMARY KEY,
+                document_id INTEGER NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+                document_type VARCHAR(20) NOT NULL,
+                evidence_type VARCHAR(50) NOT NULL,
+                page INTEGER NOT NULL DEFAULT 1,
+                x NUMERIC,
+                y NUMERIC,
+                width NUMERIC,
+                height NUMERIC,
+                source VARCHAR(20) NOT NULL,
+                original_ai_box JSONB,
+                corrected_by INTEGER NOT NULL REFERENCES users(user_id),
+                corrected_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                UNIQUE(document_id, document_type, evidence_type)
+            )
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_evidence_corrections_document
+            ON authenticity_evidence_corrections(document_id, document_type)
+        ''')
+        conn.commit()
+        conn.close()
+        print('Authenticity evidence corrections table ready')
+    except Exception as e:
+        print(f'WARNING: could not ensure authenticity_evidence_corrections table exists: {type(e).__name__}: {e}')
+
+
 def _ensure_file_bytes_columns():
     """Render's free tier filesystem is ephemeral (wiped on every redeploy/
     restart) — uploaded files can no longer live only on local disk.
@@ -698,6 +754,7 @@ _ensure_anomalies_table()
 _ensure_authenticity_checks_table()
 _ensure_authenticity_v2_columns()
 _ensure_authenticity_v3_columns()
+_ensure_authenticity_evidence_corrections_table()
 _ensure_file_bytes_columns()
 _ensure_3way_comparison_columns()
 _ensure_invoice_currency_column()

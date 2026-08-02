@@ -28,6 +28,7 @@
       </div>
 
       <p class="summary-explanation">{{ summaryExplanation }}</p>
+      <p class="recheck-message" *ngIf="recheckMessage"><i class="ph-duotone ph-check-circle"></i> {{ recheckMessage }}</p>
 
       <div class="category-table">
         <div class="category-row">
@@ -45,7 +46,7 @@
       </div>
 
       <div class="summary-actions">
-        <button class="btn-recheck" (click)="recheck()" [disabled]="isRechecking">
+        <button class="btn-recheck" (click)="recheck()" [disabled]="isRechecking || editMode">
           <i class="ph-duotone" [ngClass]="isRechecking ? 'ph-hourglass-medium' : 'ph-arrow-clockwise'"></i>
           {{ isRechecking ? 'Re-checking…' : 'Re-check Analysis' }}
         </button>
@@ -60,23 +61,79 @@
       <!-- Left: sticky document preview -->
       <div class="image-panel">
 
+        <div class="image-panel-header" *ngIf="imageLoadState === 'image'">
+          <button type="button" class="btn-edit-toggle" [class.btn-edit-toggle-active]="editMode"
+                  (click)="toggleEditMode()">
+            <i class="ph-duotone" [ngClass]="editMode ? 'ph-x' : 'ph-pencil-simple'"></i>
+            {{ editMode ? 'Exit Edit Mode' : 'Edit Evidence Locations' }}
+          </button>
+        </div>
+
+        <!-- Edit-mode toolbar -->
+        <div class="edit-toolbar" *ngIf="editMode">
+          <button type="button" class="btn-toolbar" [class.btn-toolbar-active]="drawingNewBox"
+                  (click)="startDrawingNewBox()">
+            <i class="ph-duotone ph-selection-plus"></i> Draw New Box
+          </button>
+          <button type="button" class="btn-toolbar btn-toolbar-danger" [disabled]="!selectedEditKey"
+                  (click)="deleteSelected()">
+            <i class="ph-duotone ph-trash"></i> Delete Selected
+          </button>
+          <span class="toolbar-spacer"></span>
+          <button type="button" class="btn-toolbar" (click)="cancelEdits()">Cancel</button>
+          <button type="button" class="btn-toolbar btn-toolbar-primary" [disabled]="!hasStagedEdits || isSavingEdits"
+                  (click)="saveEdits()">
+            <i class="ph-duotone" [ngClass]="isSavingEdits ? 'ph-hourglass-medium' : 'ph-floppy-disk'"></i>
+            {{ isSavingEdits ? 'Saving…' : 'Save Changes' }}
+          </button>
+        </div>
+        <p class="edit-hint" *ngIf="editMode && drawingNewBox">
+          <i class="ph-duotone ph-cursor-click"></i> Drag on the document to draw a box, then choose which evidence it is.
+        </p>
+
         <div class="document-stage" *ngIf="imageLoadState === 'image'">
-          <img [src]="imageBlobUrl" class="document-image" alt="Document" />
-          <svg *ngIf="visibleEvidenceBoxes.length" class="document-overlay"
+          <img #imgEl [src]="imageBlobUrl" class="document-image" alt="Document" (load)="onImageLoad(imgEl)" />
+          <svg #svgEl *ngIf="overlayViewBox && (visibleEvidenceBoxes.length || editMode)" class="document-overlay"
+               [class.document-overlay-editable]="editMode"
+               [class.document-overlay-drawing]="drawingNewBox"
                [attr.viewBox]="overlayViewBox"
-               preserveAspectRatio="none" aria-hidden="true">
+               preserveAspectRatio="none" [attr.aria-hidden]="!editMode"
+               (pointerdown)="onCanvasPointerDown($event)">
             <g *ngFor="let ev of visibleEvidenceBoxes; trackBy: trackByKey"
                class="evidence-region"
                [class.evidence-region-emphasized]="ev.emphasized"
-               [class.evidence-region-dimmed]="emphasizedKey && !ev.emphasized">
-              <polygon class="evidence-polygon" [attr.points]="polygonPoints(ev.box)"></polygon>
+               [class.evidence-region-dimmed]="!editMode && emphasizedKey && !ev.emphasized"
+               [class.evidence-region-editable]="editMode"
+               [class.evidence-region-auditor]="ev.status === 'AUDITOR_CORRECTED' || ev.status === 'AUDITOR_ADDED'">
+              <polygon class="evidence-polygon"
+                       [class.evidence-polygon-auditor]="ev.status === 'AUDITOR_CORRECTED' || ev.status === 'AUDITOR_ADDED'"
+                       [attr.points]="polygonPoints(ev.box)"
+                       (pointerdown)="onBoxPointerDown($event, ev.key)"></polygon>
               <circle class="evidence-marker-circle" [attr.cx]="markerPosition(ev.box).x" [attr.cy]="markerPosition(ev.box).y" r="17"></circle>
               <text class="evidence-marker-text" [attr.x]="markerPosition(ev.box).x" [attr.y]="markerPosition(ev.box).y">{{ ev.number }}</text>
+              <ng-container *ngIf="editMode && ev.emphasized">
+                <circle class="evidence-handle" *ngFor="let h of editHandles"
+                        [attr.cx]="handlePositions(ev.box)[h].x" [attr.cy]="handlePositions(ev.box)[h].y" r="10"
+                        (pointerdown)="onHandlePointerDown($event, ev.key, h)"></circle>
+              </ng-container>
             </g>
+            <rect *ngIf="pendingNewRect" class="evidence-draw-rect"
+                  [attr.x]="pendingNewRect.x" [attr.y]="pendingNewRect.y"
+                  [attr.width]="pendingNewRect.width" [attr.height]="pendingNewRect.height"></rect>
           </svg>
         </div>
 
-        <p class="stage-hint" *ngIf="imageLoadState === 'image' && hasLocatableEvidence">
+        <!-- Evidence-type picker after drawing a new box -->
+        <div class="type-picker" *ngIf="typePickerOpen">
+          <p class="type-picker-title">What evidence is this?</p>
+          <div class="type-picker-options">
+            <button type="button" class="type-picker-option" *ngFor="let def of assignableTypesForNewBox; trackBy: trackByKey"
+                    (click)="assignNewBoxType(def.key)">{{ def.label }}</button>
+          </div>
+          <button type="button" class="type-picker-cancel" (click)="cancelDraw()">Cancel</button>
+        </div>
+
+        <p class="stage-hint" *ngIf="imageLoadState === 'image' && hasLocatableEvidence && !editMode">
           <i class="ph-duotone ph-cursor-click"></i>
           {{ emphasizedKey ? 'Click the highlighted item again to show all regions normally.' : 'Click an evidence item below to emphasize its location.' }}
         </p>
@@ -116,37 +173,49 @@
             <i class="ph-duotone ph-check-circle"></i> No significant concerns detected.
           </div>
 
-          <!-- 2. Parties & Stamps — document-type-aware. Every row this
-               document_type can carry (see PARTY_ROW_DEFS); each row
-               with a real Google-Vision-sourced box is clickable and
-               numbered to match its on-image marker; rows without one
-               show "Not detected" or "Location unavailable" plainly,
-               never a guessed box. -->
+          <!-- 2. Parties & Stamps — document-type-aware, Human-in-the-Loop.
+               Every row this document_type can carry (see PARTY_ROW_DEFS);
+               status is explicit (AI Detected / Auditor Corrected /
+               Auditor Added / Needs Location / Not Detected / Not
+               Required) and a green check only ever appears for a row
+               that actually has a location. -->
           <div class="checklist-box party-card" *ngIf="partyRows.length">
             <p class="section-label"><i class="ph-duotone ph-users-three"></i> {{ partySectionTitle }}</p>
-            <div class="checklist-row"
+            <div class="party-row"
                  *ngFor="let row of partyRows; trackBy: trackByKey"
-                 [class.checklist-row-clickable]="!!row.box"
+                 [class.checklist-row-clickable]="!!row.box && !editMode"
                  [class.checklist-row-active]="isRowActive(row.key)"
-                 [attr.role]="row.box ? 'button' : null"
-                 [attr.tabindex]="row.box ? 0 : null"
-                 [attr.aria-pressed]="row.box ? isRowActive(row.key) : null"
-                 (click)="onRowActivate(row.key)"
-                 (keydown.enter)="onRowActivate(row.key)"
-                 (keydown.space)="onRowActivate(row.key); $event.preventDefault()">
-              <span class="party-number-badge" *ngIf="row.box">{{ row.number }}</span>
-              <span class="checklist-icon" [ngClass]="row.detected ? 'icon-yes' : 'icon-warn'">
-                <i class="ph-duotone" [ngClass]="row.detected ? 'ph-check' : 'ph-warning'"></i>
-              </span>
-              <span class="checklist-label">{{ row.label }}</span>
-              <span class="location-note" *ngIf="row.locationUnavailable">Location unavailable</span>
-              <span class="location-note" *ngIf="!row.detected">Not detected</span>
+                 [class.party-row-editable]="editMode"
+                 [attr.role]="(row.box && !editMode) || editMode ? 'button' : null"
+                 [attr.tabindex]="(row.box && !editMode) || editMode ? 0 : null"
+                 (click)="editMode ? selectForEdit(row.key) : onRowActivate(row.key)"
+                 (keydown.enter)="editMode ? selectForEdit(row.key) : onRowActivate(row.key)"
+                 (keydown.space)="(editMode ? selectForEdit(row.key) : onRowActivate(row.key)); $event.preventDefault()">
+              <div class="party-row-main">
+                <span class="party-number-badge" *ngIf="row.box">{{ row.number }}</span>
+                <span class="checklist-icon" [ngClass]="statusIconClass(row.status)">
+                  <i class="ph-duotone" [ngClass]="statusIcon(row.status)"></i>
+                </span>
+                <span class="checklist-label">{{ row.label }}</span>
+                <span class="status-chip" [ngClass]="statusIconClass(row.status)">{{ row.statusLabel }}</span>
+              </div>
+              <div class="party-row-actions" *ngIf="editMode">
+                <button type="button" class="btn-row-action" *ngIf="row.canResetToAi"
+                        (click)="resetToAi(row.key); $event.stopPropagation()">
+                  <i class="ph-duotone ph-arrow-counter-clockwise"></i> Reset to AI
+                </button>
+              </div>
+              <button type="button" class="btn-draw-location" *ngIf="!editMode && row.status === 'NEEDS_LOCATION'"
+                      (click)="toggleEditMode(); selectForEdit(row.key); startDrawingNewBox(); $event.stopPropagation()">
+                <i class="ph-duotone ph-selection-plus"></i> Draw Location
+              </button>
             </div>
           </div>
 
-          <!-- 3. Supporting Evidence — up to 3 concise items. Clickable
-               when a reliable Google-Vision-sourced location exists for
-               that item; a plain "Location unavailable" note otherwise. -->
+          <!-- 3. Supporting Evidence — up to 3 concise items outside the
+               new Parties panel (company logo, signature) — never
+               repeats Issuer/Buyer/Stamp, which the Parties panel above
+               already shows with a precise location. -->
           <div class="checklist-box evidence-card" *ngIf="supportingEvidenceItems.length">
             <p class="section-label"><i class="ph-duotone ph-check-circle"></i> Supporting Evidence</p>
             <div class="attention-row"
@@ -175,36 +244,6 @@
 
               <p class="subsection-label">Supplier Identity</p>
               <p class="match-note" *ngIf="vendorMatchNote" [ngClass]="vendorMatchStatus() === 'yes' ? 'match-note-ok' : 'match-note-warn'">{{ vendorMatchNote }}</p>
-              <div class="checklist-row"
-                   [class.checklist-row-clickable]="!!visionBoxForKey('supplier')"
-                   [class.checklist-row-active]="isRowActive('supplier')"
-                   [attr.role]="visionBoxForKey('supplier') ? 'button' : null"
-                   [attr.tabindex]="visionBoxForKey('supplier') ? 0 : null"
-                   [attr.aria-pressed]="visionBoxForKey('supplier') ? isRowActive('supplier') : null"
-                   (click)="onRowActivate('supplier')"
-                   (keydown.enter)="onRowActivate('supplier')"
-                   (keydown.space)="onRowActivate('supplier'); $event.preventDefault()">
-                <span class="checklist-icon" [ngClass]="rowIconClass(supplierNameStatus())">
-                  <i class="ph-duotone" [ngClass]="rowIcon(supplierNameStatus())"></i>
-                </span>
-                <span class="checklist-label">Supplier Name Detected</span>
-                <span class="location-note" *ngIf="supplierNameStatus() === 'yes' && !visionBoxForKey('supplier')">Location unavailable</span>
-              </div>
-              <div class="checklist-row"
-                   [class.checklist-row-clickable]="!!visionBoxForKey('supplier_address')"
-                   [class.checklist-row-active]="isRowActive('supplier_address')"
-                   [attr.role]="visionBoxForKey('supplier_address') ? 'button' : null"
-                   [attr.tabindex]="visionBoxForKey('supplier_address') ? 0 : null"
-                   [attr.aria-pressed]="visionBoxForKey('supplier_address') ? isRowActive('supplier_address') : null"
-                   (click)="onRowActivate('supplier_address')"
-                   (keydown.enter)="onRowActivate('supplier_address')"
-                   (keydown.space)="onRowActivate('supplier_address'); $event.preventDefault()">
-                <span class="checklist-icon" [ngClass]="rowIconClass(supplierAddressStatus())">
-                  <i class="ph-duotone" [ngClass]="rowIcon(supplierAddressStatus())"></i>
-                </span>
-                <span class="checklist-label">Supplier Address Detected</span>
-                <span class="location-note" *ngIf="supplierAddressStatus() === 'yes' && !visionBoxForKey('supplier_address')">Location unavailable</span>
-              </div>
               <div class="checklist-row">
                 <span class="checklist-icon" [ngClass]="rowIconClass(vendorMatchStatus())">
                   <i class="ph-duotone" [ngClass]="rowIcon(vendorMatchStatus())"></i>

@@ -10,6 +10,10 @@ from helpers.authenticity_check import (
 )
 from helpers.auth_rules import compute_authentication
 from helpers.transaction_packages import get_transaction_context_for_document
+from helpers.evidence_corrections import (
+    get_corrections_for, apply_evidence_changes, EvidenceValidationError
+)
+from helpers.audit_log import log_audit
 from routes.auditor import _build_comparison, _vendor_match_all
 
 authenticity_bp = Blueprint('authenticity', __name__)
@@ -513,6 +517,12 @@ def get_authenticity_check(document_id):
         result['workflow_consistency'] = _workflow_consistency_for(cursor, document_id)
         conn.close()
 
+        # v10: auditor corrections/additions/deletions for this exact
+        # document_id + document_type — a SEPARATE table from `boxes`
+        # (AI-only), so this always reflects the latest saved edits
+        # regardless of how many times the AI side has been re-checked.
+        result['evidence_corrections'] = get_corrections_for(document_id, document_type)
+
         return jsonify(result), 200
 
     except Exception as e:
@@ -676,7 +686,58 @@ def recheck_authenticity(document_id):
         result['workflow_consistency'] = _workflow_consistency_for(cursor, document_id)
         conn.close()
 
+        # v10: a recheck REPLACES authenticity_checks.boxes (fresh AI
+        # regions) but NEVER touches authenticity_evidence_corrections —
+        # saved auditor corrections are returned here completely
+        # unaffected by the recheck that just ran.
+        result['evidence_corrections'] = get_corrections_for(document_id, document_type)
+
         return jsonify(result), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# SAVE EVIDENCE CORRECTIONS — Human-in-the-Loop evidence-location
+# editing (v10 spec). Batch endpoint: the frontend stages every drag/
+# resize/delete/draw/reset locally while "Edit Evidence Locations" is
+# open, and sends them all here in one call only when the auditor clicks
+# "Save Changes" (Cancel never calls this route at all — nothing is
+# persisted until Save).
+# PUT /authenticity/<document_id>/evidence-corrections?document_type=invoice|po|gr
+# Body: {"changes": [{"evidence_type", "action": "correct"|"add"|"delete"|"reset",
+#                      "page", "x", "y", "width", "height"}, ...]}
+# Auditor only.
+# ------------------------------------------------------------
+@authenticity_bp.route('/<int:document_id>/evidence-corrections', methods=['PUT'])
+@jwt_required()
+def save_evidence_corrections(document_id):
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    if user['role'] != 'auditor':
+        return jsonify({'error': 'Access denied. Auditor only.'}), 403
+
+    document_type = request.args.get('document_type', 'invoice')
+    if document_type not in VALID_DOC_TYPES:
+        return jsonify({'error': f'document_type must be one of {VALID_DOC_TYPES}'}), 400
+
+    body = request.get_json(silent=True) or {}
+    changes = body.get('changes')
+    if not isinstance(changes, list):
+        return jsonify({'error': '"changes" must be a list'}), 400
+
+    try:
+        corrections = apply_evidence_changes(document_id, document_type, changes, user['user_id'])
+    except EvidenceValidationError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    if changes:
+        log_audit(user['user_id'], 'CORRECT_EVIDENCE_LOCATION', 'authenticity_evidence_corrections',
+                   document_id, f'{len(changes)} evidence location change(s) for document {document_id} '
+                                 f'({document_type})')
+
+    return jsonify({'evidence_corrections': corrections}), 200

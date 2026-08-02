@@ -16,6 +16,7 @@ SUITES = ['test_invoice.py', 'test_po.py', 'test_gr.py', 'test_currency.py', 'te
           'test_entity_and_line_items.py', 'test_ai_router.py', 'test_authenticity_ai.py',
           'test_authenticity_siblings.py', 'test_authenticity_scoring.py', 'test_authenticity_auto_trigger.py',
           'test_authenticity_po_gr_auto_trigger.py', 'test_vision_evidence_boxes.py',
+          'test_evidence_corrections.py',
           'test_ai_assistant.py', 'test_document_timeline.py', 'test_document_relationships.py',
           'test_enterprise_matching.py', 'test_relationship_builder.py', 'test_shadow_comparison.py',
           'test_phase4_integration.py', 'test_transaction_packages.py', 'test_transaction_auditor_integration.py']

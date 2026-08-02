@@ -128,6 +128,18 @@
   line-height: 1.5;
 }
 
+.recheck-message {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--success);
+  background: var(--success-bg);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
 .category-table {
   display: flex;
   flex-direction: column;
@@ -236,6 +248,17 @@
   pointer-events: none;
 }
 
+/* Edit mode is the only time the overlay itself needs pointer events —
+   in view mode, on-image regions are decorative only (clicking a
+   Parties row is what emphasizes a region). */
+.document-overlay-editable {
+  pointer-events: auto;
+}
+
+.document-overlay-drawing {
+  cursor: crosshair;
+}
+
 /* preserveAspectRatio="none" (set in the template) stretches the
    viewBox — sized from the box's own source_width/source_height, i.e.
    the canonical image's true pixel dimensions — to fill this exact
@@ -281,12 +304,175 @@
   dominant-baseline: central;
 }
 
+/* An auditor-sourced region (corrected or added) uses a distinct amber
+   family instead of AI green — visually distinguishes "a human placed
+   this" from "the AI found this" at a glance, in both view and edit mode. */
+.evidence-polygon-auditor {
+  fill: rgba(245, 158, 11, 0.16);
+  stroke: #F59E0B;
+}
+
+.evidence-region-emphasized .evidence-polygon-auditor {
+  fill: rgba(245, 158, 11, 0.30);
+}
+
+.evidence-region-auditor.evidence-region-emphasized .evidence-marker-circle {
+  fill: #B45309;
+}
+
+.evidence-region-editable .evidence-polygon {
+  cursor: move;
+}
+
+.evidence-handle {
+  fill: #fff;
+  stroke: #6366F1;
+  stroke-width: 3;
+  cursor: nwse-resize;
+}
+
+.evidence-draw-rect {
+  fill: rgba(99, 102, 241, 0.12);
+  stroke: #6366F1;
+  stroke-width: 4;
+  stroke-dasharray: 10 6;
+  pointer-events: none;
+}
+
 .stage-hint {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 11.5px;
   color: #6B7280;
+}
+
+.edit-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: #6366F1;
+}
+
+/* ── Edit mode toggle + toolbar ── */
+.image-panel-header {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.btn-edit-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid #D1D5DB;
+  background: #F3F4F6;
+  color: #374151;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-edit-toggle:hover { background: #E5E7EB; }
+
+.btn-edit-toggle-active {
+  background: #EEF2FF;
+  border-color: #6366F1;
+  color: #4338CA;
+}
+
+.edit-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  border-radius: 10px;
+}
+
+.toolbar-spacer { flex: 1; }
+
+.btn-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid #D1D5DB;
+  background: #fff;
+  color: #374151;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-toolbar:hover:not(:disabled) { background: #F3F4F6; }
+.btn-toolbar:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn-toolbar-active {
+  background: #EEF2FF;
+  border-color: #6366F1;
+  color: #4338CA;
+}
+
+.btn-toolbar-danger { color: #B91C1C; border-color: #FCA5A5; }
+.btn-toolbar-danger:hover:not(:disabled) { background: #FEF2F2; }
+
+.btn-toolbar-primary {
+  background: #6366F1;
+  border-color: #6366F1;
+  color: #fff;
+}
+.btn-toolbar-primary:hover:not(:disabled) { background: #4F46E5; }
+
+/* ── Evidence-type picker (shown after drawing a new box) ── */
+.type-picker {
+  padding: 12px 14px;
+  background: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.type-picker-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #374151;
+}
+
+.type-picker-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.type-picker-option {
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid #6366F1;
+  background: #EEF2FF;
+  color: #4338CA;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.type-picker-option:hover { background: #E0E7FF; }
+
+.type-picker-cancel {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: #6B7280;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
 }
 
 .image-fallback {
@@ -480,6 +666,78 @@
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.party-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 6px;
+  border-bottom: 1px solid var(--bg-hover);
+  border-radius: 6px;
+}
+
+.party-row:last-child { border-bottom: none; }
+
+.party-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.party-row-editable { cursor: pointer; }
+.party-row-editable:hover { background: var(--bg-hover); }
+
+.party-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-left: 32px;
+}
+
+.btn-row-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border-hover);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-row-action:hover { background: var(--bg-active); }
+
+.btn-draw-location {
+  align-self: flex-start;
+  margin-left: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid #F59E0B;
+  background: var(--warning-bg);
+  color: #B45309;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-draw-location:hover { filter: brightness(1.05); }
+
+/* Status text pill — reuses the same yes/no/warn/na color families as
+   .checklist-icon so the chip and the icon always agree. */
+.status-chip {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
 }
 
 /* ── Supporting Evidence ── */
