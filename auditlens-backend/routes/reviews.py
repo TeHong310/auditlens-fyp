@@ -370,6 +370,87 @@ def need_review_document(document_id):
 
 
 # ------------------------------------------------------------
+# MARK A GUIDED REVIEW STEP AS REVIEWED (Audit Review page)
+# POST /reviews/review-steps/<document_id>/<step>
+# Auditor only
+#
+# Backs the Audit Review page's sequential checklist — Three-Way
+# Matching -> Exception Review -> Authenticity Review -> Anomaly
+# Review. Deliberately separate from review_records (the document-
+# level Approve/Send Back/Need Review DECISION, untouched by this) -
+# this tracks per-step review PROGRESS, upserted into document_
+# review_steps (UNIQUE(document_id, step), so re-marking an already-
+# reviewed step just updates reviewed_by/reviewed_at rather than
+# creating a duplicate row). The sequential order is enforced HERE,
+# not only hidden client-side, so a step can't be marked out of order
+# via a direct API call either.
+# ------------------------------------------------------------
+REVIEW_STEP_ORDER = ['three_way_matching', 'exception_review', 'authenticity_review', 'anomaly_review']
+
+
+@reviews_bp.route('/review-steps/<int:document_id>/<step>', methods=['POST'])
+@jwt_required()
+def mark_review_step(document_id, step):
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    if user['role'] != 'auditor':
+        return jsonify({'error': 'Access denied. Auditor only.'}), 403
+
+    if step not in REVIEW_STEP_ORDER:
+        return jsonify({'error': f'step must be one of {REVIEW_STEP_ORDER}'}), 400
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        cursor.execute('SELECT document_id FROM documents WHERE document_id = %s', (document_id,))
+        if not cursor.fetchone():
+            conn.close()
+            return jsonify({'error': 'Document not found'}), 404
+
+        step_index = REVIEW_STEP_ORDER.index(step)
+        if step_index > 0:
+            required_prior = REVIEW_STEP_ORDER[:step_index]
+            cursor.execute(
+                'SELECT step FROM document_review_steps WHERE document_id = %s AND step = ANY(%s)',
+                (document_id, required_prior)
+            )
+            done = {row['step'] for row in cursor.fetchall()}
+            missing = [s for s in required_prior if s not in done]
+            if missing:
+                conn.close()
+                return jsonify({
+                    'error': f"Complete \"{missing[0].replace('_', ' ').title()}\" before marking this step as reviewed."
+                }), 400
+
+        cursor.execute(
+            '''INSERT INTO document_review_steps (document_id, step, reviewed_by, reviewed_at)
+               VALUES (%s, %s, %s, NOW())
+               ON CONFLICT (document_id, step) DO UPDATE
+                   SET reviewed_by = EXCLUDED.reviewed_by, reviewed_at = NOW()
+               RETURNING reviewed_at''',
+            (document_id, step, user['user_id'])
+        )
+        reviewed_at = cursor.fetchone()['reviewed_at']
+        conn.commit()
+        conn.close()
+
+        log_audit(user['user_id'], 'MARK_REVIEW_STEP', 'documents', document_id,
+                  f'Auditor marked "{step}" as reviewed for document {document_id}')
+
+        return jsonify({
+            'step':          step,
+            'reviewed_by':   user['user_id'],
+            'reviewer_name': user['full_name'],
+            'reviewed_at':   reviewed_at.isoformat(),
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
 # FINANCE RESUBMIT DOCUMENT
 # POST /reviews/resubmit/<document_id>
 # Finance Executive only

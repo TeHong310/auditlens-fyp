@@ -627,6 +627,39 @@ def _ensure_review_records_need_review_action():
         print(f'WARNING: could not widen review_records_action_check: {type(e).__name__}: {e}')
 
 
+def _ensure_document_review_steps_table():
+    """New table backing the Audit Review page's guided/sequential
+    review checklist (Three-Way Matching -> Exception Review ->
+    Authenticity Review -> Anomaly Review) — one row per document per
+    step, upserted on 'Mark as Reviewed' (UNIQUE(document_id, step)
+    means re-marking just updates reviewed_by/reviewed_at rather than
+    creating a duplicate). Deliberately separate from review_records
+    (which tracks the document-level approve/return/need_review
+    DECISION, unchanged) — this tracks step-level REVIEW PROGRESS, a
+    different, finer-grained concept the sequential unlock/Approve-
+    gating logic needs. Auto-create-on-startup, same pattern as every
+    other table in this file."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS document_review_steps (
+                id SERIAL PRIMARY KEY,
+                document_id INT NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+                step VARCHAR(30) NOT NULL,
+                reviewed_by INT NOT NULL REFERENCES users(user_id),
+                reviewed_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                UNIQUE(document_id, step)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_document_review_steps_document ON document_review_steps(document_id)')
+        conn.commit()
+        conn.close()
+        print('document_review_steps table ready')
+    except Exception as e:
+        print(f'WARNING: could not create document_review_steps table: {type(e).__name__}: {e}')
+
+
 def _ensure_document_relationships_table():
     """Enterprise V3 Phase 1: flexible many-to-many document relationships
     (PO<->Invoice, PO<->GR, Invoice<->GR), additive to the existing
@@ -849,6 +882,7 @@ _ensure_send_back_cycles_table()
 _ensure_calendar_tasks_table()
 _ensure_ai_assistant_cache_table()
 _ensure_review_records_need_review_action()
+_ensure_document_review_steps_table()
 _ensure_document_relationships_table()
 _ensure_document_relationships_v2_columns()
 _ensure_transaction_packages_table()

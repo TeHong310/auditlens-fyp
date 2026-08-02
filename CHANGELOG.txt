@@ -17128,3 +17128,196 @@ Rollback instructions:
   way; reverting restores the prior matching-status-only status/risk
   display and the "Awaiting Auditor" fallback for a Need Review
   decision on Record Detail.
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Record Detail split into two pages: "Audit Review" (same route/
+  component, /auditor/record-detail, same document_id-based URL) keeps
+  Case Summary, Risk Indicators, the new guided review Timeline,
+  History, AI Audit Assistant, Remarks/Notes, and Approve/Send Back/
+  Need Review. A NEW "Three-Way Matching Details" page (/auditor/
+  matching-details) now owns the Invoice vs PO vs GR field-comparison
+  table, Source Documents, the PDF quick-view modal, and the Enterprise
+  Matching Summary sub-section - moved, not duplicated (Audit Review no
+  longer renders any of it).
+  Backend (auditlens-backend/):
+    - app.py: new document_review_steps table (document_id, step,
+      reviewed_by, reviewed_at, UNIQUE(document_id, step) so a re-mark
+      upserts instead of duplicating) - auto-created on startup, same
+      pattern as every other table in this file.
+    - routes/reviews.py: new POST /reviews/review-steps/<document_id>/
+      <step> (auditor-only). Enforces the sequential order (three_way_
+      matching -> exception_review -> authenticity_review -> anomaly_
+      review) SERVER-SIDE, not only hidden client-side - marking a step
+      before its predecessors are done is rejected with 400 naming the
+      missing one. Upserts via ON CONFLICT, so re-marking an already-
+      reviewed step just updates reviewer/time.
+    - routes/documents.py: GET /documents/<id>/timeline now also
+      returns review_steps (a {step: {reviewed_by, reviewer_name,
+      reviewed_at}} dict) - purely additive; the pre-existing `events`
+      array Finance Correction Detail's WorkflowTimelineComponent reads
+      is completely unchanged, so that page needed zero changes.
+  Frontend - Audit Review (auditlens-frontend/src/app/auditor/record-
+  detail/):
+    - Page label relabeled "Audit Review". Field Comparison table,
+      Three-way Match card, Enterprise Matching Summary, Source
+      Documents, and the PDF quick-view modal (plus every helper method/
+      state only those used) removed - moved to the new page, not left
+      duplicated. Transaction Authenticity Summary and the lightweight
+      transaction-context header stay (not matching-comparison content).
+    - The old read-only <app-workflow-timeline> was replaced with a new
+      inline, interactive checklist in the SAME left-column spot: Three-
+      Way Matching / Exception Review / Authenticity Review / Anomaly
+      Review, each showing its own system result (reusing data this
+      page already loads - matching status, Exception Summary,
+      authenticity check, Risk Indicators - so the checklist can never
+      disagree with the rest of the page), a "View <X> Details" link to
+      its case-specific page, and (once unlocked) a "Mark as Reviewed"
+      button that saves reviewer/time and unlocks the next step WITHOUT
+      navigating away. Document Uploaded/OCR Extraction stay automatic;
+      Final Audit Decision reflects the same caseFinalDecision value
+      Case Summary's own chip already shows.
+    - Approve is now disabled (with a visible reason, e.g. "Complete
+      \"Authenticity Review\" before approving.") until all 4 steps are
+      reviewed AND no blocking issue is on record (reuses the existing
+      caseBlockingIssues logic, untouched). Send Back and Need Review
+      are deliberately NOT gated - available at every stage, matching
+      their existing, unchanged backend behavior.
+    - workflow-timeline.component.ts/html/css (the shared, read-only
+      component) is completely untouched - Finance Correction Detail's
+      usage is unaffected by any of this.
+  Frontend - Three-Way Matching Details (NEW, auditlens-frontend/src/
+  app/auditor/matching-details/):
+    - New component: the moved Field Comparison table/Source Documents/
+      Three-way Match card/Enterprise Matching Summary/PDF modal, reading
+      the SAME GET /auditor/record/<id>/comparison and GET /auditor/
+      transactions/<id> endpoints Record Detail already used for this
+      content - no new backend route, no new calculation.
+    - "Back to Audit Review" button, top-right (and repeated at the
+      bottom) - always returns to THIS record's Audit Review page
+      (preserving document_id and transaction_package_id when present),
+      never the global Review Queue.
+  Frontend - Back to Audit Review on the other 3 case-specific pages
+  (Exception Review / Authenticity Review Workspace / Anomaly
+  Investigation) - global sidebar-driven access is completely
+  unaffected; the back button and case-filtering only activate when
+  reached from the Audit Review Timeline:
+    - auditor-exceptions.component.ts/html/css: new optional ?document_
+      id=X&ref=audit-review query params - when present, the list is
+      filtered client-side to that one document's exceptions and a
+      "Back to Audit Review" button appears top-right; with no query
+      params (normal sidebar access), the page is 100% unchanged.
+    - auditor-anomalies.component.ts/html: same pattern - case-scoped
+      mode fetches status=all instead of the default 'pending' filter
+      (so a case whose only anomaly is already reviewed/dismissed still
+      shows up), filters to that document, and swaps the "Run Anomaly
+      Analysis" button for "Back to Audit Review".
+    - auditor-authenticity-detail.component.ts/html/css: new optional
+      ?ref=audit-review query param - when present, the existing back
+      control (already document-scoped via the :documentId route param)
+      reads "Back to Audit Review" and returns to Record Detail instead
+      of the global Authenticity list; the button moved from top-left to
+      top-right, on both variants, for a consistent position.
+  Tests (auditlens-backend/tests/):
+    - New tests/reviews/test_review_steps.py (fake in-memory DB, real
+      Flask test client/JWT) - sequential-order enforcement (including
+      skipping ahead being rejected, not just skipping one step), upsert-
+      on-remark, auditor-only role check, invalid step/document-not-
+      found rejection.
+    - New tests/extraction/test_audit_review_steps_timeline.py (real
+      local Postgres, real Flask test client) - the full chain end to
+      end: marking steps via the real endpoint, then confirming GET /
+      documents/<id>/timeline's review_steps field agrees exactly with
+      the real document_review_steps table rows, and that `events`
+      (Finance Correction Detail's dependency) is unchanged.
+    - Both registered in tests/extraction/run_all.py.
+
+Why:
+  User-requested refactor: split Record Detail into a focused "Audit
+  Review" workflow page and a separate "Three-Way Matching Details"
+  page (no duplication), replace the old passive Document Workflow
+  Timeline with a guided, sequential review checklist that records WHO
+  reviewed each dimension (matching/exceptions/authenticity/anomalies)
+  and WHEN, gate the Approve button on that checklist plus the existing
+  no-blocking-issue rule while keeping Send Back/Need Review always
+  available, and give every case-specific page a consistent way back to
+  the exact record's Audit Review page instead of a global list -
+  without touching any existing backend decision logic, history, or
+  dashboard calculation.
+
+Test results:
+  - python tests/extraction/run_all.py - 32/32 suites PASS (30 pre-
+    existing + the 2 new files above).
+  - npx ng build --configuration production - succeeded (exit 0; same
+    class of pre-existing per-component CSS budget warnings as prior
+    entries - record-detail's own warning margin actually SHRANK, from
+    11.88kB over budget to 8.00kB, after the Field Comparison table
+    moved out of it).
+  - Live Playwright verification (auditor account vision_fixture_
+    auditor@x.com, real running Flask + Angular dev servers, real
+    Postgres) against the existing INV-NBI-2026-0017 fixture
+    (document_id=3753, its 4 review steps reset to unmarked before this
+    run so the sequential-unlock flow could be verified from a clean
+    start): 39/39 checks passed, including:
+    - Audit Review keeps every required section; Field Comparison/
+      Three-way Match confirmed NOT present (moved, not duplicated).
+    - Send Back and Need Review buttons enabled from the very start;
+      Approve disabled with a visible reason naming Three-Way Matching.
+    - Three-Way Matching's "View Matching Details" opened /auditor/
+      matching-details?document_id=3753 (the correct transaction, not a
+      blank/global page), showing the real Field Comparison table;
+      "Back to Audit Review" returned to document_id=3753.
+    - Mark as Reviewed on Three-Way Matching did NOT navigate, showed
+      "Reviewed by Vision Fixture Auditor" with a real timestamp, and
+      unlocked Exception Review (Authenticity Review confirmed still
+      locked at that point).
+    - Exception Review's "View Exception Details" opened the Exceptions
+      page scoped to document_id=3753 with its own "Back to Audit
+      Review" button (case-scoped only - the normal global list has no
+      such button); Authenticity Review's "View Authenticity Details"
+      opened Authenticity Detail for document 3753 with the same;
+      Anomaly Review's "View Anomaly Details" opened Anomaly Detection
+      scoped to document_id=3753 (showing the Round Amount anomaly
+      despite the page's own default Pending-only filter, since case-
+      scoped mode fetches status=all) with the same. All 3 "Back to
+      Audit Review" buttons returned to document_id=3753 correctly.
+    - Once all 4 steps were marked reviewed, Approve became enabled
+      (this case's Round Amount/Medium anomaly is non-blocking) and the
+      disabled-reason text disappeared; Final Audit Decision still read
+      "Need Review", unchanged by any of this.
+    - Zero unexpected console errors (one pre-existing, unrelated 404 -
+      the seeded fixture's authenticity check has no real underlying
+      image file - confirmed via direct reproduction to be unrelated to
+      this change). Dev servers stopped by exact PID afterward.
+    - Screenshot-verified both pages render correctly end to end.
+
+Build result:
+  Backend: 32/32 test suites pass. Frontend: clean production build,
+  exit 0. Live browser check: every scenario in the task's verification
+  list confirmed end-to-end against the real fixture and a real
+  Postgres database.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub - Render should auto-deploy both services.
+  2. Backend redeploy required (app.py, routes/reviews.py, routes/
+     documents.py changed). On first boot after deploy, watch the
+     Render logs for "document_review_steps table ready" - confirms the
+     new migration ran; it's idempotent and safe on every future boot.
+  3. No manual database migration needed - applies itself automatically
+     via the new app.py startup migration.
+  4. Nothing new to configure - no new environment variables, no new
+     dependencies.
+
+Rollback instructions:
+  Revert this one commit. document_review_steps is a new, additive
+  table - harmless to leave in place even after a revert (nothing will
+  read or write it once routes/reviews.py's new endpoint and routes/
+  documents.py's review_steps field are gone). No data loss either way -
+  every anomaly/exception/authenticity/review-history record and its
+  full history is untouched by this change or its rollback; Finance
+  Correction Detail's workflow timeline was never modified.

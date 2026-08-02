@@ -17,8 +17,15 @@
   gap: 8px;
 }
 
+.header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 .btn-back {
-  align-self: flex-start;
   background: none;
   border: none;
   color: var(--accent-soft);
@@ -26,6 +33,7 @@
   font-weight: 600;
   cursor: pointer;
   padding: 0;
+  white-space: nowrap;
 }
 
 .btn-back:hover { text-decoration: underline; }

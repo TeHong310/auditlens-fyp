@@ -1,13 +1,9 @@
-import { Component, OnInit, OnDestroy, HostListener, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { environment } from '../../../environments/environment';
-import { WorkflowTimelineComponent } from '../../workflow-timeline/workflow-timeline.component';
-
-type DocType = 'invoice' | 'po' | 'gr';
 
 // ── Send-Back structured form (Feature 1) — machine keys mirror
 // helpers/send_back.py's REASON_CATEGORIES / REQUIRED_ACTIONS / PRIORITIES
@@ -89,14 +85,22 @@ export function validateSendBackForm(form: SendBackFormState, todayIso: string):
   return errors;
 }
 
+// Guided review checklist (Section 4/5) — the order Three-Way Matching
+// -> Exception Review -> Authenticity Review -> Anomaly Review must be
+// marked reviewed in, mirroring routes/reviews.py::REVIEW_STEP_ORDER
+// exactly (server enforces the same order independently; this is only
+// for the client-side unlock display, never the sole guard).
+export const REVIEW_STEP_ORDER = ['three_way_matching', 'exception_review', 'authenticity_review', 'anomaly_review'] as const;
+export type ReviewStep = typeof REVIEW_STEP_ORDER[number];
+
 @Component({
   selector: 'app-auditor-record-detail',
   standalone: true,
-  imports: [CommonModule, FormsModule, WorkflowTimelineComponent],
+  imports: [CommonModule, FormsModule],
   templateUrl: './auditor-record-detail.component.html',
   styleUrls: ['./auditor-record-detail.component.css']
 })
-export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
+export class AuditorRecordDetailComponent implements OnInit {
 
   documentId: number | null = null;
   comparison: any = null;
@@ -173,14 +177,13 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   aiQuestion: string = '';
   aiConversation: { question: string; answer: string }[] = [];
 
-  // PDF quick-view modal
-  showModal: boolean = false;
-  modalDocType: DocType = 'invoice';
-  modalFileName: string = '';
-  modalIframeUrl: SafeResourceUrl | null = null;
-  modalRawBlobUrl: string = '';
-  modalLoading: boolean = false;
-  modalError: string = '';
+  // ── Guided review checklist (Section 4/5) — one entry per step once
+  // marked reviewed (null/absent until then), loaded alongside
+  // riskIndicators from the SAME GET /documents/<id>/timeline call
+  // (see loadRiskIndicators() below) — no extra request. ──
+  reviewSteps: { [key: string]: { reviewed_by: number; reviewer_name: string; reviewed_at: string } } = {};
+  markingStep: ReviewStep | null = null;
+  markStepError: string = '';
 
   private apiUrl = environment.apiUrl;
 
@@ -188,8 +191,7 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     private http: HttpClient,
     private router: Router,
     private route: ActivatedRoute,
-    private cdr: ChangeDetectorRef,
-    private sanitizer: DomSanitizer
+    private cdr: ChangeDetectorRef
   ) {}
 
   ngOnInit() {
@@ -207,10 +209,6 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
         this.loadRiskIndicators();
       }
     });
-  }
-
-  ngOnDestroy() {
-    this.revokeModalBlobUrl();
   }
 
   getHeaders() {
@@ -317,23 +315,152 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   }
 
   // ── Risk Indicators (below Exception Summary) ───────────
-  // Reuses GET /documents/<id>/timeline — the SAME endpoint the
-  // Document Workflow Timeline component (below on this page) already
-  // calls independently for its own "Anomaly Evaluation" step; this
-  // page-level fetch is a second, separate call to that same lightweight
-  // (no-AI-call) endpoint rather than restructuring the shared
-  // WorkflowTimelineComponent (used by Finance Correction Detail too)
-  // just to pass anomalies down as an @Input. Non-blocking: a failure
-  // here just leaves the section hidden, matching every other advisory
-  // section on this page (authenticity, transaction detail).
+  // Reuses GET /documents/<id>/timeline for BOTH the anomaly findings
+  // (Risk Indicators) AND the guided review checklist's progress
+  // (reviewSteps, Section 4/5) — one call, no separate endpoint. Non-
+  // blocking: a failure here just leaves both sections showing nothing
+  // marked/reviewed, matching every other advisory section on this page
+  // (authenticity, transaction detail).
   loadRiskIndicators() {
     if (!this.documentId) return;
     this.http.get<any>(`${this.apiUrl}/documents/${this.documentId}/timeline`, {
       headers: this.getHeaders()
     }).subscribe({
-      next: (res) => { this.riskIndicators = res.anomalies || []; this.cdr.detectChanges(); },
-      error: () => { this.riskIndicators = []; }
+      next: (res) => {
+        this.riskIndicators = res.anomalies || [];
+        this.reviewSteps = res.review_steps || {};
+        this.cdr.detectChanges();
+      },
+      error: () => { this.riskIndicators = []; this.reviewSteps = {}; }
     });
+  }
+
+  // ── Guided review checklist (Section 4/5) ───────────────
+  // Three-Way Matching -> Exception Review -> Authenticity Review ->
+  // Anomaly Review, each gated on the one before it. "Mark as
+  // Reviewed" never navigates — it only saves reviewer/time and
+  // unlocks the next step; Send Back and Need Review stay available
+  // regardless of how many steps are done (only Approve is gated,
+  // see canApprove/approveDisabledReason below).
+
+  isStepReviewed(step: ReviewStep): boolean {
+    return !!this.reviewSteps[step];
+  }
+
+  isStepUnlocked(step: ReviewStep): boolean {
+    const idx = REVIEW_STEP_ORDER.indexOf(step);
+    if (idx <= 0) return true;
+    return REVIEW_STEP_ORDER.slice(0, idx).every(s => this.isStepReviewed(s));
+  }
+
+  // The step this page should point the auditor at next — used only to
+  // name the prerequisite in the "locked" note under a not-yet-
+  // unlocked step (e.g. "Complete Three-Way Matching first").
+  stepLabel(step: ReviewStep): string {
+    if (step === 'three_way_matching') return 'Three-Way Matching';
+    if (step === 'exception_review') return 'Exception Review';
+    if (step === 'authenticity_review') return 'Authenticity Review';
+    return 'Anomaly Review';
+  }
+
+  firstLockedPrerequisite(step: ReviewStep): string {
+    const idx = REVIEW_STEP_ORDER.indexOf(step);
+    const missing = REVIEW_STEP_ORDER.slice(0, idx).find(s => !this.isStepReviewed(s));
+    return missing ? this.stepLabel(missing) : '';
+  }
+
+  markStepReviewed(step: ReviewStep) {
+    if (!this.documentId || this.markingStep || !this.isStepUnlocked(step)) return;
+    this.markingStep = step;
+    this.markStepError = '';
+    this.http.post<any>(`${this.apiUrl}/reviews/review-steps/${this.documentId}/${step}`, {},
+      { headers: this.getHeaders() }
+    ).subscribe({
+      next: (res) => {
+        this.markingStep = null;
+        this.reviewSteps = {
+          ...this.reviewSteps,
+          [step]: { reviewed_by: res.reviewed_by, reviewer_name: res.reviewer_name, reviewed_at: res.reviewed_at }
+        };
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.markingStep = null;
+        this.markStepError = err.error?.error || 'Failed to mark this step as reviewed.';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  // System result shown under each step — reuses data this page already
+  // loads for Case Summary/Exception Summary/Authenticity/Risk
+  // Indicators, so the checklist can never disagree with the rest of
+  // the page about what it found.
+
+  get matchingStepResult(): string {
+    return `Status: ${this.overallStatus}`;
+  }
+
+  get exceptionStepResult(): string {
+    return this.exceptionIssueTitle ? `${this.exceptionIssueTitle} (${this.exceptionRiskLevel} risk)` : 'No exceptions detected';
+  }
+
+  get authenticityStepResult(): string {
+    if (!this.authenticity) return 'Not yet checked';
+    return this.authenticity.authenticity_status === 'passed' ? 'Status: Passed' : 'Status: Warning';
+  }
+
+  get anomalyStepResult(): string {
+    if (this.caseBlockingIssues !== 'None') return `Blocking: ${this.caseBlockingIssues}`;
+    if (this.openFindings.length) return `No blocking issues — ${this.openFindingsSummary} on record`;
+    return 'No anomalies detected';
+  }
+
+  // Only Approve is gated — Send Back and Need Review remain available
+  // at every stage of the checklist (Section 6).
+  get allMandatoryStepsReviewed(): boolean {
+    return REVIEW_STEP_ORDER.every(s => this.isStepReviewed(s));
+  }
+
+  get canApprove(): boolean {
+    return this.allMandatoryStepsReviewed && this.caseBlockingIssues === 'None';
+  }
+
+  get approveDisabledReason(): string {
+    if (this.caseBlockingIssues !== 'None') return `Blocking issue on record: ${this.caseBlockingIssues}.`;
+    if (!this.allMandatoryStepsReviewed) {
+      const nextStep = REVIEW_STEP_ORDER.find(s => !this.isStepReviewed(s));
+      return nextStep ? `Complete "${this.stepLabel(nextStep)}" before approving.` : 'Complete all review steps before approving.';
+    }
+    return '';
+  }
+
+  // ── "View Details" links — each opens the relevant case-specific
+  // page with this record's document_id (and transaction_package_id
+  // when this invoice belongs to one), so every one of those pages can
+  // show a "Back to Audit Review" button that returns to THIS exact
+  // record, never a global list. ──
+
+  private get transactionPackageId(): number | null {
+    return this.comparison?.transaction_context?.transaction_package_id ?? null;
+  }
+
+  openMatchingDetails() {
+    const queryParams: any = { document_id: this.documentId };
+    if (this.transactionPackageId) queryParams.transaction_package_id = this.transactionPackageId;
+    this.router.navigate(['/auditor/matching-details'], { queryParams });
+  }
+
+  openExceptionDetails() {
+    this.router.navigate(['/auditor/exceptions'], { queryParams: { document_id: this.documentId, ref: 'audit-review' } });
+  }
+
+  openAuthenticityDetails() {
+    this.router.navigate(['/auditor/authenticity', this.documentId], { queryParams: { ref: 'audit-review' } });
+  }
+
+  openAnomalyDetails() {
+    this.router.navigate(['/auditor/anomalies'], { queryParams: { document_id: this.documentId, ref: 'audit-review' } });
   }
 
   // Icon/label/severity mapping deliberately mirrors auditor-anomalies.
@@ -404,6 +531,25 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     if (action === 'returned') return 'Sent Back to Finance';
     if (action === 'need_review') return 'Need Review';
     return 'Awaiting Auditor';
+  }
+
+  // Final Audit Decision timeline step marker — approved reads as
+  // completed (green), a Send Back/Need Review decision reads as
+  // action_required (amber, same "needs attention" language the
+  // Three-Way Matching/Exception/Authenticity/Anomaly steps already
+  // use), and no decision yet reads as pending (grey).
+  get finalDecisionStepClass(): string {
+    const action = this.latestReviewAction;
+    if (action === 'approved') return 'wt-completed';
+    if (action === 'returned' || action === 'need_review') return 'wt-action-required';
+    return 'wt-pending';
+  }
+
+  get finalDecisionStepIcon(): string {
+    const action = this.latestReviewAction;
+    if (action === 'approved') return 'ph-check-circle';
+    if (action === 'returned' || action === 'need_review') return 'ph-warning';
+    return 'ph-circle';
   }
 
   auditDecisionChipClass(): string {
@@ -631,7 +777,7 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
   // ── Audit decision actions ──────────────────────────────
 
   approveDocument() {
-    if (!this.documentId) return;
+    if (!this.documentId || !this.canApprove) return;
     this.isSubmitting = true;
     this.http.post<any>(`${this.apiUrl}/reviews/approve/${this.documentId}`,
       { remarks: this.auditNote },
@@ -1184,265 +1330,35 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     return this.missingDocs.join(' and ');
   }
 
-  // ── Field comparison table helpers ──────────────────────
-  // Pairwise (Invoice->PO, PO->GR) symbols are computed client-side from
-  // the raw values the API already returns, so the table can show a
-  // per-column relationship instead of only the aggregate match flags.
-
-  // Enterprise V3 Phase 7 (FIX 5): must match helpers/entity_normalizer.
-  // py::normalize_company_name's punctuation handling exactly — that
-  // backend function replaces punctuation with a SPACE, not empty
-  // string. Stripping to empty (the previous bug here) merged
-  // "A." + "Waner" into "awaner" while "A WANER" stayed "a waner",
-  // making two names the backend already treats as identical (see
-  // match_result.vendor_match) render as "Differ" on this row's
-  // client-side pill.
-  private normalizeVendor(name: string | null | undefined): string {
-    if (!name) return '';
-    return name.toLowerCase()
-      .replace(/[.,()]/g, ' ')
-      .replace(/\bsdn\s*bhd\b/g, '')
-      .replace(/\bberhad\b/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
+  // amountsEqual/amountSymbol/isV2Allocated/amountCompareBasis are kept
+  // here (also duplicated in auditor-matching-details.component.ts, the
+  // page that now owns the full field-comparison table) because
+  // financialImpact above reuses this SAME math so its number can never
+  // contradict that table — see financialImpact's own comment. Every
+  // OTHER field-comparison-table-only helper (vendor/row-match pills,
+  // line-item cell logic, formatQuantity, the Three-way Match card's
+  // fulfilment summary) moved to that page and isn't duplicated here.
 
   private amountsEqual(a: number | null | undefined, b: number | null | undefined): boolean {
     if (a === null || a === undefined || b === null || b === undefined) return false;
     return Math.abs(Number(a) - Number(b)) < 0.01;
   }
 
-  vendorSymbol(fromVal: string | null, toVal: string | null): 'eq' | 'neq' | 'na' {
-    if (!fromVal || !toVal) return 'na';
-    return this.normalizeVendor(fromVal) === this.normalizeVendor(toVal) ? 'eq' : 'neq';
-  }
-
   amountSymbol(fromVal: number | null, toVal: number | null, fromCurrency?: string | null, toCurrency?: string | null): 'eq' | 'neq' | 'na' {
     if (fromVal === null || fromVal === undefined || toVal === null || toVal === undefined) return 'na';
-    // Different known currencies (e.g. invoice in USD, PO in RM) make a
-    // raw numeric comparison meaningless — treat as not-applicable
-    // rather than silently comparing USD against RM as the same unit.
     if (fromCurrency && toCurrency && fromCurrency.toUpperCase() !== toCurrency.toUpperCase()) return 'na';
     return this.amountsEqual(fromVal, toVal) ? 'eq' : 'neq';
   }
-
-  rowClass(symbols: ('eq' | 'neq' | 'na')[]): string {
-    return symbols.includes('neq') ? 'row-mismatch' : '';
-  }
-
-  matchPillClass(sym: 'eq' | 'neq' | 'na'): string {
-    if (sym === 'eq') return 'pill-match';
-    if (sym === 'neq') return 'pill-differ';
-    return 'pill-na';
-  }
-
-  matchPillIcon(sym: 'eq' | 'neq' | 'na'): string {
-    if (sym === 'eq') return 'ph-check';
-    if (sym === 'neq') return 'ph-x';
-    return 'ph-minus';
-  }
-
-  matchPillText(sym: 'eq' | 'neq' | 'na'): string {
-    if (sym === 'eq') return 'Match';
-    if (sym === 'neq') return 'Differ';
-    return 'N/A';
-  }
-
-  // ── 3-way row-level match indicator (PO Ref / Item / Quantity) ──
-  // Unlike Vendor/Amount above (pairwise, computed client-side per
-  // cell), these compare all three present values at once and are
-  // computed server-side in match_result — one indicator per row,
-  // shown once next to the field label, not per cell.
-
-  rowMatchClass(match: boolean | null): string {
-    return match === false ? 'row-mismatch' : '';
-  }
-
-  rowMatchPillClass(match: boolean | null): string {
-    if (match === true) return 'pill-match';
-    if (match === false) return 'pill-differ';
-    return 'pill-na';
-  }
-
-  rowMatchIcon(match: boolean | null): string {
-    if (match === true) return 'ph-check';
-    if (match === false) return 'ph-warning';
-    return 'ph-minus';
-  }
-
-  rowMatchText(match: boolean | null): string {
-    if (match === true) return 'Match';
-    if (match === false) return 'Mismatch';
-    return 'N/A';
-  }
-
-  // ── Line Items (per-item, one row per matched item across Invoice/PO/
-  // GR by item_code or normalized description — server-computed in
-  // comparison.line_items) ──────────────────────────────────
-
-  private lineItemMissing(li: any, side: 'po' | 'gr'): boolean {
-    return side === 'po' ? !!li.missing_on_po : !!li.missing_on_gr;
-  }
-
-  // ── Enterprise V3 Phase 7 (FIX 1b) — allocation-aware Amount/Line
-  // Items display. build_comparison() always returns invoice_result
-  // (Enterprise V2's own allocation verdict, already computing
-  // allocated_amount/allocated_quantity across every PO this invoice is
-  // linked to — see helpers/enterprise_matching.py::compute_invoice_
-  // result) whenever engine_version === 'v2'. No new calculation here:
-  // this only decides which already-computed number the Field
-  // Comparison table's PO-side cells compare the invoice against. ──
 
   get isV2Allocated(): boolean {
     return this.comparison?.engine_version === 'v2' && !!this.comparison?.invoice_result;
   }
 
-  // The value the Amount row's PO-side cell should be compared against:
-  // this invoice's allocated share of the PO(s) it's linked to (correct
-  // for a partial-fulfilment invoice) rather than the PO's full total
-  // (only correct for a plain 1:1 invoice-to-PO record — which is
-  // exactly what allocated_amount equals in that case too, so this is a
-  // pure superset fix, not a behavior change for the single-invoice
-  // workflow).
   get amountCompareBasis(): number | null {
     if (this.isV2Allocated && this.comparison.invoice_result.allocated_amount != null) {
       return this.comparison.invoice_result.allocated_amount;
     }
     return this.comparison?.po?.total_amount ?? null;
-  }
-
-  // A PO-side line-item quantity "mismatch" that's actually just this
-  // invoice's allocated share of a multi-invoice PO — a genuine Match
-  // against its OWN allocation, not a mismatch, as long as V2's own
-  // invoice_result found no real issue (exceeds-remaining-capacity/
-  // vendor mismatch/etc., surfaced via status !== 'PASS') and the
-  // invoice never bills MORE than the PO line (that would be a genuine
-  // over-invoicing problem regardless of allocation, and must still
-  // show as a mismatch). When a single PO candidate matched this
-  // invoice (the common case), the relationship builder's own
-  // allocation rule (helpers/relationship_builder.py::build_
-  // relationships_for_invoice) gives it the FULL invoice quantity as
-  // its matched_quantity — which is exactly li.invoice_quantity, so no
-  // new value needs to be fetched from the backend to show it.
-  isPartialAllocationLineItem(li: any): boolean {
-    if (!this.isV2Allocated || this.comparison.invoice_result.status !== 'PASS') return false;
-    if (li.po_quantity == null || li.invoice_quantity == null) return false;
-    return li.invoice_quantity <= li.po_quantity + 0.01;
-  }
-
-  // The value to show in the PO-side Line Items cell: the invoice's own
-  // allocated quantity (same as its own column, by definition of a
-  // valid allocation) instead of the PO line's full ordered quantity,
-  // whenever this row's quantity difference is explained by allocation.
-  lineItemPoDisplayQuantity(li: any): any {
-    if (li.po_quantity !== li.invoice_quantity && this.isPartialAllocationLineItem(li)) {
-      return li.invoice_quantity;
-    }
-    return li.po_quantity;
-  }
-
-  // Drives the "(Allocated)" / "PO Ordered (context)" notes in the
-  // template — true whenever the PO cell is showing the invoice's
-  // allocated share instead of the PO's raw ordered quantity.
-  showPoAllocationContext(li: any): boolean {
-    return li.po_quantity !== li.invoice_quantity && this.isPartialAllocationLineItem(li);
-  }
-
-  // The same physical item is often worded completely differently
-  // across documents (a PO's "Zipper Bag 205*275mm with Logo" vs the
-  // supplier's own invoice line "PRINTING: RECYCLE LOGO...ZIPLOCK BAG
-  // 205MM X 275MM..."). The field-name column shows ONE canonical
-  // description; these surface the OTHER side's own wording as small
-  // context text only when it's actually different — informational,
-  // never a failure signal.
-  private descriptionDiffers(a: string | null | undefined, b: string | null | undefined): boolean {
-    if (!a || !b) return false;
-    return a.trim().toLowerCase() !== b.trim().toLowerCase();
-  }
-
-  showPoDescription(li: any): boolean {
-    return !li.missing_on_po && this.descriptionDiffers(li.po_description, li.description);
-  }
-
-  showGrDescription(li: any): boolean {
-    return !li.missing_on_gr && this.descriptionDiffers(li.gr_description, li.description);
-  }
-
-  // Enterprise V3 Phase 12 — a genuine, PER-SIDE comparison (invoice vs
-  // THIS side's own quantity) instead of the blended 3-way li.
-  // quantity_match flag (invoice == po == gr all at once). That blended
-  // flag was driving the GR column's pill/icon/text too, so a GR that
-  // exactly matches the invoice (15000 == 15000) still showed Mismatch
-  // purely because the PO's raw, un-allocated total (30000) differed —
-  // a completely unrelated column's discrepancy bleeding into the GR
-  // pill. Returns null when there's nothing to compare (missing side).
-  private lineItemSideQuantityMatch(li: any, side: 'po' | 'gr'): boolean | null {
-    const sideQty = side === 'po' ? li.po_quantity : li.gr_quantity;
-    if (sideQty == null || li.invoice_quantity == null) return null;
-    return Math.abs(sideQty - li.invoice_quantity) < 0.01;
-  }
-
-  private lineItemSideHasIssue(li: any, side: 'po' | 'gr'): boolean {
-    if (this.lineItemMissing(li, side)) return true;
-    if (side === 'po' && this.isPartialAllocationLineItem(li)) return false;
-    return this.lineItemSideQuantityMatch(li, side) === false;
-  }
-
-  lineItemRowClass(li: any): string[] {
-    const hardIssue = this.lineItemSideHasIssue(li, 'po') || this.lineItemSideHasIssue(li, 'gr')
-      || li.missing_on_invoice;
-    if (hardIssue) return ['row-mismatch', 'row-quantity-alert'];
-    // amount_match is a SOFT check comparing the line's amount across
-    // every present side — for a partially-allocated invoice this is
-    // the SAME "invoice line vs PO's FULL line" comparison already
-    // softened above for quantity (V2's own invoice_result already
-    // confirmed this is a correct allocation), so the same reasoning
-    // applies: don't show a row-mismatch stripe for it. Still needs a
-    // visible row indicator when it's a REAL soft mismatch, or it would
-    // be an invisible check silently affecting the banner with nothing
-    // in the table for an auditor to actually see (the exact bug fixed
-    // for date_order_valid/po_reference_match in earlier work on this
-    // page). Standard row-mismatch styling only, no row-quantity-alert
-    // stripe — that's reserved for the hard quantity case.
-    if (li.amount_match === false && !this.isPartialAllocationLineItem(li)) return ['row-mismatch'];
-    return [];
-  }
-
-  lineItemPillClass(li: any, side: 'po' | 'gr'): string {
-    if (this.lineItemMissing(li, side)) return 'pill-differ';
-    return this.lineItemSideHasIssue(li, side) ? 'pill-differ' : 'pill-match';
-  }
-
-  lineItemPillIcon(li: any, side: 'po' | 'gr'): string {
-    if (this.lineItemMissing(li, side)) return 'ph-warning';
-    return this.lineItemSideHasIssue(li, side) ? 'ph-x' : 'ph-check';
-  }
-
-  lineItemPillText(li: any, side: 'po' | 'gr'): string {
-    if (side === 'po' && li.missing_on_po) return 'Missing on PO';
-    if (side === 'gr' && li.missing_on_gr) return 'Missing on GR';
-    return this.lineItemSideHasIssue(li, side) ? 'Mismatch' : 'Match';
-  }
-
-  formatQuantity(qty: any): string {
-    if (qty === null || qty === undefined || qty === '') return '-';
-    const n = parseFloat(qty);
-    return Number.isInteger(n) ? String(n) : n.toFixed(2);
-  }
-
-  // ── Three-way Match card (Phase 4, compacted Phase 13) — one-line
-  // fulfilment verdict across every related PO, reusing the existing
-  // .match-pill/.pill-* classes. Reads ONLY comparison.po_fulfilment,
-  // already computed and returned by build_comparison() — no
-  // calculation happens here. ──
-  get fulfilmentSummaryText(): string {
-    const pf = this.comparison?.po_fulfilment || [];
-    if (!pf.length) return 'N/A';
-    return pf.every((p: any) => p.status === 'FULLY_FULFILLED') ? 'Fully Matched' : 'Review Required';
-  }
-
-  get fulfilmentSummaryClass(): string {
-    return this.fulfilmentSummaryText === 'Fully Matched' ? 'pill-match' : 'pill-differ';
   }
 
   // ── Formatting ───────────────────────────────────────────
@@ -1461,121 +1377,4 @@ export class AuditorRecordDetailComponent implements OnInit, OnDestroy {
     });
   }
 
-  // ── Enterprise V3 Phase 6 — Related Documents (Transaction
-  // Overview) click-through. An invoice navigates this SAME page to
-  // that invoice's own record; a PO/GR opens its file directly (there
-  // is no "record detail" page for a PO/GR on its own). ──
-
-  openTransactionDocument(type: 'invoice' | 'po' | 'gr', documentId: number) {
-    if (type === 'invoice') {
-      if (documentId === this.documentId) return;
-      this.router.navigate(['/auditor/record-detail'], { queryParams: { document_id: documentId } });
-      return;
-    }
-    const path = type === 'po' ? `po/${documentId}/file` : `gr/${documentId}/file`;
-    const token = localStorage.getItem('access_token');
-    fetch(`${this.apiUrl}/documents/${path}`, { headers: { 'Authorization': `Bearer ${token}` } })
-      .then(res => { if (!res.ok) throw new Error('Failed'); return res.blob(); })
-      .then(blob => window.open(URL.createObjectURL(blob), '_blank'))
-      .catch(() => { this.errorMessage = 'Failed to open file.'; this.cdr.detectChanges(); });
-  }
-
-  // Phase 14 — Source Documents (multi-document). The invoice being
-  // viewed on THIS page opens in the existing in-page modal (same as
-  // before); every OTHER invoice in the same transaction package reuses
-  // openTransactionDocument() above (navigates to that invoice's own
-  // Record Detail) — no new fetching/opening logic.
-  openSourceInvoice(documentId: number) {
-    if (documentId === this.documentId) {
-      this.openDocModal('invoice');
-    } else {
-      this.openTransactionDocument('invoice', documentId);
-    }
-  }
-
-  // ── PDF quick-view modal ─────────────────────────────────
-
-  private fileUrlFor(type: DocType): string | null {
-    if (!this.comparison) return null;
-    if (type === 'invoice') return `${this.apiUrl}/documents/${this.comparison.invoice.document_id}/file`;
-    if (type === 'po' && this.comparison.po) return `${this.apiUrl}/documents/po/${this.comparison.po.po_id}/file`;
-    if (type === 'gr' && this.comparison.gr) return `${this.apiUrl}/documents/gr/${this.comparison.gr.gr_id}/file`;
-    return null;
-  }
-
-  fileNameFor(type: DocType): string {
-    if (!this.comparison) return '';
-    if (type === 'invoice') return this.comparison.invoice?.filename || '';
-    if (type === 'po') return this.comparison.po?.filename || '';
-    if (type === 'gr') return this.comparison.gr?.filename || '';
-    return '';
-  }
-
-  docTypeLabel(type: DocType): string {
-    if (type === 'invoice') return 'Invoice';
-    if (type === 'po') return 'Purchase Order';
-    return 'Goods Receipt';
-  }
-
-  isDocAvailable(type: DocType): boolean {
-    return !!this.fileUrlFor(type);
-  }
-
-  openDocModal(type: DocType) {
-    const url = this.fileUrlFor(type);
-    if (!url) return;
-
-    this.revokeModalBlobUrl();
-    this.modalDocType = type;
-    this.modalFileName = this.fileNameFor(type);
-    this.modalLoading = true;
-    this.modalError = '';
-    this.modalIframeUrl = null;
-    this.showModal = true;
-    this.cdr.detectChanges();
-
-    this.http.get(url, { headers: this.getHeaders(), responseType: 'blob' }).subscribe({
-      next: (blob) => {
-        this.modalRawBlobUrl = URL.createObjectURL(blob);
-        this.modalIframeUrl = this.sanitizer.bypassSecurityTrustResourceUrl(this.modalRawBlobUrl);
-        this.modalLoading = false;
-        this.cdr.detectChanges();
-      },
-      error: () => {
-        this.modalLoading = false;
-        this.modalError = 'Failed to load document.';
-        this.cdr.detectChanges();
-      }
-    });
-  }
-
-  closeModal() {
-    this.showModal = false;
-    this.revokeModalBlobUrl();
-    this.cdr.detectChanges();
-  }
-
-  openInNewTab() {
-    if (this.modalRawBlobUrl) window.open(this.modalRawBlobUrl, '_blank');
-  }
-
-  downloadFile() {
-    if (!this.modalRawBlobUrl) return;
-    const a = document.createElement('a');
-    a.href = this.modalRawBlobUrl;
-    a.download = this.modalFileName || 'document';
-    a.click();
-  }
-
-  private revokeModalBlobUrl() {
-    if (this.modalRawBlobUrl) {
-      URL.revokeObjectURL(this.modalRawBlobUrl);
-      this.modalRawBlobUrl = '';
-    }
-  }
-
-  @HostListener('document:keydown.escape')
-  onEscapeKey() {
-    if (this.showModal) this.closeModal();
-  }
 }

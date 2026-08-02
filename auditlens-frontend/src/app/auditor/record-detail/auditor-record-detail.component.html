@@ -8,7 +8,7 @@
         Back
       </button>
       <div>
-        <p class="page-label">Record Detail</p>
+        <p class="page-label">Audit Review</p>
         <p class="page-subtitle" *ngIf="comparison">{{ comparison.invoice.invoice_no || comparison.invoice.filename }}</p>
       </div>
     </div>
@@ -192,15 +192,18 @@
     <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
 
     <!-- Enterprise V3 Phase 7 (Bug 3/FIX 4) — compact Transaction
-         Context: package name, document-type breakdown, status — no
-         separate document list (the Matching Summary directly below
-         already lists every PO/Invoice/GR, with more useful detail, and
-         its rows are clickable). Rendered ONLY when comparison.
-         transaction_context said this invoice belongs to a Finance
-         Transaction Package (Phase 5); invisible for a standalone/
-         legacy invoice (STEP 10). Every value here comes from GET
-         /auditor/transactions/<id>, pure aggregation over already-
-         computed data — no new calculation happens in this component. -->
+         Context: package name, document-type breakdown, status. The
+         allocation-aware Enterprise Matching Summary that used to sit
+         here moved to the new Three-Way Matching Details page (see the
+         Timeline's Three-Way Matching step below) — Audit Review keeps
+         only this lightweight header plus Transaction Authenticity
+         Summary, so the matching comparison itself isn't duplicated
+         across two pages. Rendered ONLY when comparison.transaction_
+         context said this invoice belongs to a Finance Transaction
+         Package (Phase 5); invisible for a standalone/legacy invoice
+         (STEP 10). Every value here comes from GET /auditor/
+         transactions/<id>, pure aggregation over already-computed data
+         — no new calculation happens in this component. -->
     <div class="comparison-card txn-overview-card" *ngIf="transactionDetail as txn">
       <div class="txn-context-compact">
         <div class="txn-context-main">
@@ -213,43 +216,6 @@
           <span>PO: {{ comparison.transaction_context.purchase_orders }}</span>
           <span>Invoices: {{ comparison.transaction_context.invoices }}</span>
           <span>GR: {{ comparison.transaction_context.goods_receipts }}</span>
-        </div>
-      </div>
-
-      <!-- Transaction Matching View (STEP 5/6) — replaces the single-
-           invoice-vs-full-PO comparison for transaction-grouped
-           invoices with the allocation-aware view: PO total, EACH
-           invoice's own allocation, GRs, and a final status — every
-           number read directly from matching_summary (build_
-           comparison()'s own already-computed po_fulfilment/
-           invoice_result, aggregated once per package). No calculation
-           happens here. Rows are clickable (Bug 3/FIX 4) — the only
-           place an auditor needs to open a related document from now. -->
-      <div class="enterprise-fulfilment-section" *ngIf="txn.matching_summary as ms">
-        <h3 class="source-docs-title"><i class="ph-duotone ph-scales"></i> Enterprise Matching Summary</h3>
-
-        <div class="enterprise-status-row" *ngFor="let pf of ms.po_fulfilment">
-          <a class="enterprise-stat-label txn-clickable" (click)="openTransactionDocument('po', pf.po_id)">Purchase Order Total ({{ pf.po_number }})</a>
-          <span class="enterprise-stat-value">{{ formatAmount(pf.po_amount, 'MYR') }}</span>
-        </div>
-
-        <p class="enterprise-related-label" style="margin-top:12px;">Invoice Allocation</p>
-        <div class="enterprise-related-item" *ngFor="let alloc of ms.invoice_allocations">
-          <a class="enterprise-related-name txn-clickable" [class.txn-related-current]="alloc.document_id === documentId" (click)="openTransactionDocument('invoice', alloc.document_id)">{{ alloc.invoice_number }}</a>
-          <span class="enterprise-related-detail">{{ formatAmount(alloc.amount, alloc.currency) }}</span>
-          <span class="match-pill" [ngClass]="alloc.status === 'PASS' ? 'pill-match' : 'pill-differ'">{{ alloc.status }}</span>
-        </div>
-
-        <ng-container *ngIf="ms.goods_receipts?.length">
-          <p class="enterprise-related-label" style="margin-top:12px;">Received</p>
-          <div class="enterprise-related-item" *ngFor="let gr of ms.goods_receipts">
-            <i class="ph-duotone ph-check-circle enterprise-check-icon"></i> <a class="enterprise-related-name txn-clickable" (click)="openTransactionDocument('gr', gr.document_id)">{{ gr.gr_number }}</a>
-          </div>
-        </ng-container>
-
-        <div class="enterprise-status-row" style="margin-top:12px;">
-          <span class="enterprise-stat-label">Final Status</span>
-          <span class="match-pill" [ngClass]="ms.final_status === 'MATCHED' ? 'pill-match' : 'pill-differ'">{{ ms.final_status }}</span>
         </div>
       </div>
 
@@ -285,346 +251,157 @@
     <!-- Main Content -->
     <div class="content-row">
 
-      <!-- Left: Field Comparison -->
+      <!-- Left: Guided Review Timeline (Section 4/5) — Three-Way
+           Matching -> Exception Review -> Authenticity Review ->
+           Anomaly Review, each gated on the one before it, each with a
+           "View Details" link to its own case-specific page and a
+           "Mark as Reviewed" control that saves reviewer/time and
+           unlocks the next step WITHOUT navigating away. Document
+           Uploaded/OCR Extraction are automatic (no action needed);
+           Final Audit Decision reflects the SAME caseFinalDecision the
+           Case Summary chip above already shows. -->
       <div class="main-card">
+        <div class="wt-card">
+          <p class="wt-title"><i class="ph-duotone ph-clock-counter-clockwise"></i> Document Workflow Timeline</p>
 
-        <!-- Comparison Card -->
-        <div class="comparison-card">
-          <div class="comparison-card-header">
-            <h2 class="comparison-title"><i class="ph-duotone ph-scales"></i> Field Comparison</h2>
-            <p class="comparison-subtitle">Invoice vs PO vs GR</p>
-          </div>
+          <div class="wt-list">
 
-          <div class="comparison-table-wrap">
-            <table class="field-table">
-              <thead>
-                <tr>
-                  <th class="col-field">Field</th>
-                  <th>
-                    <div class="col-head">Invoice</div>
-                    <span class="col-badge col-badge-source">Source</span>
-                  </th>
-                  <th>
-                    <div class="col-head">PO</div>
-                    <span class="col-badge" [ngClass]="comparison.po ? 'col-badge-uploaded' : 'col-badge-missing'">
-                      {{ comparison.po ? 'Uploaded' : 'Missing' }}
-                    </span>
-                  </th>
-                  <th>
-                    <div class="col-head">GR</div>
-                    <span class="col-badge" [ngClass]="comparison.gr ? 'col-badge-uploaded' : 'col-badge-missing'">
-                      {{ comparison.gr ? 'Uploaded' : 'Missing' }}
-                    </span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                <!-- Vendor -->
-                <tr [ngClass]="rowClass([vendorSymbol(comparison.invoice.vendor_name, comparison.po?.vendor_name), vendorSymbol(comparison.po?.vendor_name, comparison.gr?.vendor_name)])">
-                  <td class="field-name"><span class="field-icon"><i class="ph-duotone ph-buildings"></i></span> Vendor / Supplier</td>
-                  <td class="cell-value">{{ comparison.invoice.vendor_name || '-' }}</td>
-                  <td class="cell-value" *ngIf="comparison.po">
-                    <span class="match-pill" [ngClass]="matchPillClass(vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name))">
-                      <i class="ph-duotone" [ngClass]="matchPillIcon(vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name))"></i>
-                      {{ matchPillText(vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name)) }}
-                    </span>
-                    <div class="cell-main-value">{{ comparison.po.vendor_name || '-' }}</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
-                    <span class="not-uploaded-label">Missing</span>
-                    <span class="upload-hint">Awaiting Finance Submission</span>
-                  </td>
-                  <td class="cell-value" *ngIf="comparison.gr">
-                    <span class="match-pill" [ngClass]="matchPillClass(vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name))">
-                      <i class="ph-duotone" [ngClass]="matchPillIcon(vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name))"></i>
-                      {{ matchPillText(vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name)) }}
-                    </span>
-                    <div class="cell-main-value">{{ comparison.gr.vendor_name || '-' }}</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
-                    <span class="not-uploaded-label">Missing</span>
-                    <span class="upload-hint">Awaiting Finance Submission</span>
-                  </td>
-                </tr>
+            <!-- 1. Document Uploaded (automatic) -->
+            <div class="wt-item">
+              <div class="wt-marker wt-completed"><i class="ph-duotone ph-check-circle"></i></div>
+              <div class="wt-content">
+                <p class="wt-label">Document Uploaded</p>
+                <p class="wt-timestamp" *ngIf="comparison.invoice.uploaded_at">{{ formatDateTime(comparison.invoice.uploaded_at) }}</p>
+              </div>
+            </div>
 
-                <!-- PO Ref: the common anchor all three reference — Invoice's
-                     "PO No:" line, the PO's own number, GR's "PO No:" line.
-                     One 3-way match indicator for the whole row (server-
-                     computed in match_result), not per-cell pairwise pills. -->
-                <tr [ngClass]="rowMatchClass(comparison.match_result.po_reference_match)">
-                  <td class="field-name">
-                    <span class="field-icon"><i class="ph-duotone ph-link"></i></span> PO Ref
-                    <span class="match-pill" [ngClass]="rowMatchPillClass(comparison.match_result.po_reference_match)">
-                      <i class="ph-duotone" [ngClass]="rowMatchIcon(comparison.match_result.po_reference_match)"></i>
-                      {{ rowMatchText(comparison.match_result.po_reference_match) }}
-                    </span>
-                  </td>
-                  <td class="cell-value">{{ comparison.invoice.po_reference || '-' }}</td>
-                  <td class="cell-value" *ngIf="comparison.po">
-                    <div class="cell-main-value">{{ comparison.po.po_no || '-' }}</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
-                    <span class="not-uploaded-label">Missing</span>
-                    <span class="upload-hint">Awaiting Finance Submission</span>
-                  </td>
-                  <td class="cell-value" *ngIf="comparison.gr">
-                    <div class="cell-main-value">{{ comparison.gr.po_reference || '-' }}</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
-                    <span class="not-uploaded-label">Missing</span>
-                    <span class="upload-hint">Awaiting Finance Submission</span>
-                  </td>
-                </tr>
+            <!-- 2. OCR Extraction (automatic) -->
+            <div class="wt-item">
+              <div class="wt-marker" [ngClass]="comparison.invoice.ocr_confidence !== null ? 'wt-completed' : 'wt-pending'">
+                <i class="ph-duotone" [ngClass]="comparison.invoice.ocr_confidence !== null ? 'ph-check-circle' : 'ph-circle'"></i>
+              </div>
+              <div class="wt-content">
+                <p class="wt-label">OCR Extraction</p>
+                <p class="wt-detail" *ngIf="comparison.invoice.ocr_confidence !== null">Confidence: {{ comparison.invoice.ocr_confidence }}%</p>
+                <p class="wt-detail" *ngIf="comparison.invoice.ocr_confidence === null">Awaiting extraction</p>
+              </div>
+            </div>
 
-                <!-- Line Items — every row of the goods/services table
-                     matched by item_code/description across Invoice/PO/GR
-                     (not just the first item). Extra prominence on a
-                     quantity mismatch beyond the standard row-mismatch
-                     highlight (row-quantity-alert), same as the old single
-                     Quantity row used to have. -->
-                <tr class="line-items-section-row">
-                  <td colspan="4" class="field-name line-items-section-label">
-                    <span class="field-icon"><i class="ph-duotone ph-package"></i></span> Line Items
-                    <span class="line-items-count" *ngIf="comparison.line_items?.length">({{ comparison.line_items.length }})</span>
-                  </td>
-                </tr>
-                <tr *ngFor="let li of comparison.line_items" [ngClass]="lineItemRowClass(li)">
-                  <td class="field-name">
-                    <div class="li-desc">{{ li.description || '-' }}</div>
-                    <div class="li-code" *ngIf="li.item_code">{{ li.item_code }}</div>
-                    <div class="li-amount-note" *ngIf="li.amount_match === false"><i class="ph-duotone ph-currency-circle-dollar"></i> Amount/unit price differs</div>
-                  </td>
-                  <td class="cell-value cell-quantity">
-                    <span class="not-uploaded-label li-missing-label" *ngIf="li.missing_on_invoice">Missing on Invoice</span>
-                    <ng-container *ngIf="!li.missing_on_invoice">{{ formatQuantity(li.invoice_quantity) }}</ng-container>
-                  </td>
-                  <td class="cell-value" *ngIf="comparison.po">
-                    <span class="match-pill" [ngClass]="lineItemPillClass(li, 'po')">
-                      <i class="ph-duotone" [ngClass]="lineItemPillIcon(li, 'po')"></i> {{ lineItemPillText(li, 'po') }}
-                    </span>
-                    <div class="cell-main-value cell-quantity" *ngIf="!li.missing_on_po">
-                      {{ formatQuantity(lineItemPoDisplayQuantity(li)) }}<span class="cell-muted" *ngIf="showPoAllocationContext(li)" style="font-size:11px;"> (Allocated)</span>
-                    </div>
-                    <div class="cell-muted" style="font-size:11px;margin-top:2px;" *ngIf="showPoAllocationContext(li)">PO Ordered (context): {{ formatQuantity(li.po_quantity) }}</div>
-                    <div class="cell-muted" style="font-size:11px;margin-top:2px;font-style:italic;" *ngIf="showPoDescription(li)">PO Item: {{ li.po_description }}</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
-                    <span class="not-uploaded-label">Missing</span>
-                    <span class="upload-hint">Awaiting Finance Submission</span>
-                  </td>
-                  <td class="cell-value" *ngIf="comparison.gr">
-                    <span class="match-pill" [ngClass]="lineItemPillClass(li, 'gr')">
-                      <i class="ph-duotone" [ngClass]="lineItemPillIcon(li, 'gr')"></i> {{ lineItemPillText(li, 'gr') }}
-                    </span>
-                    <div class="cell-main-value cell-quantity" *ngIf="!li.missing_on_gr">{{ formatQuantity(li.gr_quantity) }}</div>
-                    <div class="cell-muted" style="font-size:11px;margin-top:2px;font-style:italic;" *ngIf="showGrDescription(li)">GR Item: {{ li.gr_description }}</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
-                    <span class="not-uploaded-label">Missing</span>
-                    <span class="upload-hint">Awaiting Finance Submission</span>
-                  </td>
-                </tr>
-                <tr *ngIf="!comparison.line_items || comparison.line_items.length === 0">
-                  <td colspan="4" class="cell-value cell-muted">No line items extracted</td>
-                </tr>
-
-                <!-- Amount: GR carries no monetary total by design (goods
-                     receipts record quantity received, not money), so this
-                     stays Invoice-vs-PO only — unchanged from before, just
-                     repositioned after Quantity. -->
-                <tr [ngClass]="rowClass([amountSymbol(comparison.invoice.total_amount, amountCompareBasis, comparison.invoice.currency, comparison.po?.currency)])">
-                  <td class="field-name"><span class="field-icon"><i class="ph-duotone ph-currency-circle-dollar"></i></span> Amount</td>
-                  <td class="cell-value cell-amount">{{ formatAmount(comparison.invoice.total_amount, comparison.invoice.currency) }}</td>
-                  <td class="cell-value" *ngIf="comparison.po">
-                    <span class="match-pill" [ngClass]="matchPillClass(amountSymbol(comparison.invoice.total_amount, amountCompareBasis, comparison.invoice.currency, comparison.po.currency))">
-                      <i class="ph-duotone" [ngClass]="matchPillIcon(amountSymbol(comparison.invoice.total_amount, amountCompareBasis, comparison.invoice.currency, comparison.po.currency))"></i>
-                      {{ matchPillText(amountSymbol(comparison.invoice.total_amount, amountCompareBasis, comparison.invoice.currency, comparison.po.currency)) }}
-                    </span>
-                    <div class="cell-main-value cell-amount">
-                      {{ formatAmount(amountCompareBasis, comparison.po.currency) }}<span class="cell-muted" *ngIf="isV2Allocated" style="font-size:11px;"> (Allocated)</span>
-                    </div>
-                    <div class="cell-muted" style="font-size:11px;margin-top:2px;" *ngIf="isV2Allocated">PO Total (context): {{ formatAmount(comparison.po.total_amount, comparison.po.currency) }}</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
-                    <span class="not-uploaded-label">Missing</span>
-                    <span class="upload-hint">Awaiting Finance Submission</span>
-                  </td>
-                  <td class="cell-value" *ngIf="comparison.gr">
-                    <span class="match-pill pill-na"><i class="ph-duotone ph-minus"></i> N/A</span>
-                    <div class="cell-main-value cell-muted">No amount on GR</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
-                    <span class="not-uploaded-label">Missing</span>
-                    <span class="upload-hint">Awaiting Finance Submission</span>
-                  </td>
-                </tr>
-
-                <!-- Doc No -->
-                <tr>
-                  <td class="field-name"><span class="field-icon"><i class="ph-duotone ph-file-text"></i></span> Doc No</td>
-                  <td class="cell-value cell-docno">{{ comparison.invoice.invoice_no || '-' }}</td>
-                  <td class="cell-value" *ngIf="comparison.po">
-                    <div class="cell-main-value cell-docno">{{ comparison.po.po_no || '-' }}</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.po">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
-                    <span class="not-uploaded-label">Missing</span>
-                    <span class="upload-hint">Awaiting Finance Submission</span>
-                  </td>
-                  <td class="cell-value" *ngIf="comparison.gr">
-                    <div class="cell-main-value cell-docno">{{ comparison.gr.gr_no || '-' }}</div>
-                  </td>
-                  <td class="not-uploaded-cell" *ngIf="!comparison.gr">
-                    <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
-                    <span class="not-uploaded-label">Missing</span>
-                    <span class="upload-hint">Awaiting Finance Submission</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <!-- Source Documents -->
-          <div class="source-docs-section">
-            <h3 class="source-docs-title"><i class="ph-duotone ph-file-text"></i> Source Documents</h3>
-
-            <!-- Enterprise V3 Phase 14 — when this invoice belongs to a
-                 Transaction Package, show EVERY linked Invoice/PO/GR
-                 (previously only the single "primary" comparison.po/
-                 comparison.gr rendered, hiding sibling documents).
-                 Reuses transactionDetail.documents — already loaded by
-                 loadTransactionDetail() for the Transaction Overview
-                 card above — and the existing openTransactionDocument()/
-                 openDocModal() openers; no new fetching logic. -->
-            <ng-container *ngIf="transactionDetail as txn; else legacySourceDocs">
-              <div class="source-docs-group" *ngIf="txn.documents.invoices?.length">
-                <p class="source-docs-group-label">Invoices</p>
-                <div class="source-docs-buttons">
-                  <button class="btn-view-doc" *ngFor="let inv of txn.documents.invoices" (click)="openSourceInvoice(inv.document_id)">
-                    <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
-                    <span class="btn-view-doc-text">
-                      <span class="btn-view-doc-label">View Invoice</span>
-                      <span class="btn-view-doc-filename">{{ inv.invoice_number || inv.file_name }}</span>
-                    </span>
+            <!-- 3. Three-Way Matching -->
+            <div class="wt-item">
+              <div class="wt-marker" [ngClass]="isStepReviewed('three_way_matching') ? 'wt-completed' : 'wt-pending'">
+                <i class="ph-duotone" [ngClass]="isStepReviewed('three_way_matching') ? 'ph-check-circle' : 'ph-circle'"></i>
+              </div>
+              <div class="wt-content">
+                <p class="wt-label">Three-Way Matching</p>
+                <p class="wt-detail">{{ matchingStepResult }}</p>
+                <p class="wt-timestamp" *ngIf="reviewSteps['three_way_matching']">
+                  Reviewed by {{ reviewSteps['three_way_matching'].reviewer_name }} · {{ formatDateTime(reviewSteps['three_way_matching'].reviewed_at) }}
+                </p>
+                <div class="wt-step-actions">
+                  <button class="btn-wt-view" (click)="openMatchingDetails()">View Matching Details</button>
+                  <button class="btn-wt-mark" *ngIf="!isStepReviewed('three_way_matching')" [disabled]="markingStep === 'three_way_matching'"
+                          (click)="markStepReviewed('three_way_matching')">
+                    {{ markingStep === 'three_way_matching' ? 'Saving…' : 'Mark as Reviewed' }}
                   </button>
                 </div>
               </div>
+            </div>
 
-              <div class="source-docs-group" *ngIf="txn.documents.purchase_orders?.length">
-                <p class="source-docs-group-label">Purchase Orders</p>
-                <div class="source-docs-buttons">
-                  <button class="btn-view-doc" *ngFor="let po of txn.documents.purchase_orders" (click)="openTransactionDocument('po', po.document_id)">
-                    <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
-                    <span class="btn-view-doc-text">
-                      <span class="btn-view-doc-label">View PO</span>
-                      <span class="btn-view-doc-filename">{{ po.po_number || po.file_name }}</span>
-                    </span>
-                  </button>
-                </div>
+            <!-- 4. Exception Review -->
+            <div class="wt-item">
+              <div class="wt-marker" [ngClass]="isStepReviewed('exception_review') ? 'wt-completed' : (isStepUnlocked('exception_review') ? 'wt-pending' : 'wt-locked')">
+                <i class="ph-duotone" [ngClass]="isStepReviewed('exception_review') ? 'ph-check-circle' : (isStepUnlocked('exception_review') ? 'ph-circle' : 'ph-lock-simple')"></i>
               </div>
-
-              <div class="source-docs-group" *ngIf="txn.documents.goods_receipts?.length">
-                <p class="source-docs-group-label">Goods Receipts</p>
-                <div class="source-docs-buttons">
-                  <button class="btn-view-doc" *ngFor="let gr of txn.documents.goods_receipts" (click)="openTransactionDocument('gr', gr.document_id)">
-                    <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
-                    <span class="btn-view-doc-text">
-                      <span class="btn-view-doc-label">View GR</span>
-                      <span class="btn-view-doc-filename">{{ gr.gr_number || gr.file_name }}</span>
-                    </span>
-                  </button>
-                </div>
+              <div class="wt-content">
+                <p class="wt-label">Exception Review</p>
+                <ng-container *ngIf="isStepUnlocked('exception_review'); else exceptionLocked">
+                  <p class="wt-detail">{{ exceptionStepResult }}</p>
+                  <p class="wt-timestamp" *ngIf="reviewSteps['exception_review']">
+                    Reviewed by {{ reviewSteps['exception_review'].reviewer_name }} · {{ formatDateTime(reviewSteps['exception_review'].reviewed_at) }}
+                  </p>
+                  <div class="wt-step-actions">
+                    <button class="btn-wt-view" (click)="openExceptionDetails()">View Exception Details</button>
+                    <button class="btn-wt-mark" *ngIf="!isStepReviewed('exception_review')" [disabled]="markingStep === 'exception_review'"
+                            (click)="markStepReviewed('exception_review')">
+                      {{ markingStep === 'exception_review' ? 'Saving…' : 'Mark as Reviewed' }}
+                    </button>
+                  </div>
+                </ng-container>
+                <ng-template #exceptionLocked>
+                  <p class="wt-locked-note">Complete {{ firstLockedPrerequisite('exception_review') }} first</p>
+                </ng-template>
               </div>
-            </ng-container>
+            </div>
 
-            <!-- Legacy/standalone fallback — unchanged single-document
-                 behavior for a record with no Transaction Package
-                 (STEP 10 backward compatibility). -->
-            <ng-template #legacySourceDocs>
-              <div class="source-docs-buttons">
-                <button class="btn-view-doc" (click)="openDocModal('invoice')">
-                  <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
-                  <span class="btn-view-doc-text">
-                    <span class="btn-view-doc-label">View Invoice</span>
-                    <span class="btn-view-doc-filename">{{ comparison.invoice.filename }}</span>
-                  </span>
-                </button>
-                <button class="btn-view-doc" [disabled]="!isDocAvailable('po')"
-                        [title]="!isDocAvailable('po') ? 'Missing — awaiting Finance submission' : ''"
-                        (click)="openDocModal('po')">
-                  <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
-                  <span class="btn-view-doc-text">
-                    <span class="btn-view-doc-label">View PO</span>
-                    <span class="btn-view-doc-filename">{{ comparison.po?.filename || 'Missing' }}</span>
-                  </span>
-                </button>
-                <button class="btn-view-doc" [disabled]="!isDocAvailable('gr')"
-                        [title]="!isDocAvailable('gr') ? 'Missing — awaiting Finance submission' : ''"
-                        (click)="openDocModal('gr')">
-                  <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
-                  <span class="btn-view-doc-text">
-                    <span class="btn-view-doc-label">View GR</span>
-                    <span class="btn-view-doc-filename">{{ comparison.gr?.filename || 'Missing' }}</span>
-                  </span>
-                </button>
+            <!-- 5. Authenticity Review -->
+            <div class="wt-item">
+              <div class="wt-marker" [ngClass]="isStepReviewed('authenticity_review') ? 'wt-completed' : (isStepUnlocked('authenticity_review') ? 'wt-pending' : 'wt-locked')">
+                <i class="ph-duotone" [ngClass]="isStepReviewed('authenticity_review') ? 'ph-check-circle' : (isStepUnlocked('authenticity_review') ? 'ph-circle' : 'ph-lock-simple')"></i>
               </div>
-            </ng-template>
-          </div>
-        </div>
+              <div class="wt-content">
+                <p class="wt-label">Authenticity Review</p>
+                <ng-container *ngIf="isStepUnlocked('authenticity_review'); else authenticityLocked">
+                  <p class="wt-detail">{{ authenticityStepResult }}</p>
+                  <p class="wt-timestamp" *ngIf="reviewSteps['authenticity_review']">
+                    Reviewed by {{ reviewSteps['authenticity_review'].reviewer_name }} · {{ formatDateTime(reviewSteps['authenticity_review'].reviewed_at) }}
+                  </p>
+                  <div class="wt-step-actions">
+                    <button class="btn-wt-view" (click)="openAuthenticityDetails()">View Authenticity Details</button>
+                    <button class="btn-wt-mark" *ngIf="!isStepReviewed('authenticity_review')" [disabled]="markingStep === 'authenticity_review'"
+                            (click)="markStepReviewed('authenticity_review')">
+                      {{ markingStep === 'authenticity_review' ? 'Saving…' : 'Mark as Reviewed' }}
+                    </button>
+                  </div>
+                </ng-container>
+                <ng-template #authenticityLocked>
+                  <p class="wt-locked-note">Complete {{ firstLockedPrerequisite('authenticity_review') }} first</p>
+                </ng-template>
+              </div>
+            </div>
 
-        <!-- Enterprise Matching Summary — Phase 4. Purely additive:
-             only rendered when the backend actually ran the Enterprise
-             V2 engine for this invoice (comparison.engine_version ===
-             'v2'), i.e. invisible unless ENTERPRISE_MATCHING_V2_ENABLED
-             is on AND this invoice has explicit document_relationships.
-             Uses ONLY fields already present in the existing comparison
-             response (GET /auditor/record/<id>/comparison already
-             returns build_comparison()'s result) — no new API call, no
-             new calculation performed here. -->
-        <!-- Enterprise V3 Phase 13 — compact Three-way Match summary.
-             The per-document Related Documents list and the per-PO
-             Ordered/Invoiced/Received/Remaining grid are already
-             covered by the Field Comparison table above (which now
-             shows allocation-aware quantities per line item, per
-             Phase 11/12) and, when this invoice is in a Transaction
-             Package, by the Transaction Overview's own Matching
-             Summary — so this card only needs to say status + counts +
-             a one-line fulfilment verdict. Every value here still comes
-             straight from the SAME comparison.invoice_result/related_*/
-             po_fulfilment fields build_comparison() already returns —
-             no calculation happens in this component, and nothing about
-             what the backend computes or returns changed. -->
-        <div class="comparison-card" *ngIf="comparison.engine_version === 'v2'">
-          <div class="comparison-card-header">
-            <h2 class="comparison-title"><i class="ph-duotone ph-flow-arrow"></i> Three-way Match</h2>
+            <!-- 6. Anomaly Review -->
+            <div class="wt-item">
+              <div class="wt-marker" [ngClass]="isStepReviewed('anomaly_review') ? 'wt-completed' : (isStepUnlocked('anomaly_review') ? 'wt-pending' : 'wt-locked')">
+                <i class="ph-duotone" [ngClass]="isStepReviewed('anomaly_review') ? 'ph-check-circle' : (isStepUnlocked('anomaly_review') ? 'ph-circle' : 'ph-lock-simple')"></i>
+              </div>
+              <div class="wt-content">
+                <p class="wt-label">Anomaly Review</p>
+                <ng-container *ngIf="isStepUnlocked('anomaly_review'); else anomalyLocked">
+                  <p class="wt-detail">{{ anomalyStepResult }}</p>
+                  <p class="wt-timestamp" *ngIf="reviewSteps['anomaly_review']">
+                    Reviewed by {{ reviewSteps['anomaly_review'].reviewer_name }} · {{ formatDateTime(reviewSteps['anomaly_review'].reviewed_at) }}
+                  </p>
+                  <div class="wt-step-actions">
+                    <button class="btn-wt-view" (click)="openAnomalyDetails()">View Anomaly Details</button>
+                    <button class="btn-wt-mark" *ngIf="!isStepReviewed('anomaly_review')" [disabled]="markingStep === 'anomaly_review'"
+                            (click)="markStepReviewed('anomaly_review')">
+                      {{ markingStep === 'anomaly_review' ? 'Saving…' : 'Mark as Reviewed' }}
+                    </button>
+                  </div>
+                </ng-container>
+                <ng-template #anomalyLocked>
+                  <p class="wt-locked-note">Complete {{ firstLockedPrerequisite('anomaly_review') }} first</p>
+                </ng-template>
+              </div>
+            </div>
+
+            <!-- 7. Final Audit Decision — reflects caseFinalDecision,
+                 the SAME value Case Summary's Audit Decision chip
+                 already shows; never its own separate action here. -->
+            <div class="wt-item wt-last">
+              <div class="wt-marker" [ngClass]="finalDecisionStepClass">
+                <i class="ph-duotone" [ngClass]="finalDecisionStepIcon"></i>
+              </div>
+              <div class="wt-content">
+                <p class="wt-label">Final Audit Decision</p>
+                <p class="wt-detail">{{ caseFinalDecision }}</p>
+              </div>
+            </div>
+
           </div>
 
-          <div class="enterprise-status-row">
-            <span class="enterprise-status-label">Status</span>
-            <span class="match-pill" [ngClass]="matchPillClass(comparison.invoice_result.status === 'PASS' ? 'eq' : 'neq')">
-              <i class="ph-duotone" [ngClass]="comparison.invoice_result.status === 'PASS' ? 'ph-check' : 'ph-warning'"></i>
-              {{ comparison.invoice_result.status === 'PASS' ? 'PASS' : 'REVIEW REQUIRED' }}
-            </span>
-          </div>
-
-          <div class="txn-context-breakdown" style="margin-top:10px;">
-            <span>PO: {{ comparison.related_purchase_orders?.length || 0 }}</span>
-            <span>Invoice: {{ (comparison.related_invoices?.length || 0) + 1 }}</span>
-            <span>GR: {{ comparison.related_goods_receipts?.length || 0 }}</span>
-          </div>
-
-          <div class="enterprise-status-row" style="margin-top:10px;" *ngIf="comparison.po_fulfilment?.length">
-            <span class="enterprise-status-label">Fulfilment</span>
-            <span class="match-pill" [ngClass]="fulfilmentSummaryClass">{{ fulfilmentSummaryText }}</span>
-          </div>
+          <div class="markstep-error-box" *ngIf="markStepError"><i class="ph-duotone ph-x-circle"></i> {{ markStepError }}</div>
         </div>
       </div>
 
@@ -842,7 +619,11 @@
             placeholder="Add audit remarks, findings, or follow-up instructions..."></textarea>
         </div>
 
-        <!-- Action Buttons -->
+        <!-- Action Buttons — Send Back and Need Review stay available at
+             every stage of the review checklist (Section 6); only
+             Approve is gated on all 4 mandatory steps being reviewed
+             and no blocking issue on record (canApprove/
+             approveDisabledReason above). -->
         <div class="action-buttons" *ngIf="userRole === 'auditor'">
           <button class="btn-need-review" (click)="needReviewDocument()" [disabled]="isSubmitting">
             <i class="ph-duotone ph-warning"></i> Need Review
@@ -850,11 +631,16 @@
           <button class="btn-return" (click)="openSendBackModal()" [disabled]="isSubmitting">
             <i class="ph-duotone ph-arrow-u-up-left"></i> {{ sendBackButtonLabel }}
           </button>
-          <button class="btn-approve" (click)="approveDocument()" [disabled]="isSubmitting">
+          <button class="btn-approve" (click)="approveDocument()" [disabled]="isSubmitting || !canApprove"
+                  [title]="!canApprove ? approveDisabledReason : ''">
             <ng-container *ngIf="!isSubmitting"><i class="ph-duotone ph-check-circle"></i> Approve</ng-container>
             <ng-container *ngIf="isSubmitting">Processing...</ng-container>
           </button>
         </div>
+
+        <p class="approve-disabled-reason" *ngIf="userRole === 'auditor' && !canApprove">
+          <i class="ph-duotone ph-info"></i> {{ approveDisabledReason }}
+        </p>
 
         <p class="audit-trail-note" *ngIf="userRole === 'auditor'">
           Last updated by auditor • Audit trail recorded automatically
@@ -889,11 +675,6 @@
       </div>
 
     </div>
-
-    <!-- Document Workflow Timeline — reusable component, also shown on
-         Finance Correction Detail. Pure visualization: reads already-
-         computed data only, no new AI calls, no workflow changes. -->
-    <app-workflow-timeline [documentId]="documentId"></app-workflow-timeline>
 
   </ng-container>
 
@@ -1022,34 +803,6 @@
         <button class="btn-modal-primary" (click)="submitAdminSendBack()" [disabled]="isAdminSubmitting">
           {{ isAdminSubmitting ? 'Sending…' : 'Send Back' }}
         </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── PDF Quick-View Modal ── -->
-  <div class="modal-backdrop" *ngIf="showModal" (click)="closeModal()">
-    <div class="modal-box" (click)="$event.stopPropagation()">
-      <div class="modal-header">
-        <div class="modal-header-left">
-          <span class="modal-filename">{{ modalFileName }}</span>
-          <span class="modal-doctype-badge">{{ docTypeLabel(modalDocType) }}</span>
-        </div>
-        <button class="modal-close-btn" (click)="closeModal()"><i class="ph-duotone ph-x"></i></button>
-      </div>
-      <div class="modal-body">
-        <div class="modal-spinner-wrap" *ngIf="modalLoading">
-          <div class="spinner"></div>
-          <p>Loading document...</p>
-        </div>
-        <div class="modal-error-wrap" *ngIf="modalError">
-          <p>{{ modalError }}</p>
-        </div>
-        <iframe *ngIf="modalIframeUrl && !modalLoading" [src]="modalIframeUrl" width="100%" height="100%" frameborder="0"></iframe>
-      </div>
-      <div class="modal-footer">
-        <button class="btn-modal-secondary" (click)="openInNewTab()" [disabled]="!modalRawBlobUrl">Open in New Tab</button>
-        <button class="btn-modal-secondary" (click)="downloadFile()" [disabled]="!modalRawBlobUrl">Download</button>
-        <button class="btn-modal-primary" (click)="closeModal()">Close</button>
       </div>
     </div>
   </div>

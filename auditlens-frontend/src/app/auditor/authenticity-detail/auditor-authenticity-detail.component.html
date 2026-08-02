@@ -1,9 +1,15 @@
 <div class="page-wrapper">
 
-  <!-- Header -->
+  <!-- Header — when reached from a specific case's Audit Review
+       Timeline (?ref=audit-review), the back control returns to THAT
+       record's Audit Review page instead of the global Authenticity
+       list; otherwise unchanged. -->
   <div class="header">
-    <button class="btn-back" (click)="goBack()">← Back to Authenticity</button>
-    <h1 class="page-title"><i class="ph-duotone ph-shield-check"></i> Authenticity Detail</h1>
+    <div class="header-row">
+      <button class="btn-back" *ngIf="!cameFromAuditReview" (click)="goBack()">← Back to Authenticity</button>
+      <h1 class="page-title"><i class="ph-duotone ph-shield-check"></i> Authenticity Detail</h1>
+      <button class="btn-back" *ngIf="cameFromAuditReview" (click)="goBack()">← Back to Audit Review</button>
+    </div>
   </div>
 
   <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>

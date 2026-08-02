@@ -235,6 +235,13 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   documentId: number | null = null;
   documentType: string = 'invoice';
 
+  // Set when this page is reached from a specific case's Audit Review
+  // Timeline (?ref=audit-review) — goBack() then returns to THAT
+  // record's Audit Review page (documentId here is already the same
+  // invoice document_id Audit Review uses) instead of the global
+  // Authenticity list. Absent for normal sidebar-driven access.
+  cameFromAuditReview = false;
+
   check: any = null;
   isLoading = false;
   errorMessage = '';
@@ -311,6 +318,7 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
       if (id) {
         this.documentId = parseInt(id, 10);
         this.documentType = this.route.snapshot.queryParamMap.get('document_type') || 'invoice';
+        this.cameFromAuditReview = this.route.snapshot.queryParamMap.get('ref') === 'audit-review';
         this.load();
       }
     });
@@ -326,7 +334,11 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   }
 
   goBack() {
-    this.router.navigate(['/auditor/authenticity']);
+    if (this.cameFromAuditReview && this.documentId) {
+      this.router.navigate(['/auditor/record-detail'], { queryParams: { document_id: this.documentId } });
+    } else {
+      this.router.navigate(['/auditor/authenticity']);
+    }
   }
 
   // ── Load cached check (never triggers Gemini — reads DB only) ──

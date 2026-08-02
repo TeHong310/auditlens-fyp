@@ -1,6 +1,6 @@
 import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Router } from '@angular/router';
+import { Router, ActivatedRoute } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 
@@ -20,6 +20,12 @@ export class AuditorExceptionsComponent implements OnInit {
   errorMessage: string = '';
   activeFilter: ExceptionType = 'all';
 
+  // Set ONLY when this page is reached from a specific case's Audit
+  // Review Timeline (?document_id=X&ref=audit-review) — the normal
+  // sidebar-accessed global list (no query params) leaves this null
+  // and behaves exactly as before: every exception, no back button.
+  caseDocumentId: number | null = null;
+
   filters: { key: ExceptionType; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'mismatch', label: 'Mismatch' },
@@ -33,11 +39,21 @@ export class AuditorExceptionsComponent implements OnInit {
   constructor(
     private http: HttpClient,
     private router: Router,
+    private route: ActivatedRoute,
     private cdr: ChangeDetectorRef
   ) {}
 
   ngOnInit() {
+    this.route.queryParams.subscribe(params => {
+      this.caseDocumentId = (params['document_id'] && params['ref'] === 'audit-review')
+        ? parseInt(params['document_id']) : null;
+    });
     this.loadExceptions();
+  }
+
+  backToAuditReview() {
+    if (!this.caseDocumentId) return;
+    this.router.navigate(['/auditor/record-detail'], { queryParams: { document_id: this.caseDocumentId } });
   }
 
   getHeaders() {
@@ -72,8 +88,10 @@ export class AuditorExceptionsComponent implements OnInit {
   }
 
   get filteredExceptions() {
-    if (this.activeFilter === 'all') return this.exceptions;
-    return this.exceptions.filter(e => e.exception_type === this.activeFilter);
+    let rows = this.exceptions;
+    if (this.caseDocumentId) rows = rows.filter(e => e.invoice_document_id === this.caseDocumentId);
+    if (this.activeFilter !== 'all') rows = rows.filter(e => e.exception_type === this.activeFilter);
+    return rows;
   }
 
   countFor(type: ExceptionType): number {

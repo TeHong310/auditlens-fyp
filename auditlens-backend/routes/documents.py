@@ -1586,12 +1586,34 @@ def get_document_timeline(document_id):
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         context = _build_case_context(cursor, document_id)
-        conn.close()
 
         if context is None:
+            conn.close()
             return jsonify({'error': 'Invoice document not found'}), 404
 
         events = _build_timeline_events(context)
+
+        # review_steps: the Audit Review page's guided checklist progress
+        # (routes/reviews.py::mark_review_step) — purely additive to this
+        # response; Finance Correction Detail's WorkflowTimelineComponent
+        # only ever reads `events`, so this doesn't change anything there.
+        cursor.execute(
+            '''SELECT drs.step, drs.reviewed_by, drs.reviewed_at, u.full_name AS reviewer_name
+               FROM document_review_steps drs
+               JOIN users u ON drs.reviewed_by = u.user_id
+               WHERE drs.document_id = %s''',
+            (document_id,)
+        )
+        review_steps = {
+            row['step']: {
+                'reviewed_by':   row['reviewed_by'],
+                'reviewer_name': row['reviewer_name'],
+                'reviewed_at':   row['reviewed_at'].isoformat() if row['reviewed_at'] else None,
+            }
+            for row in cursor.fetchall()
+        }
+        conn.close()
+
         # anomalies: already computed by _build_case_context() above (used
         # internally for the Anomaly Evaluation step's blocking check) —
         # surfaced here too so Record Detail's Risk Indicators section can
@@ -1601,6 +1623,7 @@ def get_document_timeline(document_id):
         return jsonify({
             'document_id': document_id, 'events': events,
             'anomalies': context.get('anomalies') or [],
+            'review_steps': review_steps,
         }), 200
 
     except Exception as e:

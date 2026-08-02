@@ -1,0 +1,414 @@
+<div class="page-wrapper">
+
+  <!-- Header — Back to Audit Review sits top-right, consistent with
+       every other case-specific detail page (Exception Review,
+       Authenticity Review Workspace, Anomaly Investigation). Always
+       returns to THIS record's Audit Review page, never a global list. -->
+  <div class="header">
+    <div class="header-left">
+      <div>
+        <p class="page-label">Three-Way Matching Details</p>
+        <p class="page-subtitle" *ngIf="comparison">{{ comparison.invoice.invoice_no || comparison.invoice.filename }}</p>
+      </div>
+    </div>
+    <button class="btn-back" (click)="backToAuditReview()">
+      ← Back to Audit Review
+    </button>
+  </div>
+
+  <!-- Loading -->
+  <div class="loading-wrap" *ngIf="isLoading">
+    <div class="spinner"></div>
+    <p>Loading matching details...</p>
+  </div>
+
+  <!-- No record -->
+  <div class="empty-wrap" *ngIf="!isLoading && !comparison">
+    <p>{{ errorMessage || 'No document selected.' }}</p>
+    <button class="btn-back" (click)="backToAuditReview()">← Back to Audit Review</button>
+  </div>
+
+  <ng-container *ngIf="!isLoading && comparison">
+
+    <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
+
+    <!-- Enterprise Matching Summary — only when this invoice belongs to
+         a Finance Transaction Package. A compact context header (name/
+         status/document counts) plus the allocation-aware PO/invoice/
+         GR breakdown — every value read straight from GET /auditor/
+         transactions/<id>, no calculation happens here. -->
+    <div class="comparison-card txn-overview-card" *ngIf="transactionDetail as txn">
+      <div class="txn-context-compact">
+        <div class="txn-context-main">
+          <i class="ph-duotone ph-package"></i>
+          <span class="txn-package-name">{{ txn.package.package_name }}</span>
+          <span class="badge" [ngClass]="'txn-status-' + txn.package.status">{{ txn.package.status | titlecase }}</span>
+        </div>
+        <div class="txn-context-breakdown">
+          <span>{{ comparison.transaction_context.documents_count }} documents</span>
+          <span>PO: {{ comparison.transaction_context.purchase_orders }}</span>
+          <span>Invoices: {{ comparison.transaction_context.invoices }}</span>
+          <span>GR: {{ comparison.transaction_context.goods_receipts }}</span>
+        </div>
+      </div>
+
+      <div class="enterprise-fulfilment-section" *ngIf="txn.matching_summary as ms">
+        <h3 class="source-docs-title"><i class="ph-duotone ph-scales"></i> Enterprise Matching Summary</h3>
+
+        <div class="enterprise-status-row" *ngFor="let pf of ms.po_fulfilment">
+          <a class="enterprise-stat-label txn-clickable" (click)="openTransactionDocument('po', pf.po_id)">Purchase Order Total ({{ pf.po_number }})</a>
+          <span class="enterprise-stat-value">{{ formatAmount(pf.po_amount, 'MYR') }}</span>
+        </div>
+
+        <p class="enterprise-related-label" style="margin-top:12px;">Invoice Allocation</p>
+        <div class="enterprise-related-item" *ngFor="let alloc of ms.invoice_allocations">
+          <a class="enterprise-related-name txn-clickable" [class.txn-related-current]="alloc.document_id === documentId" (click)="openTransactionDocument('invoice', alloc.document_id)">{{ alloc.invoice_number }}</a>
+          <span class="enterprise-related-detail">{{ formatAmount(alloc.amount, alloc.currency) }}</span>
+          <span class="match-pill" [ngClass]="alloc.status === 'PASS' ? 'pill-match' : 'pill-differ'">{{ alloc.status }}</span>
+        </div>
+
+        <ng-container *ngIf="ms.goods_receipts?.length">
+          <p class="enterprise-related-label" style="margin-top:12px;">Received</p>
+          <div class="enterprise-related-item" *ngFor="let gr of ms.goods_receipts">
+            <i class="ph-duotone ph-check-circle enterprise-check-icon"></i> <a class="enterprise-related-name txn-clickable" (click)="openTransactionDocument('gr', gr.document_id)">{{ gr.gr_number }}</a>
+          </div>
+        </ng-container>
+
+        <div class="enterprise-status-row" style="margin-top:12px;">
+          <span class="enterprise-stat-label">Final Status</span>
+          <span class="match-pill" [ngClass]="ms.final_status === 'MATCHED' ? 'pill-match' : 'pill-differ'">{{ ms.final_status }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Field Comparison -->
+    <div class="comparison-card">
+      <div class="comparison-card-header">
+        <h2 class="comparison-title"><i class="ph-duotone ph-scales"></i> Field Comparison</h2>
+        <p class="comparison-subtitle">Invoice vs PO vs GR</p>
+      </div>
+
+      <div class="comparison-table-wrap">
+        <table class="field-table">
+          <thead>
+            <tr>
+              <th class="col-field">Field</th>
+              <th>
+                <div class="col-head">Invoice</div>
+                <span class="col-badge col-badge-source">Source</span>
+              </th>
+              <th>
+                <div class="col-head">PO</div>
+                <span class="col-badge" [ngClass]="comparison.po ? 'col-badge-uploaded' : 'col-badge-missing'">
+                  {{ comparison.po ? 'Uploaded' : 'Missing' }}
+                </span>
+              </th>
+              <th>
+                <div class="col-head">GR</div>
+                <span class="col-badge" [ngClass]="comparison.gr ? 'col-badge-uploaded' : 'col-badge-missing'">
+                  {{ comparison.gr ? 'Uploaded' : 'Missing' }}
+                </span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Vendor -->
+            <tr [ngClass]="rowClass([vendorSymbol(comparison.invoice.vendor_name, comparison.po?.vendor_name), vendorSymbol(comparison.po?.vendor_name, comparison.gr?.vendor_name)])">
+              <td class="field-name"><span class="field-icon"><i class="ph-duotone ph-buildings"></i></span> Vendor / Supplier</td>
+              <td class="cell-value">{{ comparison.invoice.vendor_name || '-' }}</td>
+              <td class="cell-value" *ngIf="comparison.po">
+                <span class="match-pill" [ngClass]="matchPillClass(vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name))">
+                  <i class="ph-duotone" [ngClass]="matchPillIcon(vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name))"></i>
+                  {{ matchPillText(vendorSymbol(comparison.invoice.vendor_name, comparison.po.vendor_name)) }}
+                </span>
+                <div class="cell-main-value">{{ comparison.po.vendor_name || '-' }}</div>
+              </td>
+              <td class="not-uploaded-cell" *ngIf="!comparison.po">
+                <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                <span class="not-uploaded-label">Missing</span>
+                <span class="upload-hint">Awaiting Finance Submission</span>
+              </td>
+              <td class="cell-value" *ngIf="comparison.gr">
+                <span class="match-pill" [ngClass]="matchPillClass(vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name))">
+                  <i class="ph-duotone" [ngClass]="matchPillIcon(vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name))"></i>
+                  {{ matchPillText(vendorSymbol(comparison.po?.vendor_name || comparison.invoice.vendor_name, comparison.gr.vendor_name)) }}
+                </span>
+                <div class="cell-main-value">{{ comparison.gr.vendor_name || '-' }}</div>
+              </td>
+              <td class="not-uploaded-cell" *ngIf="!comparison.gr">
+                <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                <span class="not-uploaded-label">Missing</span>
+                <span class="upload-hint">Awaiting Finance Submission</span>
+              </td>
+            </tr>
+
+            <!-- PO Ref -->
+            <tr [ngClass]="rowMatchClass(comparison.match_result.po_reference_match)">
+              <td class="field-name">
+                <span class="field-icon"><i class="ph-duotone ph-link"></i></span> PO Ref
+                <span class="match-pill" [ngClass]="rowMatchPillClass(comparison.match_result.po_reference_match)">
+                  <i class="ph-duotone" [ngClass]="rowMatchIcon(comparison.match_result.po_reference_match)"></i>
+                  {{ rowMatchText(comparison.match_result.po_reference_match) }}
+                </span>
+              </td>
+              <td class="cell-value">{{ comparison.invoice.po_reference || '-' }}</td>
+              <td class="cell-value" *ngIf="comparison.po">
+                <div class="cell-main-value">{{ comparison.po.po_no || '-' }}</div>
+              </td>
+              <td class="not-uploaded-cell" *ngIf="!comparison.po">
+                <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                <span class="not-uploaded-label">Missing</span>
+                <span class="upload-hint">Awaiting Finance Submission</span>
+              </td>
+              <td class="cell-value" *ngIf="comparison.gr">
+                <div class="cell-main-value">{{ comparison.gr.po_reference || '-' }}</div>
+              </td>
+              <td class="not-uploaded-cell" *ngIf="!comparison.gr">
+                <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                <span class="not-uploaded-label">Missing</span>
+                <span class="upload-hint">Awaiting Finance Submission</span>
+              </td>
+            </tr>
+
+            <!-- Line Items -->
+            <tr class="line-items-section-row">
+              <td colspan="4" class="field-name line-items-section-label">
+                <span class="field-icon"><i class="ph-duotone ph-package"></i></span> Line Items
+                <span class="line-items-count" *ngIf="comparison.line_items?.length">({{ comparison.line_items.length }})</span>
+              </td>
+            </tr>
+            <tr *ngFor="let li of comparison.line_items" [ngClass]="lineItemRowClass(li)">
+              <td class="field-name">
+                <div class="li-desc">{{ li.description || '-' }}</div>
+                <div class="li-code" *ngIf="li.item_code">{{ li.item_code }}</div>
+                <div class="li-amount-note" *ngIf="li.amount_match === false"><i class="ph-duotone ph-currency-circle-dollar"></i> Amount/unit price differs</div>
+              </td>
+              <td class="cell-value cell-quantity">
+                <span class="not-uploaded-label li-missing-label" *ngIf="li.missing_on_invoice">Missing on Invoice</span>
+                <ng-container *ngIf="!li.missing_on_invoice">{{ formatQuantity(li.invoice_quantity) }}</ng-container>
+              </td>
+              <td class="cell-value" *ngIf="comparison.po">
+                <span class="match-pill" [ngClass]="lineItemPillClass(li, 'po')">
+                  <i class="ph-duotone" [ngClass]="lineItemPillIcon(li, 'po')"></i> {{ lineItemPillText(li, 'po') }}
+                </span>
+                <div class="cell-main-value cell-quantity" *ngIf="!li.missing_on_po">
+                  {{ formatQuantity(lineItemPoDisplayQuantity(li)) }}<span class="cell-muted" *ngIf="showPoAllocationContext(li)" style="font-size:11px;"> (Allocated)</span>
+                </div>
+                <div class="cell-muted" style="font-size:11px;margin-top:2px;" *ngIf="showPoAllocationContext(li)">PO Ordered (context): {{ formatQuantity(li.po_quantity) }}</div>
+                <div class="cell-muted" style="font-size:11px;margin-top:2px;font-style:italic;" *ngIf="showPoDescription(li)">PO Item: {{ li.po_description }}</div>
+              </td>
+              <td class="not-uploaded-cell" *ngIf="!comparison.po">
+                <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                <span class="not-uploaded-label">Missing</span>
+                <span class="upload-hint">Awaiting Finance Submission</span>
+              </td>
+              <td class="cell-value" *ngIf="comparison.gr">
+                <span class="match-pill" [ngClass]="lineItemPillClass(li, 'gr')">
+                  <i class="ph-duotone" [ngClass]="lineItemPillIcon(li, 'gr')"></i> {{ lineItemPillText(li, 'gr') }}
+                </span>
+                <div class="cell-main-value cell-quantity" *ngIf="!li.missing_on_gr">{{ formatQuantity(li.gr_quantity) }}</div>
+                <div class="cell-muted" style="font-size:11px;margin-top:2px;font-style:italic;" *ngIf="showGrDescription(li)">GR Item: {{ li.gr_description }}</div>
+              </td>
+              <td class="not-uploaded-cell" *ngIf="!comparison.gr">
+                <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                <span class="not-uploaded-label">Missing</span>
+                <span class="upload-hint">Awaiting Finance Submission</span>
+              </td>
+            </tr>
+            <tr *ngIf="!comparison.line_items || comparison.line_items.length === 0">
+              <td colspan="4" class="cell-value cell-muted">No line items extracted</td>
+            </tr>
+
+            <!-- Amount -->
+            <tr [ngClass]="rowClass([amountSymbol(comparison.invoice.total_amount, amountCompareBasis, comparison.invoice.currency, comparison.po?.currency)])">
+              <td class="field-name"><span class="field-icon"><i class="ph-duotone ph-currency-circle-dollar"></i></span> Amount</td>
+              <td class="cell-value cell-amount">{{ formatAmount(comparison.invoice.total_amount, comparison.invoice.currency) }}</td>
+              <td class="cell-value" *ngIf="comparison.po">
+                <span class="match-pill" [ngClass]="matchPillClass(amountSymbol(comparison.invoice.total_amount, amountCompareBasis, comparison.invoice.currency, comparison.po.currency))">
+                  <i class="ph-duotone" [ngClass]="matchPillIcon(amountSymbol(comparison.invoice.total_amount, amountCompareBasis, comparison.invoice.currency, comparison.po.currency))"></i>
+                  {{ matchPillText(amountSymbol(comparison.invoice.total_amount, amountCompareBasis, comparison.invoice.currency, comparison.po.currency)) }}
+                </span>
+                <div class="cell-main-value cell-amount">
+                  {{ formatAmount(amountCompareBasis, comparison.po.currency) }}<span class="cell-muted" *ngIf="isV2Allocated" style="font-size:11px;"> (Allocated)</span>
+                </div>
+                <div class="cell-muted" style="font-size:11px;margin-top:2px;" *ngIf="isV2Allocated">PO Total (context): {{ formatAmount(comparison.po.total_amount, comparison.po.currency) }}</div>
+              </td>
+              <td class="not-uploaded-cell" *ngIf="!comparison.po">
+                <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                <span class="not-uploaded-label">Missing</span>
+                <span class="upload-hint">Awaiting Finance Submission</span>
+              </td>
+              <td class="cell-value" *ngIf="comparison.gr">
+                <span class="match-pill pill-na"><i class="ph-duotone ph-minus"></i> N/A</span>
+                <div class="cell-main-value cell-muted">No amount on GR</div>
+              </td>
+              <td class="not-uploaded-cell" *ngIf="!comparison.gr">
+                <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                <span class="not-uploaded-label">Missing</span>
+                <span class="upload-hint">Awaiting Finance Submission</span>
+              </td>
+            </tr>
+
+            <!-- Doc No -->
+            <tr>
+              <td class="field-name"><span class="field-icon"><i class="ph-duotone ph-file-text"></i></span> Doc No</td>
+              <td class="cell-value cell-docno">{{ comparison.invoice.invoice_no || '-' }}</td>
+              <td class="cell-value" *ngIf="comparison.po">
+                <div class="cell-main-value cell-docno">{{ comparison.po.po_no || '-' }}</div>
+              </td>
+              <td class="not-uploaded-cell" *ngIf="!comparison.po">
+                <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                <span class="not-uploaded-label">Missing</span>
+                <span class="upload-hint">Awaiting Finance Submission</span>
+              </td>
+              <td class="cell-value" *ngIf="comparison.gr">
+                <div class="cell-main-value cell-docno">{{ comparison.gr.gr_no || '-' }}</div>
+              </td>
+              <td class="not-uploaded-cell" *ngIf="!comparison.gr">
+                <span class="not-uploaded-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+                <span class="not-uploaded-label">Missing</span>
+                <span class="upload-hint">Awaiting Finance Submission</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Source Documents -->
+      <div class="source-docs-section">
+        <h3 class="source-docs-title"><i class="ph-duotone ph-file-text"></i> Source Documents</h3>
+
+        <ng-container *ngIf="transactionDetail as txn; else legacySourceDocs">
+          <div class="source-docs-group" *ngIf="txn.documents.invoices?.length">
+            <p class="source-docs-group-label">Invoices</p>
+            <div class="source-docs-buttons">
+              <button class="btn-view-doc" *ngFor="let inv of txn.documents.invoices" (click)="openSourceInvoice(inv.document_id)">
+                <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
+                <span class="btn-view-doc-text">
+                  <span class="btn-view-doc-label">View Invoice</span>
+                  <span class="btn-view-doc-filename">{{ inv.invoice_number || inv.file_name }}</span>
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div class="source-docs-group" *ngIf="txn.documents.purchase_orders?.length">
+            <p class="source-docs-group-label">Purchase Orders</p>
+            <div class="source-docs-buttons">
+              <button class="btn-view-doc" *ngFor="let po of txn.documents.purchase_orders" (click)="openTransactionDocument('po', po.document_id)">
+                <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
+                <span class="btn-view-doc-text">
+                  <span class="btn-view-doc-label">View PO</span>
+                  <span class="btn-view-doc-filename">{{ po.po_number || po.file_name }}</span>
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div class="source-docs-group" *ngIf="txn.documents.goods_receipts?.length">
+            <p class="source-docs-group-label">Goods Receipts</p>
+            <div class="source-docs-buttons">
+              <button class="btn-view-doc" *ngFor="let gr of txn.documents.goods_receipts" (click)="openTransactionDocument('gr', gr.document_id)">
+                <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
+                <span class="btn-view-doc-text">
+                  <span class="btn-view-doc-label">View GR</span>
+                  <span class="btn-view-doc-filename">{{ gr.gr_number || gr.file_name }}</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </ng-container>
+
+        <ng-template #legacySourceDocs>
+          <div class="source-docs-buttons">
+            <button class="btn-view-doc" (click)="openDocModal('invoice')">
+              <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
+              <span class="btn-view-doc-text">
+                <span class="btn-view-doc-label">View Invoice</span>
+                <span class="btn-view-doc-filename">{{ comparison.invoice.filename }}</span>
+              </span>
+            </button>
+            <button class="btn-view-doc" [disabled]="!isDocAvailable('po')"
+                    [title]="!isDocAvailable('po') ? 'Missing — awaiting Finance submission' : ''"
+                    (click)="openDocModal('po')">
+              <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
+              <span class="btn-view-doc-text">
+                <span class="btn-view-doc-label">View PO</span>
+                <span class="btn-view-doc-filename">{{ comparison.po?.filename || 'Missing' }}</span>
+              </span>
+            </button>
+            <button class="btn-view-doc" [disabled]="!isDocAvailable('gr')"
+                    [title]="!isDocAvailable('gr') ? 'Missing — awaiting Finance submission' : ''"
+                    (click)="openDocModal('gr')">
+              <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
+              <span class="btn-view-doc-text">
+                <span class="btn-view-doc-label">View GR</span>
+                <span class="btn-view-doc-filename">{{ comparison.gr?.filename || 'Missing' }}</span>
+              </span>
+            </button>
+          </div>
+        </ng-template>
+      </div>
+    </div>
+
+    <!-- Three-way Match summary -->
+    <div class="comparison-card" *ngIf="comparison.engine_version === 'v2'">
+      <div class="comparison-card-header">
+        <h2 class="comparison-title"><i class="ph-duotone ph-flow-arrow"></i> Three-way Match</h2>
+      </div>
+
+      <div class="enterprise-status-row">
+        <span class="enterprise-status-label">Status</span>
+        <span class="match-pill" [ngClass]="matchPillClass(comparison.invoice_result.status === 'PASS' ? 'eq' : 'neq')">
+          <i class="ph-duotone" [ngClass]="comparison.invoice_result.status === 'PASS' ? 'ph-check' : 'ph-warning'"></i>
+          {{ comparison.invoice_result.status === 'PASS' ? 'PASS' : 'REVIEW REQUIRED' }}
+        </span>
+      </div>
+
+      <div class="txn-context-breakdown" style="margin-top:10px;">
+        <span>PO: {{ comparison.related_purchase_orders?.length || 0 }}</span>
+        <span>Invoice: {{ (comparison.related_invoices?.length || 0) + 1 }}</span>
+        <span>GR: {{ comparison.related_goods_receipts?.length || 0 }}</span>
+      </div>
+
+      <div class="enterprise-status-row" style="margin-top:10px;" *ngIf="comparison.po_fulfilment?.length">
+        <span class="enterprise-status-label">Fulfilment</span>
+        <span class="match-pill" [ngClass]="fulfilmentSummaryClass">{{ fulfilmentSummaryText }}</span>
+      </div>
+    </div>
+
+    <div class="footer-back-row">
+      <button class="btn-back" (click)="backToAuditReview()">← Back to Audit Review</button>
+    </div>
+
+  </ng-container>
+
+  <!-- ── PDF Quick-View Modal ── -->
+  <div class="modal-backdrop" *ngIf="showModal" (click)="closeModal()">
+    <div class="modal-box" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <div class="modal-header-left">
+          <span class="modal-filename">{{ modalFileName }}</span>
+          <span class="modal-doctype-badge">{{ docTypeLabel(modalDocType) }}</span>
+        </div>
+        <button class="modal-close-btn" (click)="closeModal()"><i class="ph-duotone ph-x"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-spinner-wrap" *ngIf="modalLoading">
+          <div class="spinner"></div>
+          <p>Loading document...</p>
+        </div>
+        <div class="modal-error-wrap" *ngIf="modalError">
+          <p>{{ modalError }}</p>
+        </div>
+        <iframe *ngIf="modalIframeUrl && !modalLoading" [src]="modalIframeUrl" width="100%" height="100%" frameborder="0"></iframe>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-modal-secondary" (click)="openInNewTab()" [disabled]="!modalRawBlobUrl">Open in New Tab</button>
+        <button class="btn-modal-secondary" (click)="downloadFile()" [disabled]="!modalRawBlobUrl">Download</button>
+        <button class="btn-modal-primary" (click)="closeModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+</div>

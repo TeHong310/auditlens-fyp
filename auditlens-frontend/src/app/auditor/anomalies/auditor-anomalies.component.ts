@@ -1,6 +1,6 @@
 import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Router } from '@angular/router';
+import { Router, ActivatedRoute } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 
@@ -37,6 +37,14 @@ export class AuditorAnomaliesComponent implements OnInit {
   activeType: AnomalyType = 'all';
   activeStatus: Status = 'pending';
 
+  // Set ONLY when this page is reached from a specific case's Audit
+  // Review Timeline (?document_id=X&ref=audit-review) — the normal
+  // sidebar-accessed global list (no query params) leaves this null
+  // and behaves exactly as before. Case-scoped mode fetches every
+  // status (not just the 'pending' default) so a case whose only
+  // anomaly is already reviewed/dismissed still shows it.
+  caseDocumentId: number | null = null;
+
   severityFilters: { key: Severity; label: string; icon: string; color: string }[] = [
     { key: 'all', label: 'All', icon: '', color: '' },
     { key: 'high', label: 'High', icon: 'ph-circle', color: 'var(--danger)' },
@@ -67,12 +75,22 @@ export class AuditorAnomaliesComponent implements OnInit {
   constructor(
     private http: HttpClient,
     private router: Router,
+    private route: ActivatedRoute,
     private cdr: ChangeDetectorRef
   ) {}
 
   ngOnInit() {
+    this.route.queryParams.subscribe(params => {
+      this.caseDocumentId = (params['document_id'] && params['ref'] === 'audit-review')
+        ? parseInt(params['document_id']) : null;
+      this.loadAnomalies();
+    });
     this.loadStats();
-    this.loadAnomalies();
+  }
+
+  backToAuditReview() {
+    if (!this.caseDocumentId) return;
+    this.router.navigate(['/auditor/record-detail'], { queryParams: { document_id: this.caseDocumentId } });
   }
 
   getHeaders() {
@@ -101,10 +119,18 @@ export class AuditorAnomaliesComponent implements OnInit {
   loadAnomalies() {
     this.isLoading = true;
     this.errorMessage = '';
-    const url = `${this.apiUrl}/anomalies?severity=${this.activeSeverity}&type=${this.activeType}&status=${this.activeStatus}&limit=100`;
+    // Case-scoped mode ignores the pending/reviewed/dismissed filter
+    // chips entirely (status=all) — a specific case's anomaly might be
+    // any status, and "View Anomaly Details" from Audit Review should
+    // never come up empty just because the default chip is 'pending'.
+    const status = this.caseDocumentId ? 'all' : this.activeStatus;
+    const url = `${this.apiUrl}/anomalies?severity=${this.activeSeverity}&type=${this.activeType}&status=${status}&limit=100`;
     this.http.get<any[]>(url, { headers: this.getHeaders() }).subscribe({
       next: (res) => {
-        this.anomalies = res || [];
+        const rows = res || [];
+        this.anomalies = this.caseDocumentId
+          ? rows.filter(a => a.invoice_document_id === this.caseDocumentId)
+          : rows;
         this.isLoading = false;
         this.cdr.detectChanges();
       },
