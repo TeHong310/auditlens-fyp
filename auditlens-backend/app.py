@@ -166,7 +166,16 @@ def _ensure_authenticity_evidence_corrections_table():
     from "no correction has ever been made" (no row at all) — this is
     what lets "Needs Location" and "no correction yet" behave
     differently in the frontend. Same auto-create-on-startup pattern as
-    every other _ensure_ function (no migration runner in this repo)."""
+    every other _ensure_ function (no migration runner in this repo).
+
+    Column-for-column, this MUST stay in sync with every query in
+    helpers/evidence_corrections.py: correction_id, document_id,
+    document_type, evidence_type, page, x, y, width, height, source,
+    original_ai_box, corrected_by, corrected_at, created_at, and the
+    UNIQUE(document_id, document_type, evidence_type) constraint that
+    every INSERT ... ON CONFLICT (document_id, document_type,
+    evidence_type) in that module depends on to upsert correctly."""
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -194,10 +203,31 @@ def _ensure_authenticity_evidence_corrections_table():
             ON authenticity_evidence_corrections(document_id, document_type)
         ''')
         conn.commit()
-        conn.close()
-        print('Authenticity evidence corrections table ready')
+        print('authenticity_evidence_corrections table ready')
     except Exception as e:
-        print(f'WARNING: could not ensure authenticity_evidence_corrections table exists: {type(e).__name__}: {e}')
+        # Never swallowed: the real driver-level error (Postgres error
+        # code + message, when this is a psycopg2 error) is logged in
+        # full, at ERROR severity — the prior version of this handler
+        # printed only str(e) under a "WARNING" label, exactly the kind
+        # of thing that goes unnoticed in a log stream and leaves the
+        # table permanently missing (nothing here retries) until the
+        # next deploy/restart happens to succeed.
+        pgcode = getattr(e, 'pgcode', None)
+        pgerror = getattr(e, 'pgerror', None)
+        print(f'ERROR: could not create authenticity_evidence_corrections table — '
+              f'{type(e).__name__}: {e} | pgcode={pgcode!r} pgerror={pgerror!r}')
+    finally:
+        # A connection obtained above must always be returned to the
+        # pool, success or failure — otherwise a migration that fails on
+        # every boot (e.g. a persistent permissions/connectivity issue)
+        # leaks one pooled connection per restart until the pool itself
+        # is exhausted, breaking every OTHER route that needs a
+        # connection too, not just this table's own queries.
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _ensure_file_bytes_columns():
