@@ -456,7 +456,9 @@ export class AuditorRecordDetailComponent implements OnInit {
   }
 
   openAuthenticityDetails() {
-    this.router.navigate(['/auditor/authenticity', this.documentId], { queryParams: { ref: 'audit-review' } });
+    const queryParams: any = { document_id: this.documentId, ref: 'audit-review' };
+    if (this.comparison?.invoice?.invoice_no) queryParams.invoice_no = this.comparison.invoice.invoice_no;
+    this.router.navigate(['/auditor/authenticity'], { queryParams });
   }
 
   openAnomalyDetails() {

@@ -13,7 +13,7 @@
   overflow-x: hidden;
 }
 
-.header { display: flex; flex-direction: column; gap: 2px; }
+.header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; }
 
 .page-title {
   font-size: 20px;
@@ -27,7 +27,25 @@
 .page-subtitle {
   font-size: 12px;
   color: var(--text-secondary);
+  margin-top: 2px;
 }
+
+.btn-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .2s ease;
+}
+
+.btn-back:hover { background: var(--bg-hover); }
 
 /* ── KPI Cards — same card language as Auditor Home ── */
 .stats-row {

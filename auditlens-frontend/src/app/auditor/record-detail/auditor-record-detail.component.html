@@ -347,7 +347,7 @@
                     Reviewed by {{ reviewSteps['authenticity_review'].reviewer_name }} · {{ formatDateTime(reviewSteps['authenticity_review'].reviewed_at) }}
                   </p>
                   <div class="wt-step-actions">
-                    <button class="btn-wt-view" (click)="openAuthenticityDetails()">View Authenticity Details</button>
+                    <button class="btn-wt-view" (click)="openAuthenticityDetails()">View Authenticity Review</button>
                     <button class="btn-wt-mark" *ngIf="!isStepReviewed('authenticity_review')" [disabled]="markingStep === 'authenticity_review'"
                             (click)="markStepReviewed('authenticity_review')">
                       {{ markingStep === 'authenticity_review' ? 'Saving…' : 'Mark as Reviewed' }}

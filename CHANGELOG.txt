@@ -17421,3 +17421,134 @@ Rollback instructions:
   existing migration function - no schema, data, or route-behavior
   change either way; reverting simply restores the connection-leak-on-
   failure behavior (not recommended, but harmless to existing data).
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Frontend (auditlens-frontend/):
+    - auditor-record-detail.component.ts's openAuthenticityDetails()
+      (Audit Review Timeline's Authenticity Review step) no longer
+      navigates straight to the per-document Authenticity Detail page
+      (/auditor/authenticity/:documentId). It now opens the main
+      Authenticity Review Workspace instead: /auditor/authenticity?
+      document_id=<id>&ref=audit-review&invoice_no=<invoice_no> - fixes
+      the reported bug where the old link could open the wrong
+      document.
+    - The timeline button itself renamed from "View Authenticity
+      Details" to "View Authenticity Review" (auditor-record-detail.
+      component.html).
+    - auditor-authenticity.component.ts (the Authenticity Review
+      Workspace) gained the same case-scoped pattern already used by
+      Exceptions/Anomalies (Task 4 of this session): reading
+      ?document_id=X&ref=audit-review&invoice_no=Y from the URL, it
+      now filters at the load step (this.checks = ... .filter(c =>
+      c.document_id === caseDocumentId)) instead of only filtering the
+      rendered list - so every KPI card, chart, and filter-chip count
+      on the page, not just the check-list rows, stays consistent with
+      "this transaction package only" instead of showing global totals
+      next to a single-transaction header. Invoice/PO/GR authenticity_
+      checks rows for one case all share the SAME document_id (routes/
+      authenticity.py's _SELECT_WITH_JOINS joins purchase_orders/
+      goods_receipts ON ac.document_id = po.document_id / gr.document_
+      id - confirmed by reading the code, not assumed), so this one
+      filter naturally scopes to exactly Invoice + related PO +
+      related GR with no new backend endpoint or query needed.
+    - Header subtitle becomes "Reviewing Transaction: <invoice
+      number>" and a top-right "<- Back to Audit Review" button
+      appears, ONLY when case-scoped (auditor-authenticity.component.
+      html/.css - .header switched from a single column to the same
+      flex/space-between + .btn-back styling auditor-exceptions.
+      component already uses, for visual consistency). Back returns to
+      /auditor/record-detail?document_id=<caseDocumentId> - the exact
+      record it was opened from.
+    - viewDocument() (the "View Evidence" action on each check-list
+      card) now also passes ref=audit-review in its queryParams when
+      case-scoped, so the existing Authenticity Detail page's own
+      cameFromAuditReview flag (built in Task 4, unmodified here) picks
+      it up and its own "Back to Audit Review" button returns
+      correctly - no change needed to auditor-authenticity-detail.
+      component.ts itself, since a PO/GR authenticity check's
+      documentId path param is already the same case-level document_id
+      Audit Review uses (same fact as above), not a separate PO/GR-
+      only id.
+    - Normal sidebar access to Authenticity (auditor-layout.component.
+      ts's nav link, and the User Manual's link) still opens /auditor/
+      authenticity with no query params - caseDocumentId stays null,
+      so every KPI card, chart, filter chip, and the document list
+      itself render exactly as before, no back button. Verified live
+      (see below), not just by code inspection.
+    - "Mark as Reviewed" was NOT touched - it remains its own separate
+      button on the Audit Review Timeline; none of the navigation
+      methods above call markStepReviewed.
+
+Why:
+  Reported bug: the Audit Review Timeline's "View Authenticity
+  Details" link opened a single document's Authenticity Detail page
+  directly, which could show the wrong document and gave no sense of
+  the full Invoice/PO/GR transaction being reviewed. The fix opens the
+  existing Authenticity Review Workspace instead, auto-filtered down to
+  just the current transaction's 3 documents, so the auditor reviews
+  the whole package in one place while still being able to drill into
+  any one document's full evidence view and get back to the right
+  place.
+
+Build result:
+  Frontend: no *.spec.ts exists for either touched component (auditor-
+  record-detail.component.spec.ts exists but never referenced
+  openAuthenticityDetails/View Authenticity Details, so nothing to
+  update there); `ng build --configuration development` and `ng build
+  --configuration production` both clean (the production budget
+  warnings printed are pre-existing bundle/CSS-size warnings unrelated
+  to this change).
+
+  Live verification against the real local dev stack (python app.py +
+  ng serve, real Postgres, real login as vision_fixture_auditor@x.com):
+  logged in, opened Record Detail for INV-NBI-2026-0017 (document_
+  id=3753), confirmed the timeline button now reads "View Authenticity
+  Review", clicked it and confirmed the URL became /auditor/
+  authenticity?document_id=3753&ref=audit-review&invoice_no=INV-NBI-
+  2026-0017. This local fixture's PO/GR rows (seeded in an earlier
+  task this session) have no real file bytes reachable in this Windows
+  dev environment, so their authenticity_checks rows had never been
+  auto-created by the existing sibling-check mechanism; inserted 2
+  synthetic authenticity_checks rows (document_type po/gr) to exercise
+  the 3-document case, then re-verified: workspace header showed
+  "Reviewing Transaction: INV-NBI-2026-0017", Documents Checked KPI
+  correctly read 3 (not the global total), and exactly PO-NBI-2026-
+  0017 / GR-NBI-2026-0017 / INV-NBI-2026-0017 were listed - no other
+  documents. Clicked "View Evidence" on the PO row, confirmed the URL
+  carried ref=audit-review through to the Detail page and that page's
+  own "Back to Audit Review" button returned to /auditor/record-
+  detail?document_id=3753 (the correct invoice record, not a PO-
+  specific one). Clicked the workspace's own back button and confirmed
+  the same correct return. Re-visited /auditor/authenticity with no
+  query params and confirmed it still shows the full unfiltered global
+  list (0 back buttons, all documents). Zero browser console errors
+  throughout. The synthetic authenticity_checks rows and the review-
+  step marks accidentally produced by the test script's own gated-
+  button interaction were deleted afterward, restoring the fixture to
+  its pre-test state. Both dev servers stopped by exact PID afterward.
+
+  Note for the user: this session's local sandbox seed data names this
+  record's PO/GR "PO-NBI-2026-0017"/"GR-NBI-2026-0017" (from an earlier
+  task's seed script), not "PO-CPM-2026-0142"/"GR-CPM-2026-0098" as
+  named in the verification request - the two environments' fixture
+  data have diverged. The filtering logic itself is document_id-based,
+  not name-based, so it is unaffected by that naming difference, but
+  you may want to confirm the exact PO/GR numbers directly against
+  whichever database you check this in.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub - Render should auto-deploy the frontend static
+     site.
+  2. No backend changes in this commit - no backend redeploy needed.
+  3. Nothing new to configure - no new environment variables, no new
+     dependencies, no schema change.
+
+Rollback instructions:
+  Revert this one commit. Purely a frontend navigation/filtering
+  change - no backend route, schema, or data change either way.

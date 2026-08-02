@@ -1,9 +1,16 @@
 <div class="page-wrapper">
 
-  <!-- Header -->
+  <!-- Header — Back to Audit Review (top-right) appears ONLY when this
+       page was reached from a specific case's Audit Review Timeline
+       (document_id + ref=audit-review in the URL); the normal sidebar-
+       accessed global workspace looks exactly as before, no button. -->
   <div class="header">
-    <h1 class="page-title"><i class="ph-duotone ph-shield-check"></i> Authenticity Review Workspace</h1>
-    <p class="page-subtitle">AI-powered visual signal detection • {{ checks.length }} documents checked</p>
+    <div>
+      <h1 class="page-title"><i class="ph-duotone ph-shield-check"></i> Authenticity Review Workspace</h1>
+      <p class="page-subtitle" *ngIf="!caseDocumentId">AI-powered visual signal detection • {{ checks.length }} documents checked</p>
+      <p class="page-subtitle" *ngIf="caseDocumentId">Reviewing Transaction: {{ caseInvoiceNo || ('Document #' + caseDocumentId) }}</p>
+    </div>
+    <button class="btn-back" *ngIf="caseDocumentId" (click)="backToAuditReview()">← Back to Audit Review</button>
   </div>
 
   <!-- KPI Cards -->

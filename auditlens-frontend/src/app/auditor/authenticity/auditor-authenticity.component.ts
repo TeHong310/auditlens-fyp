@@ -1,6 +1,6 @@
 import { Component, OnInit, AfterViewInit, ElementRef, ViewChild, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Router } from '@angular/router';
+import { Router, ActivatedRoute } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Chart, registerables } from 'chart.js';
 import { environment } from '../../../environments/environment';
@@ -36,6 +36,13 @@ export class AuditorAuthenticityComponent implements OnInit, AfterViewInit {
   activeFilter: Filter = 'all';
   activeDocTypeFilter: DocTypeFilter = 'all';
 
+  // Set ONLY when this page is reached from a specific case's Audit
+  // Review Timeline (?document_id=X&ref=audit-review) — the normal
+  // sidebar-accessed global list (no query params) leaves this null and
+  // behaves exactly as before, showing every document.
+  caseDocumentId: number | null = null;
+  caseInvoiceNo: string = '';
+
   private viewReady = false;
   private evidenceChartInstance: any = null;
 
@@ -44,11 +51,22 @@ export class AuditorAuthenticityComponent implements OnInit, AfterViewInit {
   constructor(
     private http: HttpClient,
     private router: Router,
+    private route: ActivatedRoute,
     private cdr: ChangeDetectorRef
   ) {}
 
   ngOnInit() {
+    this.route.queryParams.subscribe(params => {
+      this.caseDocumentId = (params['document_id'] && params['ref'] === 'audit-review')
+        ? parseInt(params['document_id']) : null;
+      this.caseInvoiceNo = params['invoice_no'] || '';
+    });
     this.loadChecks();
+  }
+
+  backToAuditReview() {
+    if (!this.caseDocumentId) return;
+    this.router.navigate(['/auditor/record-detail'], { queryParams: { document_id: this.caseDocumentId } });
   }
 
   ngAfterViewInit() {
@@ -73,7 +91,13 @@ export class AuditorAuthenticityComponent implements OnInit, AfterViewInit {
     this.errorMessage = '';
     this.http.get<any[]>(`${this.apiUrl}/authenticity`, { headers: this.getHeaders() }).subscribe({
       next: (res) => {
-        this.checks = res || [];
+        const all = res || [];
+        // Case-scoped mode filters at the source, so every derived KPI
+        // card / chart / filter-chip count below stays consistent with
+        // "this transaction package only" — invoice/po/gr rows all share
+        // the same document_id (see routes/authenticity.py's
+        // _SELECT_WITH_JOINS), so this one filter covers all three.
+        this.checks = this.caseDocumentId ? all.filter(c => c.document_id === this.caseDocumentId) : all;
         this.isLoading = false;
         this.cdr.detectChanges();
         this.renderEvidenceChart();
@@ -192,9 +216,9 @@ export class AuditorAuthenticityComponent implements OnInit, AfterViewInit {
   }
 
   viewDocument(check: any) {
-    this.router.navigate(['/auditor/authenticity', check.document_id], {
-      queryParams: { document_type: check.document_type }
-    });
+    const queryParams: any = { document_type: check.document_type };
+    if (this.caseDocumentId) queryParams.ref = 'audit-review';
+    this.router.navigate(['/auditor/authenticity', check.document_id], { queryParams });
   }
 
   // "View Document" — opens the original uploaded file directly, same
