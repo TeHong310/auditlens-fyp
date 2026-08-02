@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { Router, ActivatedRoute } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
+import { formatMalaysiaDateTime } from '../../shared/datetime.util';
 
 type Severity = 'all' | 'high' | 'medium' | 'low';
 type AnomalyType = 'all' | 'amount' | 'round' | 'weekend' | 'duplicate';
@@ -362,7 +363,7 @@ export class AuditorAnomaliesComponent implements OnInit {
     const diffDay = Math.floor(diffHr / 24);
     if (diffDay === 1) return '1 day ago';
     if (diffDay < 30) return `${diffDay} days ago`;
-    return new Date(dateStr).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' });
+    return formatMalaysiaDateTime(dateStr);
   }
 
   // "Last Analysed" summary card — reuses the existing relativeTime()

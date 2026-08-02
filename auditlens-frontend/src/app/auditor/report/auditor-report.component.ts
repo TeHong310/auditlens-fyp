@@ -5,6 +5,7 @@ import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Chart, registerables } from 'chart.js';
 import { environment } from '../../../environments/environment';
+import { formatMalaysiaDateTime } from '../../shared/datetime.util';
 
 Chart.register(...registerables);
 
@@ -339,8 +340,7 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
     const now = new Date();
     const isToday = d.toDateString() === now.toDateString();
     if (isToday) return this.relativeTime(ts);
-    return d.toLocaleDateString('en-MY', { day: '2-digit', month: 'short' }) + ' ' +
-      d.toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit', hour12: false });
+    return formatMalaysiaDateTime(ts);
   }
 
   relativeTime(ts: string): string {

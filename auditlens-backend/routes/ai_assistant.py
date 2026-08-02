@@ -23,6 +23,7 @@ from helpers.ai_assistant import ask_ai_assistant
 from helpers.send_back import REASON_CATEGORIES, REQUIRED_ACTIONS, PRIORITIES
 from routes.auditor import build_comparison, _classify_exception, _matching_status_for_comparison
 from helpers.transaction_packages import get_transaction_context_for_document, get_package_documents
+from helpers.time_format import to_utc_iso
 
 ai_assistant_bp = Blueprint('ai_assistant', __name__)
 
@@ -338,7 +339,7 @@ def _build_case_context(cursor, document_id):
     audit_history = [{
         'action':      row['action'],
         'remarks':     row['remarks'],
-        'reviewed_at': row['reviewed_at'].isoformat() if row['reviewed_at'] else None,
+        'reviewed_at': to_utc_iso(row['reviewed_at']),
         'reviewer':    row['reviewer_name'],
     } for row in cursor.fetchall()]
 
@@ -366,7 +367,7 @@ def _build_case_context(cursor, document_id):
             'priority':            cycle_row['priority'],
             'response_due_date':   cycle_row['response_due_date'].isoformat() if cycle_row['response_due_date'] else None,
             'cycle_status':        cycle_row['cycle_status'],
-            'sent_back_at':        cycle_row['sent_back_at'].isoformat() if cycle_row['sent_back_at'] else None,
+            'sent_back_at':        to_utc_iso(cycle_row['sent_back_at']),
         }
 
     return {

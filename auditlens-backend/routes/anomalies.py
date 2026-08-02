@@ -3,6 +3,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 import psycopg2.extras
 from db import get_db_connection, get_user_by_id
 from helpers.anomaly_detector import run_anomaly_detection
+from helpers.time_format import to_utc_iso
 
 anomalies_bp = Blueprint('anomalies', __name__)
 
@@ -69,14 +70,18 @@ def get_anomalies():
         # ef.invoice_date/a.created_at are raw date/datetime objects —
         # Flask's default JSON encoder formats those as an HTTP-style
         # "Wed, 11 Feb 2026 00:00:00 GMT" string instead of converting
-        # them, so they're explicitly isoformat()'d here (same fix
-        # already applied to authenticity_checks.created_at elsewhere in
-        # this app) rather than left for jsonify() to mangle.
+        # them, so they're explicitly serialized here (same fix already
+        # applied to authenticity_checks.created_at elsewhere in this
+        # app) rather than left for jsonify() to mangle. invoice_date is
+        # date-only (no time-of-day) and stays a plain isoformat() string
+        # unchanged; created_at is a real timestamp and gets the explicit
+        # UTC 'Z' marker so the frontend can convert it to Asia/Kuala_
+        # Lumpur unambiguously.
         for row in rows:
             if row.get('invoice_date') is not None:
                 row['invoice_date'] = row['invoice_date'].isoformat()
             if row.get('created_at') is not None:
-                row['created_at'] = row['created_at'].isoformat()
+                row['created_at'] = to_utc_iso(row['created_at'])
 
         return jsonify(rows), 200
 
@@ -310,7 +315,7 @@ def get_anomaly_stats():
             'by_status': {s: by_status.get(s, 0) for s in ('pending', 'reviewed', 'dismissed')},
             'pending': pending,
             'transactions_analysed': transactions_analysed,
-            'last_analysed': last_run.isoformat() if last_run else None,
+            'last_analysed': to_utc_iso(last_run),
         }), 200
 
     except Exception as e:

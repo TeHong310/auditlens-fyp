@@ -17552,3 +17552,190 @@ Deployment instructions:
 Rollback instructions:
   Revert this one commit. Purely a frontend navigation/filtering
   change - no backend route, schema, or data change either way.
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Root cause (confirmed by direct DB inspection, not assumed): every
+  timestamp column in this schema is Postgres `timestamp without time
+  zone` (naive), populated by server-side now()/CURRENT_TIMESTAMP
+  defaults. A naive column has no timezone metadata of its own - its
+  stored digits are whatever the DB SESSION's timezone happened to be
+  at insert time. This local dev machine's Postgres session defaults to
+  Asia/Kuala_Lumpur (inherited from the OS), while Render's managed
+  Postgres defaults to UTC - so the exact same code could silently
+  store different wall-clock digits depending on environment. On top of
+  that, every route read those naive values back out via a bare
+  `.isoformat()` (or, worse, left a raw datetime for Flask's default
+  JSON encoder, which formats it as an HTTP-style "Sun, 02 Aug 2026
+  21:19:00 GMT" string) - neither carries a real timezone marker, so a
+  browser's `new Date(...)` parses the string as LOCAL time instead of
+  UTC, and every page's own hand-rolled toLocaleString()/
+  toLocaleDateString() call (no explicit timeZone) just re-displayed
+  those digits unconverted. Net effect: a UTC instant of 21:19 displayed
+  as "21:19" instead of being shifted +8h to "05:19" the next day - the
+  exact bug reported on Report & Log, and, by the same code paths,
+  Review History, Workflow Timeline, review-step reviewed times,
+  Anomaly timestamps/Last Analysed, and Approval/Send Back/Need Review
+  records.
+
+  Backend (auditlens-backend/):
+    - db.py: the connection pool now passes `options='-c timezone=UTC'`
+      to every pooled Postgres connection, on every environment. This is
+      the root-cause fix - every now()/CURRENT_TIMESTAMP write, from
+      this point forward, consistently stores real UTC digits in these
+      naive columns, regardless of the underlying Postgres instance's
+      own OS/session default. (Render's managed Postgres was very
+      likely already UTC-by-default, so this is mainly what makes local
+      dev match production instead of silently diverging - not
+      necessarily what caused the originally reported bug on its own.)
+    - New helpers/time_format.py: `to_utc_iso(value)` turns a naive
+      datetime into 'YYYY-MM-DDTHH:MM:SSZ' (explicit UTC marker); a
+      plain date (or None) passes through unchanged, since a date-only
+      value has no time-of-day to mark as UTC and must never gain one.
+      `serialize_row_datetimes(row)` is the same row-wide, type-aware
+      replacement for the `for k,v in row.items(): if hasattr(v,
+      'isoformat'): row[k]=v.isoformat()` idiom repeated across routes/
+      - real datetimes get the Z suffix, plain dates don't.
+    - app.py: registered a custom Flask JSON provider (_UtcJSONProvider)
+      as a catch-all - any raw datetime/date that reaches jsonify()
+      without an explicit call now goes through the same to_utc_iso()/
+      plain-isoformat() logic instead of the old GMT-labeled default.
+    - Applied to_utc_iso()/serialize_row_datetimes() at every endpoint
+      backing the reported pages: routes/auditor.py (_build_comparison's
+      invoice uploaded_at - used by Workflow Timeline's "Document
+      Uploaded" step; the /report/audit-trail timestamp), routes/
+      ai_assistant.py (_build_case_context's audit_history reviewed_at
+      and send_back_cycle sent_back_at - both feed Workflow Timeline
+      event timestamps), routes/documents.py (the Workflow Timeline
+      endpoint's review_steps[].reviewed_at), routes/anomalies.py
+      (created_at and the Anomaly stats' last_analysed - invoice_date on
+      the same rows is left untouched, still a plain date string),
+      routes/reviews.py (mark_review_step's own response - the auditor
+      clicking "Mark as Reviewed" updates the Review-step time on
+      screen straight from THIS response, not a reload, so it needed
+      the same fix; get_review_history's and get_send_back_cycles'
+      generic loops, now via serialize_row_datetimes() - response_
+      due_date on the latter stays a plain date, everything else on
+      that row gets the Z suffix).
+    - CSV export (/auditor/report/audit-trail/export.csv) was
+      deliberately left untouched - a downloaded file for a spreadsheet
+      is a different consumption context than the app's own display,
+      and wasn't part of what was reported broken.
+
+  Frontend (auditlens-frontend/):
+    - New shared/datetime.util.ts: the ONE shared formatter,
+      formatMalaysiaDateTime(isoString), used by every page below
+      instead of each writing its own toLocaleString()/
+      toLocaleDateString() call. Parses the (now Z-suffixed) UTC string
+      via `new Date(...)` and formats it through
+      `Intl.DateTimeFormat('en-MY', { timeZone: 'Asia/Kuala_Lumpur', ...
+      hour12: true })` - an EXPLICIT timezone conversion, not reliant on
+      the viewer's own machine already being set to Malaysia time (what
+      every removed toLocaleString() call implicitly assumed, and why
+      the bug wasn't "8 hours off" for everyone testing on a
+      Malaysia-timezone machine, only for whatever produced the
+      originally reported screenshot). Confirmed empirically (Node's
+      Intl, not assumed) that 'en-MY' already formats exactly as
+      required with zero manual string assembly: new Date('2026-08-
+      02T21:19:00Z') -> "03 Aug 2026, 05:19 am".
+    - auditor-record-detail.component.ts's formatDateTime() (Review-step
+      reviewed time, Review History, Send Back's "Finance Response"
+      timestamp, the inline Document Workflow Timeline's "Document
+      Uploaded" line) now delegates to the shared formatter instead of
+      its own toLocaleString() call. formatDate() (Invoice Date,
+      response_due_date - both date-only) is untouched.
+    - workflow-timeline.component.ts's formatDate() (the shared
+      Workflow Timeline component, used on both Auditor Record Detail's
+      Finance Correction context and Finance Correction Detail) likewise
+      delegates to the shared formatter.
+    - auditor-report.component.ts's formatTimestamp() (Report & Log /
+      Audit Trail) keeps its existing "relative time for today, absolute
+      otherwise" behavior (untouched, and was never actually broken -
+      Date.now() - new Date(ts).getTime() compares real instants
+      correctly regardless of display timezone) but its absolute-
+      fallback branch now calls the shared formatter instead of its own
+      24-hour, no-year toLocaleDateString()+toLocaleTimeString() combo.
+    - auditor-anomalies.component.ts's relativeTime() (Anomaly
+      timestamps, Last Analysed) - same treatment: the "X min/hr/days
+      ago" branches are untouched, only the 30+-day absolute fallback
+      (previously date-only, no time at all) now calls the shared
+      formatter. formatInvoiceDate() (date-only) is untouched.
+    - Calendar (auditor/calendar) was not touched - it only ever
+      displays date-only fields (YYYY-MM-DD, no time-of-day) via its own
+      already-correct local-date parsing, confirmed by reading the
+      component; it was never actually timezone-converting a real
+      timestamp, so there was nothing broken there to fix.
+
+Why:
+  Report & Log was showing 02 Aug 21:19 for a record whose real UTC
+  timestamp was 2026-08-02T21:19:00 - correct Malaysia time (UTC+8) is
+  03 Aug 2026, 05:19 am. Traced to two compounding issues: (1) the
+  backend never marked its timestamp strings as UTC (no 'Z'/offset), so
+  a browser had no way to know they weren't already local time, and (2)
+  every page wrote its own ad-hoc toLocaleString() call with no explicit
+  timezone, silently relying on the viewer's own machine already being
+  set to Malaysia time. Fixing this properly meant going all the way to
+  the DB session/serialization layer (so "UTC in, UTC out" is
+  guaranteed, not just patched per page) and consolidating every display
+  call site onto one shared, explicitly-Malaysia-timezone formatter.
+
+Build result:
+  Backend: all 33 suites in tests/extraction/run_all.py pass (invoice/
+  PO/GR extraction, authenticity, matching, anomalies, review steps,
+  send-back, calendar - none of which this change's logic touches,
+  confirming no regression), plus `python -c "import app"` clean.
+  Frontend: `ng build --configuration development` and `ng build
+  --configuration production` both clean (the production budget
+  warnings printed are pre-existing bundle/CSS-size warnings unrelated
+  to this change).
+
+  Live verification against the real local dev stack (python app.py +
+  ng serve, real Postgres, real login as vision_fixture_auditor@x.com):
+  confirmed the DB session's `SHOW timezone` is now 'UTC' and NOW()
+  returns true UTC digits (previously Asia/Kuala_Lumpur on this
+  machine). Inserted document_review_steps.reviewed_at = '2026-08-02
+  21:19:00' (the exact value from the bug report) for INV-NBI-2026-0017
+  (document_id=3753) and hit GET /documents/3753/timeline directly:
+  response was {"reviewed_at": "2026-08-02T21:19:00Z", ...} - confirmed
+  ISO 8601 UTC with the Z suffix. Then in the actual browser: Record
+  Detail's Review-step line rendered exactly "Reviewed by Vision
+  Fixture Auditor - 03 Aug 2026, 05:19 am" - the exact required output
+  for the exact required input. Inserted a matching review_records row
+  and confirmed Review History showed the same "03 Aug 2026, 05:19 am".
+  Confirmed Invoice Date on the same page still reads "11 Feb 2026" -
+  unshifted, unaffected, exactly its raw stored date value. Confirmed
+  Report & Log's Audit Trail still shows "just now"/"X min ago" for
+  today's entries (correct - the relative-time math was never actually
+  broken once the underlying timestamp is properly UTC-tagged). All
+  test data deleted afterward; both dev servers stopped by exact PID.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub - Render should auto-deploy both the backend
+     (Docker web service) and the frontend static site.
+  2. Backend redeploy required (db.py, app.py, and 5 routes/ files
+     changed).
+  3. Nothing new to configure - no new environment variables, no new
+     dependencies, no schema/migration.
+  4. Rows already stored BEFORE this deploy are not retroactively
+     corrected - this fixes how every timestamp is written and
+     displayed from this deploy forward, not historical data. If
+     Render's Postgres was already UTC-by-default (likely, for a
+     managed instance), existing rows should already read correctly
+     under the new Z-suffix + explicit-timezone-conversion pipeline; if
+     any existing row displays wrong after this deploy, that specific
+     row was written under a different session-timezone convention
+     before this fix and would need a one-time manual correction, not a
+     code change.
+
+Rollback instructions:
+  Revert this one commit. Database rows are unaffected either way (this
+  change only alters how NEW writes get their timestamp and how
+  existing naive values are serialized/displayed) - reverting simply
+  restores the previous ambiguous (no explicit UTC marker) serialization
+  and each page's own ad-hoc, viewer-local-timezone-assuming display
+  logic.

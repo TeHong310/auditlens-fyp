@@ -9,6 +9,7 @@ from helpers.send_back import (
     validate_send_back_payload, validate_finance_response_payload,
     compute_activity_summary, is_overdue,
 )
+from helpers.time_format import serialize_row_datetimes, to_utc_iso
 
 reviews_bp = Blueprint('reviews', __name__)
 
@@ -443,7 +444,7 @@ def mark_review_step(document_id, step):
             'step':          step,
             'reviewed_by':   user['user_id'],
             'reviewer_name': user['full_name'],
-            'reviewed_at':   reviewed_at.isoformat(),
+            'reviewed_at':   to_utc_iso(reviewed_at),
         }), 200
 
     except Exception as e:
@@ -575,9 +576,7 @@ def get_review_history(document_id):
         result = []
         for h in history:
             row = dict(h)
-            for k, v in row.items():
-                if hasattr(v, 'isoformat'):
-                    row[k] = v.isoformat()
+            serialize_row_datetimes(row)
             result.append(row)
 
         return jsonify({
@@ -650,9 +649,7 @@ def get_send_back_cycles(document_id):
             row = dict(c)
             row['activity_summary'] = compute_activity_summary(row, invoice_edited_at, po_uploaded_at, gr_uploaded_at)
             row['is_overdue'] = is_overdue(row)
-            for k, v in row.items():
-                if hasattr(v, 'isoformat'):
-                    row[k] = v.isoformat()
+            serialize_row_datetimes(row)
             result.append(row)
 
         return jsonify({'document_id': document_id, 'cycles': result}), 200

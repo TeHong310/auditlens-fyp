@@ -25,6 +25,7 @@ from helpers.confidence_engine import compute_field_confidence, compute_line_ite
 from helpers.extraction_validator import validate_extraction
 from routes.authenticity import generate_invoice_authenticity_if_missing, generate_authenticity_if_missing
 from routes.ai_assistant import _build_case_context
+from helpers.time_format import to_utc_iso
 from config import Config
 
 documents_bp = Blueprint('documents', __name__)
@@ -1608,7 +1609,7 @@ def get_document_timeline(document_id):
             row['step']: {
                 'reviewed_by':   row['reviewed_by'],
                 'reviewer_name': row['reviewer_name'],
-                'reviewed_at':   row['reviewed_at'].isoformat() if row['reviewed_at'] else None,
+                'reviewed_at':   to_utc_iso(row['reviewed_at']),
             }
             for row in cursor.fetchall()
         }

@@ -2,6 +2,7 @@ import { Component, Input, OnChanges, SimpleChanges, ChangeDetectorRef } from '@
 import { CommonModule } from '@angular/common';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../environments/environment';
+import { formatMalaysiaDateTime } from '../shared/datetime.util';
 
 // Document Workflow Timeline — a reusable, read-only visualization
 // component shown on both the Auditor Record Detail page and the
@@ -79,8 +80,6 @@ export class WorkflowTimelineComponent implements OnChanges {
 
   formatDate(dateStr: string | null): string {
     if (!dateStr) return '';
-    return new Date(dateStr).toLocaleString('en-MY', {
-      day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
-    });
+    return formatMalaysiaDateTime(dateStr);
   }
 }

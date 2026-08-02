@@ -87,6 +87,20 @@ def _get_pool():
                     host=Config.DB_HOST,
                     port=Config.DB_PORT,
                     connection_factory=_PooledConnection,
+                    # Every timestamp column in this schema is `timestamp
+                    # without time zone` (naive) and gets its value from
+                    # server-side now()/CURRENT_TIMESTAMP defaults, so
+                    # whatever the SESSION's timezone happens to be is
+                    # silently baked into the stored digits. Without this,
+                    # that's whatever the Postgres server's OS/instance
+                    # default is - Asia/Kuala_Lumpur on a local dev machine,
+                    # but UTC on Render's managed Postgres - so the exact
+                    # same code stores different wall-clock digits in
+                    # different environments. Forcing UTC here makes every
+                    # environment store the same, unambiguous UTC digits,
+                    # which the app.py JSON provider then marks explicitly
+                    # with a 'Z' suffix on the way out.
+                    options='-c timezone=UTC',
                 )
     return _pool
 

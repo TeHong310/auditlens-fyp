@@ -18,6 +18,7 @@ from helpers.transaction_packages import (
     get_transaction_authenticity_summary, get_package, get_package_documents, get_relationship_preview,
 )
 from config import Config
+from helpers.time_format import to_utc_iso
 
 auditor_bp = Blueprint('auditor', __name__)
 
@@ -428,7 +429,7 @@ def _build_comparison(cursor, invoice_document_id):
         'invoice_date':     inv_row['invoice_date'].isoformat() if inv_row['invoice_date'] else None,
         'total_amount':     float(inv_row['total_amount']) if inv_row['total_amount'] is not None else None,
         'currency':         _normalize_currency(inv_row['currency']),
-        'uploaded_at':      inv_row['uploaded_at'].isoformat() if inv_row['uploaded_at'] else None,
+        'uploaded_at':      to_utc_iso(inv_row['uploaded_at']),
         'po_reference':     inv_row['po_reference'],
         'item_description': inv_row['item_description'],
         'quantity':         float(inv_row['quantity']) if inv_row['quantity'] is not None else None,
@@ -699,7 +700,7 @@ def _build_comparison_v2(cursor, invoice_document_id):
         'invoice_date':     inv_row['invoice_date'].isoformat() if inv_row['invoice_date'] else None,
         'total_amount':     float(inv_row['total_amount']) if inv_row['total_amount'] is not None else None,
         'currency':         _normalize_currency(inv_row['currency']),
-        'uploaded_at':      inv_row['uploaded_at'].isoformat() if inv_row['uploaded_at'] else None,
+        'uploaded_at':      to_utc_iso(inv_row['uploaded_at']),
         'po_reference':     inv_row['po_reference'],
         'item_description': inv_row['item_description'],
         'quantity':         float(inv_row['quantity']) if inv_row['quantity'] is not None else None,
@@ -1928,7 +1929,7 @@ def get_audit_trail():
         conn.close()
 
         entries = [{
-            'timestamp':           row['reviewed_at'].isoformat() if row['reviewed_at'] else None,
+            'timestamp':           to_utc_iso(row['reviewed_at']),
             'auditor_name':        row['auditor_name'],
             'auditor_email':       row['auditor_email'],
             'action':              ACTION_DB_TO_API.get(row['action'], row['action']),

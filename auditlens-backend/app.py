@@ -1,9 +1,12 @@
 from flask import Flask, jsonify
+from flask.json.provider import DefaultJSONProvider
+from datetime import datetime, date
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
 import bcrypt
 from config import Config
 from db import get_db_connection
+from helpers.time_format import to_utc_iso
 from routes.auth import auth_bp
 from routes.documents import documents_bp
 from routes.matching import matching_bp
@@ -873,7 +876,31 @@ def _ensure_admin_seed_account():
         print(f'WARNING: could not ensure admin seed account exists: {type(e).__name__}: {e}')
 
 
+class _UtcJSONProvider(DefaultJSONProvider):
+    """Every timestamp column in this schema is a naive `timestamp
+    without time zone` (db.py's pooled connections now force the
+    session timezone to UTC on every environment, so those naive values
+    are consistently real UTC digits). A raw datetime reaching jsonify()
+    without an explicit .isoformat() call would otherwise fall through
+    to the default provider's http_date()-based "Sun, 02 Aug 2026
+    21:19:00 GMT" format - technically parseable, but not ISO 8601 and
+    inconsistent with the routes that already call
+    to_utc_iso()/serialize_row_datetimes() by hand. This is the
+    catch-all for anything that doesn't. date objects get the same
+    fallback fix (a plain isoformat() instead of the GMT string) but are
+    never Z-suffixed - a date-only value has no time-of-day to mark as
+    UTC, and must never gain one (see helpers/time_format.py)."""
+    @staticmethod
+    def default(obj):
+        if isinstance(obj, datetime):
+            return to_utc_iso(obj)
+        if isinstance(obj, date):
+            return obj.isoformat()
+        return DefaultJSONProvider.default(obj)
+
+
 app = Flask(__name__)
+app.json = _UtcJSONProvider(app)
 
 app.config['JWT_SECRET_KEY']           = Config.JWT_SECRET_KEY
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = Config.JWT_ACCESS_TOKEN_EXPIRES

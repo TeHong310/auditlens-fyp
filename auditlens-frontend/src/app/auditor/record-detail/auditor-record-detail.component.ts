@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
+import { formatMalaysiaDateTime } from '../../shared/datetime.util';
 
 // ── Send-Back structured form (Feature 1) — machine keys mirror
 // helpers/send_back.py's REASON_CATEGORIES / REQUIRED_ACTIONS / PRIORITIES
@@ -686,10 +687,7 @@ export class AuditorRecordDetailComponent implements OnInit {
   }
 
   formatDateTime(dateStr: string): string {
-    if (!dateStr) return '-';
-    return new Date(dateStr).toLocaleString('en-MY', {
-      day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
-    });
+    return formatMalaysiaDateTime(dateStr);
   }
 
   // ── Send-Back modal (Feature 1) ──────────────────────────
