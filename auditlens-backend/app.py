@@ -52,6 +52,34 @@ def _ensure_anomalies_table():
         print(f'WARNING: could not ensure anomalies table exists: {type(e).__name__}: {e}')
 
 
+def _ensure_anomaly_detection_runs_table():
+    """Same auto-create-on-startup pattern as _ensure_anomalies_table()
+    above. The `anomalies` table alone can't answer "when was detection
+    last run" or "how many times has it run" for a document that was
+    screened and found clean — a clean result inserts no row there. One
+    row is logged per helpers/anomaly_detector.py::run_anomaly_detection()
+    call (see that function's own comment), regardless of outcome, so
+    the Anomaly Detection page's "Last Analysed" summary field reflects
+    reality instead of being inferred from unrelated timestamps."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS anomaly_detection_runs (
+                run_id SERIAL PRIMARY KEY,
+                invoice_document_id INT REFERENCES documents(document_id) ON DELETE CASCADE,
+                anomalies_found INTEGER NOT NULL DEFAULT 0,
+                run_at TIMESTAMP DEFAULT NOW()
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_anomaly_detection_runs_run_at ON anomaly_detection_runs(run_at)')
+        conn.commit()
+        conn.close()
+        print('Anomaly detection runs table ready')
+    except Exception as e:
+        print(f'WARNING: could not ensure anomaly_detection_runs table exists: {type(e).__name__}: {e}')
+
+
 def _ensure_authenticity_checks_table():
     """Same auto-create-on-startup pattern as _ensure_anomalies_table()
     above, for the same reason: no migration runner exists in this repo,
@@ -781,6 +809,7 @@ app.register_blueprint(document_relationships_bp, url_prefix='/documents')
 app.register_blueprint(transaction_packages_bp, url_prefix='/transaction-packages')
 
 _ensure_anomalies_table()
+_ensure_anomaly_detection_runs_table()
 _ensure_authenticity_checks_table()
 _ensure_authenticity_v2_columns()
 _ensure_authenticity_v3_columns()

@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 import psycopg2.extras
 from db import get_db_connection, get_user_by_id
+from helpers.anomaly_detector import run_anomaly_detection
 
 anomalies_bp = Blueprint('anomalies', __name__)
 
@@ -119,6 +120,67 @@ def review_anomaly(anomaly_id):
 
 
 # ------------------------------------------------------------
+# RE-RUN ANOMALY ANALYSIS FOR EVERY INVOICE
+# POST /anomalies/run
+# Auditor only
+#
+# Re-runs the EXISTING per-document detection (helpers/anomaly_detector.
+# py::run_anomaly_detection — untouched) across every invoice that has
+# extracted fields, the same delete-then-redetect pattern already used
+# by routes/admin.py's single-document diagnostic endpoint and scripts/
+# backfill_anomaly_detection.py, just looped across every invoice
+# instead of one. Lets a vendor's baseline grow (more history since a
+# document was first uploaded) actually change that document's result
+# on demand, from the auditor-facing page, instead of only via the
+# admin-only diagnostic route or a manually-run script.
+# ------------------------------------------------------------
+def _run_full_anomaly_analysis():
+    conn   = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cursor.execute('SELECT DISTINCT document_id FROM extracted_fields ORDER BY document_id')
+    document_ids = [row['document_id'] for row in cursor.fetchall()]
+    conn.close()
+
+    anomalies_found = 0
+    errors = 0
+    for document_id in document_ids:
+        try:
+            conn   = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM anomalies WHERE invoice_document_id = %s', (document_id,))
+            conn.commit()
+            conn.close()
+
+            created_ids = run_anomaly_detection(document_id)
+            anomalies_found += len(created_ids)
+        except Exception as e:
+            errors += 1
+            print(f"DEBUG /anomalies/run: document_id={document_id} failed: {type(e).__name__}: {e}")
+
+    return {
+        'documents_analyzed': len(document_ids),
+        'anomalies_found': anomalies_found,
+        'errors': errors,
+    }
+
+
+@anomalies_bp.route('/run', methods=['POST'])
+@jwt_required()
+def run_full_anomaly_analysis():
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    if user['role'] != 'auditor':
+        return jsonify({'error': 'Access denied. Auditor only.'}), 403
+
+    try:
+        result = _run_full_anomaly_analysis()
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
 # ANOMALY STATS FOR DASHBOARD
 # GET /anomalies/stats
 # Auditor only
@@ -145,12 +207,32 @@ def get_anomaly_stats():
         cursor.execute('SELECT anomaly_type, COUNT(*) AS cnt FROM anomalies GROUP BY anomaly_type')
         by_type = {row['anomaly_type']: row['cnt'] for row in cursor.fetchall()}
 
+        cursor.execute("SELECT COUNT(*) AS cnt FROM anomalies WHERE status = 'pending'")
+        pending = cursor.fetchone()['cnt']
+
+        # Every invoice with extracted fields has gone through detection
+        # (run_anomaly_detection is auto-triggered right after extraction
+        # for every invoice, unconditionally) — the real, existing count
+        # of screened transactions, not a new/separate tally.
+        cursor.execute('SELECT COUNT(*) AS cnt FROM extracted_fields')
+        transactions_analysed = cursor.fetchone()['cnt']
+
+        # anomaly_detection_runs logs one row per actual detection run,
+        # including clean results that leave no `anomalies` row — see
+        # helpers/anomaly_detector.py::_log_detection_run. NULL (never
+        # analysed) until the first run after this table was added.
+        cursor.execute('SELECT MAX(run_at) AS last_run FROM anomaly_detection_runs')
+        last_run = cursor.fetchone()['last_run']
+
         conn.close()
 
         return jsonify({
             'total': total,
             'by_severity': {s: by_severity.get(s, 0) for s in VALID_SEVERITIES},
             'by_type': {t: by_type.get(t, 0) for t in VALID_TYPES},
+            'pending': pending,
+            'transactions_analysed': transactions_analysed,
+            'last_analysed': last_run.isoformat() if last_run else None,
         }), 200
 
     except Exception as e:

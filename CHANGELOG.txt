@@ -16257,3 +16257,184 @@ Rollback instructions:
   confirmation" behavior with no data or schema implications (existing
   corrections and their original_ai_box/audit-trail data are untouched
   either way).
+
+----------------------------------------------------------------------
+
+Date: 2026-08-02
+What was changed:
+  Backend:
+    - app.py: new anomaly_detection_runs table (auto-created at startup,
+      same _ensure_*_table() pattern as every other table in this file)
+      logging one row per actual detection run (invoice_document_id,
+      anomalies_found, run_at) - the ONLY way to answer "when was this
+      last screened" for a transaction that was screened and found
+      clean, since a clean result inserts no row into `anomalies`.
+    - helpers/anomaly_detector.py: added _log_detection_run(), called at
+      both exit points of the existing, UNCHANGED run_anomaly_detection()
+      (the "no anomalies found" early return and the normal end-of-run
+      return) - detection logic, thresholds, and the anomalies table
+      writes are untouched; this only adds a run-log side effect.
+    - routes/anomalies.py: new POST /anomalies/run (auditor-only) - the
+      backend behind the page's new "Run Anomaly Analysis" button. Loops
+      over every invoice with extracted fields and re-runs the SAME
+      delete-then-redetect pattern already used by routes/admin.py's
+      single-document diagnostic endpoint and scripts/backfill_anomaly_
+      detection.py, just across every invoice instead of one; one
+      document failing is logged and skipped, never aborts the batch.
+      GET /anomalies/stats gains 3 new fields - pending (status=
+      'pending' count), transactions_analysed (COUNT(extracted_fields) -
+      every invoice with extracted fields has gone through detection,
+      since it's auto-triggered unconditionally right after extraction),
+      last_analysed (MAX(run_at) from the new run-log table, explicitly
+      .isoformat()'d before jsonify - Flask's default datetime encoder
+      mislabels a naive DB timestamp as "GMT" without converting it,
+      the same bug fixed in routes/authenticity.py last change).
+      Existing fields (total, by_severity, by_type) and every existing
+      route (list, review, stats' original shape) are unchanged - purely
+      additive, and the two other pages that already read /anomalies/
+      stats (auditor-dashboard, auditor-report) only read by_type/
+      by_severity, so they're unaffected.
+  Frontend (auditlens-frontend/src/app/auditor/anomalies/
+  auditor-anomalies.component.*):
+    - New compact summary bar (Transactions Analysed, Anomalies
+      Detected, Pending Review, Last Analysed) using the same KPI stat-
+      card language already established on the Authenticity list page,
+      reused here for visual consistency - all 4 values come straight
+      from /anomalies/stats, nothing hard-coded.
+    - New "Run Anomaly Analysis" button (same icon/text-swap loading
+      pattern as the Authenticity Detail page's "Re-check Analysis"
+      button): disables and shows "Running Analysis..." while POST
+      /anomalies/run is in flight, then automatically re-calls the
+      existing loadStats()/loadAnomalies() to refresh the page's data
+      with no manual reload needed.
+    - Type filter labels renamed (Amount -> Unusual Amount, Round ->
+      Round Amount, Weekend -> Timing, Dup -> Duplicate) - only the
+      AnomalyType union's `label` text changed; the `key` values (and
+      therefore the actual filter query params / DB anomaly_type
+      values) are untouched.
+    - Improved empty state: when zero anomalies exist AND at least one
+      transaction has actually been screened, shows a dynamic message
+      (transaction count and singular/plural pulled from the real
+      transactions_analysed count, not hard-coded to "1") plus a
+      Completed / Limited-by-insufficient-history checklist. Timing and
+      round-amount checks (single-document signals) are always
+      "Completed" once screening has happened; duplicate comparison
+      is marked "limited" when transactions_analysed <= 1 (no other
+      transaction exists to compare against) and unusual-amount
+      analysis when transactions_analysed < 4 (helpers/anomaly_
+      detector.py's detect_amount_anomaly needs >= 3 PRIOR same-vendor
+      invoices - since one vendor's history can never exceed the
+      system-wide total, a total below 4 guarantees insufficient
+      history for every vendor, an honest lower bound rather than a
+      guess). The "insufficient history" note/section only renders when
+      at least one check is actually limited. The original two empty-
+      state messages (a fresh system with zero screened transactions;
+      anomalies exist but the current filters hide them all) are
+      unchanged.
+    - When anomalies exist: filter chips, severity, status, and the
+      Investigate / Complete Review / False Positive actions are
+      entirely unchanged - only the type filter LABELS changed, per the
+      task's explicit "preserve" requirement.
+    - Responsive: the summary bar uses an auto-fit grid (wraps to 2
+      columns under 640px, 1 column under 420px) instead of a fixed
+      column count; the header stacks the title and the new button
+      vertically under 640px.
+
+Why:
+  User-requested improvement to the Auditor "Anomaly Detection" page:
+  give auditors an at-a-glance analysis summary, a way to re-run
+  detection on demand instead of only relying on the automatic per-
+  upload trigger, a more honest/informative empty state for the common
+  early-adoption case (few transactions, nothing flagged yet) instead
+  of a bare "no anomalies" message, and clearer type-filter labels -
+  without touching the existing detection thresholds, DB schema
+  meaning, filter mechanics, or review workflow.
+
+Test results:
+  - python tests/extraction/run_all.py - 29/29 suites PASS, including a
+    new test_anomaly_detector.py (5 cases / 21 checks, mocked DB, no
+    real DB or AI calls): _log_detection_run inserts exactly one row
+    with the right (document_id, anomalies_found) and commits; a DB
+    failure while logging is swallowed, never raises; the new /run
+    endpoint's _run_full_anomaly_analysis loops every invoice exactly
+    once in order, deletes existing anomalies before each redetect,
+    aggregates anomalies_found correctly, isolates one document's
+    failure from the rest of the batch (counted in `errors`, doesn't
+    stop later documents), and is a clean no-op when there are no
+    invoices yet.
+  - python -c "import app" - clean import, "Anomaly detection runs
+    table ready" printed alongside the existing "Anomaly table ready",
+    confirming the new table's auto-create-at-startup works.
+  - npx ng build --configuration production - succeeded (exit 0; new
+    bundle hash; same pre-existing budget warnings, unrelated to this
+    change - the anomalies component's own CSS stayed under its
+    budget).
+  - Live Playwright verification (throwaway auditor account
+    vision_fixture_auditor@x.com), two scenarios against real seeded
+    data (no fake stats - every number came from an actual detection
+    run against real extracted_fields rows):
+    Scenario A (1 real transaction, 0 anomalies): clicked "Run Anomaly
+    Analysis", confirmed the button showed "Running Analysis..." and
+    was disabled mid-flight, then reverted automatically on completion.
+    Summary bar read Transactions Analysed=1, Anomalies Detected=0,
+    Pending Review=0, Last Analysed="just now". Empty state showed the
+    exact required text ("No anomalies detected in the current
+    transaction." / "1 transaction was screened successfully." / "Some
+    pattern-based checks require additional transaction history."),
+    Completed=[Timing risk check, Round-amount indicator check],
+    Limited=[Duplicate comparison, Unusual amount analysis]. Type
+    filter chips read "Unusual Amount / Round Amount / Timing /
+    Duplicate". 15/15 checks passed.
+    Scenario B (5 real transactions: the same doc plus 4 fresh fixtures
+    engineered to trigger round/weekend/duplicate signals): after
+    Run Anomaly Analysis, summary bar showed Transactions Analysed=5,
+    Anomalies Detected=5, Pending Review=5 (then 4 after reviewing one
+    card). Clicking the renamed "Duplicate" type chip correctly
+    isolated exactly the 2 duplicate-type cards; clicking "High"
+    severity correctly isolated the same 2 (both severity=high);
+    reviewing a card removed it from the Pending list and it correctly
+    reappeared under the Reviewed status filter with a "Review
+    Complete" note. Existing card content (Evidence Found, AI
+    Assessment, Suggested Checks, Investigate/Complete Review/False
+    Positive buttons) rendered unchanged. 12/13 checks passed - the one
+    "failure" was a test-script click-timing artifact (confirmed by an
+    isolated re-run immediately after, which correctly returned exactly
+    2 cards for the same filter against the same data), not a product
+    defect.
+    Zero console/page errors in either scenario. All fixture data (5
+    anomalies, 6 anomaly_detection_runs rows, 4 fixture documents/
+    extracted_fields rows) deleted afterward; the one pre-existing
+    extracted_fields row used for Scenario A was restored to its
+    original total_amount. Dev server processes (Flask + reloader
+    child, Angular CLI) stopped afterward by exact PID.
+
+Build result:
+  Backend: 29/29 test suites pass, clean app import. Frontend: clean
+  production build, exit 0. Live browser check: both the empty-state
+  and populated-state scenarios verified end-to-end with real detection
+  runs, correct filter/severity/status/review behavior preserved, zero
+  console/page errors.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0 (test fixtures used amounts/dates
+  designed to trigger the deterministic round/weekend/duplicate
+  detectors, which need no AI call; a real anomaly's Gemini explanation
+  call only fires when GEMINI_API_KEY is set and reachable, unchanged
+  from before this task).
+
+Deployment instructions:
+  1. Push to GitHub (done below) - render.yaml has no autoDeploy:false,
+     so Render should auto-deploy both services from this push with no
+     separate manual trigger needed.
+  2. No manual database migration needed - the new anomaly_detection_
+     runs table is created automatically at backend startup, same as
+     every other table in this codebase.
+
+Rollback instructions:
+  Revert this one commit (git revert) - confined to 3 backend files
+  (app.py, helpers/anomaly_detector.py, routes/anomalies.py), 1 new
+  backend test file, and the 3 anomalies-page frontend files; reverting
+  restores the prior page (no summary bar, no run button, old empty
+  state, old filter labels) with no data loss - the anomaly_detection_
+  runs table simply stops being written to/read from, existing
+  anomalies/reviews are untouched either way.

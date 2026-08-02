@@ -18,9 +18,17 @@ type Status = 'pending' | 'reviewed' | 'dismissed';
 export class AuditorAnomaliesComponent implements OnInit {
 
   anomalies: any[] = [];
-  stats: any = { total: 0, by_severity: { high: 0, medium: 0, low: 0 }, by_type: { amount: 0, round: 0, weekend: 0, duplicate: 0 } };
+  stats: any = {
+    total: 0,
+    by_severity: { high: 0, medium: 0, low: 0 },
+    by_type: { amount: 0, round: 0, weekend: 0, duplicate: 0 },
+    pending: 0,
+    transactions_analysed: 0,
+    last_analysed: null,
+  };
 
   isLoading: boolean = false;
+  isRunningAnalysis: boolean = false;
   errorMessage: string = '';
   actionInFlight: number | null = null;
 
@@ -35,12 +43,16 @@ export class AuditorAnomaliesComponent implements OnInit {
     { key: 'low', label: 'Low', icon: 'ph-circle', color: 'var(--warning)' },
   ];
 
+  // Labels only — the underlying AnomalyType keys stay 'amount'/'round'/
+  // 'weekend'/'duplicate' to match the DB anomaly_type values and the
+  // backend's VALID_TYPES exactly; only the auditor-facing chip text
+  // changes.
   typeFilters: { key: AnomalyType; label: string; icon: string; color: string }[] = [
     { key: 'all', label: 'All', icon: '', color: '' },
-    { key: 'amount', label: 'Amount', icon: 'ph-currency-circle-dollar', color: '' },
-    { key: 'round', label: 'Round', icon: 'ph-target', color: '' },
-    { key: 'weekend', label: 'Weekend', icon: 'ph-calendar-blank', color: '' },
-    { key: 'duplicate', label: 'Dup', icon: 'ph-repeat', color: '' },
+    { key: 'amount', label: 'Unusual Amount', icon: 'ph-currency-circle-dollar', color: '' },
+    { key: 'round', label: 'Round Amount', icon: 'ph-target', color: '' },
+    { key: 'weekend', label: 'Timing', icon: 'ph-calendar-blank', color: '' },
+    { key: 'duplicate', label: 'Duplicate', icon: 'ph-repeat', color: '' },
   ];
 
   statusFilters: { key: Status; label: string }[] = [
@@ -90,6 +102,30 @@ export class AuditorAnomaliesComponent implements OnInit {
       error: (err) => {
         this.isLoading = false;
         this.errorMessage = err.error?.error || 'Failed to load anomalies.';
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  // Re-runs the EXISTING per-document detection (helpers/anomaly_
+  // detector.py's run_anomaly_detection, untouched) across every
+  // invoice — see routes/anomalies.py's POST /anomalies/run. Refreshes
+  // the page's own data automatically once the run completes, via the
+  // same loadStats()/loadAnomalies() calls ngOnInit already uses.
+  runAnalysis() {
+    if (this.isRunningAnalysis) return;
+    this.isRunningAnalysis = true;
+    this.errorMessage = '';
+    this.http.post<any>(`${this.apiUrl}/anomalies/run`, {}, { headers: this.getHeaders() }).subscribe({
+      next: () => {
+        this.isRunningAnalysis = false;
+        this.loadStats();
+        this.loadAnomalies();
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.isRunningAnalysis = false;
+        this.errorMessage = err.error?.error || 'Failed to run anomaly analysis.';
         this.cdr.detectChanges();
       }
     });
@@ -290,5 +326,59 @@ export class AuditorAnomaliesComponent implements OnInit {
     if (diffDay === 1) return '1 day ago';
     if (diffDay < 30) return `${diffDay} days ago`;
     return new Date(dateStr).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' });
+  }
+
+  // "Last Analysed" summary card — reuses the existing relativeTime()
+  // formatting, with a clearer fallback than the bare '-' that method
+  // returns elsewhere (a fresh system with no run yet has genuinely
+  // never been analysed, which "Never" states plainly).
+  get lastAnalysedLabel(): string {
+    return this.stats.last_analysed ? this.relativeTime(this.stats.last_analysed) : 'Never';
+  }
+
+  get transactionsAnalysed(): number {
+    return this.stats.transactions_analysed || 0;
+  }
+
+  // Timing and round-amount checks look at ONE document in isolation
+  // (see detect_weekend_transaction/detect_round_amount) — they run,
+  // and can flag something, the moment a single transaction exists.
+  get emptyStateChecksCompleted(): string[] {
+    return ['Timing risk check', 'Round-amount indicator check'];
+  }
+
+  // Duplicate comparison needs at least one OTHER transaction to
+  // compare against; unusual-amount analysis needs at least 3 PRIOR
+  // same-vendor invoices (helpers/anomaly_detector.py's
+  // detect_amount_anomaly: `if len(history) < 3: return None`). A
+  // single vendor's history can never exceed the system-wide
+  // transaction count, so a total below 4 (this transaction + 3 more)
+  // guarantees no vendor could have 3 priors yet — an honest lower
+  // bound from real data, not a fabricated claim. Once totals grow
+  // past these thresholds, whether a given document's OWN vendor has
+  // enough history varies, so the section stops asserting either way.
+  get emptyStateChecksLimited(): string[] {
+    const n = this.transactionsAnalysed;
+    const limited: string[] = [];
+    if (n <= 1) limited.push('Duplicate comparison');
+    if (n < 4) limited.push('Unusual amount analysis');
+    return limited;
+  }
+
+  get emptyStateShowLimitedNote(): boolean {
+    return this.emptyStateChecksLimited.length > 0;
+  }
+
+  get emptyStateHeadline(): string {
+    return this.transactionsAnalysed === 1
+      ? 'No anomalies detected in the current transaction.'
+      : 'No anomalies detected in the current transactions.';
+  }
+
+  get emptyStateTransactionSummary(): string {
+    const n = this.transactionsAnalysed;
+    const noun = n === 1 ? 'transaction' : 'transactions';
+    const verb = n === 1 ? 'was' : 'were';
+    return `${n} ${noun} ${verb} screened successfully.`;
   }
 }

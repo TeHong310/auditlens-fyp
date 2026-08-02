@@ -2,8 +2,51 @@
 
   <!-- Header -->
   <div class="header">
-    <h1 class="page-title"><i class="ph-duotone ph-robot"></i> Anomaly Detection</h1>
-    <p class="page-subtitle">AI-powered pattern analysis • {{ stats.total }} anomalies detected</p>
+    <div class="header-top">
+      <div class="header-titles">
+        <h1 class="page-title"><i class="ph-duotone ph-robot"></i> Anomaly Detection</h1>
+        <p class="page-subtitle">AI-powered pattern analysis • {{ stats.total }} anomalies detected</p>
+      </div>
+      <button class="btn-run-analysis" (click)="runAnalysis()" [disabled]="isRunningAnalysis">
+        <i class="ph-duotone" [ngClass]="isRunningAnalysis ? 'ph-hourglass-medium' : 'ph-arrow-clockwise'"></i>
+        {{ isRunningAnalysis ? 'Running Analysis…' : 'Run Anomaly Analysis' }}
+      </button>
+    </div>
+  </div>
+
+  <!-- Analysis Summary -->
+  <div class="stats-row">
+    <div class="stat-card" style="--card-color:var(--accent);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-list-checks" style="font-size:18px;"></i></div>
+      <div class="stat-info">
+        <p class="stat-label">Transactions Analysed</p>
+        <p class="stat-value" style="color:var(--accent)">{{ stats.transactions_analysed }}</p>
+      </div>
+    </div>
+
+    <div class="stat-card" style="--card-color:var(--danger);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-warning-circle" style="font-size:18px;"></i></div>
+      <div class="stat-info">
+        <p class="stat-label">Anomalies Detected</p>
+        <p class="stat-value" style="color:var(--danger)">{{ stats.total }}</p>
+      </div>
+    </div>
+
+    <div class="stat-card" style="--card-color:var(--warning);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-clock-countdown" style="font-size:18px;"></i></div>
+      <div class="stat-info">
+        <p class="stat-label">Pending Review</p>
+        <p class="stat-value" style="color:var(--warning)">{{ stats.pending }}</p>
+      </div>
+    </div>
+
+    <div class="stat-card" style="--card-color:var(--text-muted);">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-calendar-check" style="font-size:18px;"></i></div>
+      <div class="stat-info">
+        <p class="stat-label">Last Analysed</p>
+        <p class="stat-value stat-value-text">{{ lastAnalysedLabel }}</p>
+      </div>
+    </div>
   </div>
 
   <!-- Filters -->
@@ -46,11 +89,36 @@
   <!-- Empty state: no anomalies exist anywhere (stats.total is filter-
        independent) vs. anomalies exist but the current filter combo
        hides all of them — these need different messages so the auditor
-       isn't told "all normal" when anomalies actually exist. -->
-  <div class="empty-state" *ngIf="!isLoading && !errorMessage && anomalies.length === 0 && stats.total === 0">
+       isn't told "all normal" when anomalies actually exist. The
+       zero-anomaly case further splits on whether anything has actually
+       been screened yet, since a system with real (clean) screening
+       history has more to say than a brand-new, empty one. -->
+  <div class="empty-state" *ngIf="!isLoading && !errorMessage && anomalies.length === 0 && stats.total === 0 && transactionsAnalysed === 0">
     <p class="empty-icon"><i class="ph-duotone ph-confetti"></i></p>
     <p class="empty-text empty-text-success">No anomalies detected.</p>
     <p class="empty-subtext">No unusual transaction patterns were found.</p>
+  </div>
+
+  <div class="empty-state empty-state-detailed" *ngIf="!isLoading && !errorMessage && anomalies.length === 0 && stats.total === 0 && transactionsAnalysed > 0">
+    <p class="empty-icon"><i class="ph-duotone ph-confetti"></i></p>
+    <p class="empty-text empty-text-success">{{ emptyStateHeadline }}</p>
+    <p class="empty-subtext">{{ emptyStateTransactionSummary }}</p>
+    <p class="empty-subtext" *ngIf="emptyStateShowLimitedNote">Some pattern-based checks require additional transaction history.</p>
+
+    <div class="empty-checks-grid">
+      <div class="empty-checks-col">
+        <p class="empty-checks-heading empty-checks-heading-done"><i class="ph-duotone ph-check-circle"></i> Completed</p>
+        <div class="empty-check-line empty-check-done" *ngFor="let c of emptyStateChecksCompleted">
+          <i class="ph-duotone ph-check"></i> {{ c }}
+        </div>
+      </div>
+      <div class="empty-checks-col" *ngIf="emptyStateShowLimitedNote">
+        <p class="empty-checks-heading empty-checks-heading-limited"><i class="ph-duotone ph-hourglass-medium"></i> Limited by insufficient history</p>
+        <div class="empty-check-line empty-check-limited" *ngFor="let c of emptyStateChecksLimited">
+          <i class="ph-duotone ph-minus-circle"></i> {{ c }}
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="empty-state" *ngIf="!isLoading && !errorMessage && anomalies.length === 0 && stats.total > 0">

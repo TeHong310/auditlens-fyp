@@ -314,6 +314,28 @@ def get_gemini_explanation(anomaly_signals, vendor_context):
         return fallback
 
 
+def _log_detection_run(invoice_document_id, anomalies_found):
+    """Records that detection actually ran for this document, regardless
+    of whether it found anything. The `anomalies` table alone can't
+    answer "when was this last screened" for a clean invoice — a clean
+    result inserts no row there — which is what the Anomaly Detection
+    page's "Last Analysed" summary field needs. Never raises: a logging
+    failure must not break the detection pipeline that calls this (same
+    pipeline-safe philosophy as run_anomaly_detection itself)."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            '''INSERT INTO anomaly_detection_runs (invoice_document_id, anomalies_found)
+               VALUES (%s, %s)''',
+            (invoice_document_id, anomalies_found)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"DEBUG anomaly detection run-log error: {type(e).__name__}: {e}")
+
+
 def run_anomaly_detection(invoice_document_id):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -341,6 +363,7 @@ def run_anomaly_detection(invoice_document_id):
     ]
     found = [a for a in candidates if a]
     if not found:
+        _log_detection_run(invoice_document_id, 0)
         return []
 
     vendor_context = (
@@ -368,4 +391,5 @@ def run_anomaly_detection(invoice_document_id):
     finally:
         conn.close()
 
+    _log_detection_run(invoice_document_id, len(created_ids))
     return created_ids
