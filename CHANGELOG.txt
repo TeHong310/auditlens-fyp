@@ -16863,3 +16863,106 @@ Rollback instructions:
   inserted once routes/reviews.py's endpoint is gone, and the earlier
   4 action values remain valid. No data loss either way - every anomaly
   row and its full history is untouched by this change or its rollback.
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Backend (auditlens-backend/routes/anomalies.py):
+    - get_anomaly_stats() (GET /anomalies/stats) rewritten to explicitly
+      JOIN anomalies to documents on a.invoice_document_id = d.document_
+      id for every count (total, by_severity, by_type, by_status) -
+      anomalies has no document_id column of its own (the real FK is
+      invoice_document_id), and this JOIN also naturally excludes an
+      "orphan" anomaly row (invoice_document_id with no matching
+      document) from every total instead of it silently inflating one.
+    - transactions_analysed/last_analysed now come from anomaly_
+      detection_runs (COUNT(DISTINCT invoice_document_id) + MAX(run_at)
+      in one query) instead of a plain COUNT(*) FROM extracted_fields -
+      the more accurate source, since it reflects actual detection runs
+      rather than every extracted document regardless of whether
+      detection ever ran on it.
+    - That anomaly_detection_runs query is now isolated in its own try/
+      except with conn.rollback() on failure (clears the aborted-
+      transaction state Postgres leaves behind after a caught error, so
+      the connection stays usable afterward) - an empty table already
+      returns cleanly in plain SQL (COUNT 0, MAX NULL, no exception), but
+      a missing/broken table no longer 500s the whole endpoint; either
+      way it falls through to a fallback query: COUNT(DISTINCT invoice_
+      document_id) from anomalies JOINed to documents (same orphan-
+      exclusion join as above). last_analysed has no fallback source and
+      stays None ("Never") when the runs table is unusable - only that
+      table actually knows when detection last ran, so this stays honest
+      rather than fabricating a timestamp.
+  Frontend (auditlens-frontend/src/app/auditor/anomalies/):
+    - auditor-anomalies.component.ts: loadStats()'s error handler
+      previously did nothing, silently leaving the all-zero default
+      `stats` object on screen - indistinguishable from "genuinely zero
+      anomalies". Now sets a new statsErrorMessage ('Unable to load
+      anomaly statistics.' or the backend's own error text) instead.
+    - auditor-anomalies.component.html: the whole Analysis Summary
+      (.stats-row) is now hidden behind *ngIf="!statsErrorMessage", with
+      an .error-box (existing class, reused as-is) shown in its place on
+      failure - a failed stats call can no longer read as "0 anomalies /
+      all clear".
+  Tests (auditlens-backend/tests/extraction/test_anomaly_decision_
+  mapping.py):
+    - AnomalyStatsCursor's SQL matching updated for the new JOIN-based
+      queries, simulating the JOIN by filtering to anomalies whose
+      invoice_document_id has a matching entry in a new fake `documents`
+      dict (added to the stats_db() fixture).
+    - 3 new cases: anomaly_detection_runs empty -> 200 + fallback count;
+      the anomaly_detection_runs query itself raising -> 200 + fallback
+      (never a 500); an anomaly with no matching document -> excluded
+      from every count (total/by_status/by_type).
+
+Why:
+  User-reported: GET /anomalies/stats was returning HTTP 500 (root cause
+  not fully reproducible against this sandbox's local DB, which already
+  had the correct invoice_document_id column throughout - most likely a
+  production-only schema/data state), which made the frontend fall back
+  to its all-zero default stats object with no indication anything had
+  failed. Fixed by making every query explicitly correct against the
+  real schema (anomalies.invoice_document_id, documents.document_id -
+  never an assumed anomalies.document_id), resilient to a missing/empty/
+  broken anomaly_detection_runs table, and by making a genuine failure
+  visible on the frontend instead of silently indistinguishable from "0
+  anomalies found".
+
+Test results:
+  - python tests/extraction/run_all.py - 30/30 suites PASS.
+  - npx ng build --configuration production - succeeded (exit 0; same
+    2 pre-existing per-component CSS budget warnings as prior entries,
+    unrelated to this change).
+  - Live check against the real local Postgres DB and a real running
+    Flask server (auditor login, real JWT, real HTTP round trip): GET /
+    anomalies/stats on the existing INV-NBI-2026-0017 case (one real,
+    already-reviewed Round Amount anomaly) returned 200 with total: 1,
+    by_type.round: 1, pending: 0, transactions_analysed: 1 - matching
+    the task's required verification exactly. Dev server stopped by
+    exact PID afterward.
+
+Build result:
+  Backend: 30/30 test suites pass. Frontend: clean production build,
+  exit 0. Live check: /anomalies/stats returns 200 with correct counts
+  against the real local database.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub - Render should auto-deploy both services.
+  2. Backend redeploy required (routes/anomalies.py changed). No new
+     database migration, environment variable, or dependency needed -
+     this is a pure query-correctness fix against the existing schema.
+  3. After deploy, confirm GET /anomalies/stats returns 200 (not 500) in
+     the Render logs/browser network tab - if production's actual error
+     turns out to have a different root cause than reproduced here, the
+     new try/except around anomaly_detection_runs at minimum guarantees
+     the endpoint degrades to a fallback count instead of 500ing outright.
+
+Rollback instructions:
+  Revert this one commit - confined to routes/anomalies.py and the 2
+  anomalies-page frontend files. No data or schema implications either
+  way; reverting restores the prior (pre-JOIN) query shape and the
+  silent-zeros frontend behavior on a stats failure.

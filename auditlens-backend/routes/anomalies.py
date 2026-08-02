@@ -221,13 +221,31 @@ def get_anomaly_stats():
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        cursor.execute('SELECT COUNT(*) AS cnt FROM anomalies')
+        # anomalies has no document_id column of its own — the real FK is
+        # anomalies.invoice_document_id -> documents.document_id. Every
+        # count below is computed from anomalies INNER JOINed to
+        # documents on that column, which both uses the correct names
+        # and naturally excludes an "orphan" anomaly row (one whose
+        # invoice_document_id no longer matches a real document) from
+        # every total, instead of it silently inflating a count.
+        cursor.execute(
+            '''SELECT COUNT(*) AS cnt FROM anomalies a
+               JOIN documents d ON a.invoice_document_id = d.document_id'''
+        )
         total = cursor.fetchone()['cnt']
 
-        cursor.execute('SELECT severity, COUNT(*) AS cnt FROM anomalies GROUP BY severity')
+        cursor.execute(
+            '''SELECT a.severity, COUNT(*) AS cnt FROM anomalies a
+               JOIN documents d ON a.invoice_document_id = d.document_id
+               GROUP BY a.severity'''
+        )
         by_severity = {row['severity']: row['cnt'] for row in cursor.fetchall()}
 
-        cursor.execute('SELECT anomaly_type, COUNT(*) AS cnt FROM anomalies GROUP BY anomaly_type')
+        cursor.execute(
+            '''SELECT a.anomaly_type, COUNT(*) AS cnt FROM anomalies a
+               JOIN documents d ON a.invoice_document_id = d.document_id
+               GROUP BY a.anomaly_type'''
+        )
         by_type = {row['anomaly_type']: row['cnt'] for row in cursor.fetchall()}
 
         # by_status covers all 3 real status values regardless of the
@@ -236,23 +254,52 @@ def get_anomaly_stats():
         # type chip is active) — also what the Anomaly Detection page's
         # "No pending anomalies, N reviewed anomaly available under the
         # Reviewed filter" empty-state message is built from.
-        cursor.execute('SELECT status, COUNT(*) AS cnt FROM anomalies GROUP BY status')
+        cursor.execute(
+            '''SELECT a.status, COUNT(*) AS cnt FROM anomalies a
+               JOIN documents d ON a.invoice_document_id = d.document_id
+               GROUP BY a.status'''
+        )
         by_status = {row['status']: row['cnt'] for row in cursor.fetchall()}
         pending = by_status.get('pending', 0)
 
-        # Every invoice with extracted fields has gone through detection
-        # (run_anomaly_detection is auto-triggered right after extraction
-        # for every invoice, unconditionally) — the real, existing count
-        # of screened transactions, not a new/separate tally.
-        cursor.execute('SELECT COUNT(*) AS cnt FROM extracted_fields')
-        transactions_analysed = cursor.fetchone()['cnt']
-
         # anomaly_detection_runs logs one row per actual detection run,
-        # including clean results that leave no `anomalies` row — see
-        # helpers/anomaly_detector.py::_log_detection_run. NULL (never
-        # analysed) until the first run after this table was added.
-        cursor.execute('SELECT MAX(run_at) AS last_run FROM anomaly_detection_runs')
-        last_run = cursor.fetchone()['last_run']
+        # including clean results that leave no `anomalies` row, so it's
+        # the authoritative source for both "how many transactions have
+        # been screened" and "when was detection last run" — see
+        # helpers/anomaly_detector.py::_log_detection_run. Isolated in
+        # its own try/except: an empty table is handled fine by plain SQL
+        # (COUNT is 0, MAX is NULL, no exception either way), but if the
+        # table is missing/broken for any reason this must degrade to the
+        # fallback below rather than 500 the whole endpoint. rollback()
+        # clears the aborted-transaction state Postgres leaves behind
+        # after a caught error, so the connection stays usable for the
+        # fallback query that follows.
+        transactions_analysed = 0
+        last_run = None
+        try:
+            cursor.execute(
+                'SELECT COUNT(DISTINCT invoice_document_id) AS cnt, MAX(run_at) AS last_run '
+                'FROM anomaly_detection_runs'
+            )
+            row = cursor.fetchone()
+            transactions_analysed = row['cnt'] or 0
+            last_run = row['last_run']
+        except Exception as e:
+            conn.rollback()
+            print(f'WARNING /anomalies/stats: anomaly_detection_runs unavailable, falling back: {type(e).__name__}: {e}')
+
+        # Fallback (task: "distinct invoice_document_id as fallback") —
+        # anomaly_detection_runs came back empty/unusable, but real,
+        # valid anomaly records may still exist (e.g. an older DB that
+        # predates this table). last_analysed has no fallback source and
+        # stays None ("Never") in that case, which is honest — only
+        # anomaly_detection_runs actually knows when detection last ran.
+        if transactions_analysed == 0:
+            cursor.execute(
+                '''SELECT COUNT(DISTINCT a.invoice_document_id) AS cnt FROM anomalies a
+                   JOIN documents d ON a.invoice_document_id = d.document_id'''
+            )
+            transactions_analysed = cursor.fetchone()['cnt']
 
         conn.close()
 

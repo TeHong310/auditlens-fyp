@@ -31,6 +31,7 @@ export class AuditorAnomaliesComponent implements OnInit {
   isLoading: boolean = false;
   isRunningAnalysis: boolean = false;
   errorMessage: string = '';
+  statsErrorMessage: string = '';
 
   activeSeverity: Severity = 'all';
   activeType: AnomalyType = 'all';
@@ -80,12 +81,20 @@ export class AuditorAnomaliesComponent implements OnInit {
   }
 
   loadStats() {
+    this.statsErrorMessage = '';
     this.http.get<any>(`${this.apiUrl}/anomalies/stats`, { headers: this.getHeaders() }).subscribe({
       next: (res) => {
         this.stats = res;
         this.cdr.detectChanges();
       },
-      error: () => { /* header/chip counts are non-critical; list load surfaces real errors */ }
+      // A failed stats call must never be read as "zero anomalies" — the
+      // summary cards are hidden and this message shown instead (see
+      // the *ngIf on .stats-row in the template), rather than silently
+      // keeping the all-zero default `stats` object on screen.
+      error: (err) => {
+        this.statsErrorMessage = err.error?.error || 'Unable to load anomaly statistics.';
+        this.cdr.detectChanges();
+      }
     });
   }
 

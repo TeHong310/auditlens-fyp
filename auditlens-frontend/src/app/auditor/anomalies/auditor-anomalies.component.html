@@ -14,8 +14,12 @@
     </div>
   </div>
 
-  <!-- Analysis Summary -->
-  <div class="stats-row">
+  <!-- Analysis Summary — hidden on a failed stats call in favor of an
+       explicit error message, so a backend failure never reads as "0
+       anomalies / all clear" (a fake, misleading zero). -->
+  <div class="error-box" *ngIf="statsErrorMessage"><i class="ph-duotone ph-x-circle"></i> {{ statsErrorMessage }}</div>
+
+  <div class="stats-row" *ngIf="!statsErrorMessage">
     <div class="stat-card" style="--card-color:var(--accent);">
       <div class="stat-icon-wrap"><i class="ph-duotone ph-list-checks" style="font-size:18px;"></i></div>
       <div class="stat-info">

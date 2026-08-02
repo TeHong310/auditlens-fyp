@@ -101,27 +101,47 @@ class ReviewsCursor:
 
 
 class AnomalyStatsCursor:
+    """Simulates the real JOIN anomalies a JOIN documents d ON
+    a.invoice_document_id = d.document_id — _valid_anomalies() below is
+    the fake-DB equivalent of that join, so an orphan anomaly (an
+    invoice_document_id with no matching row in db['documents']) is
+    excluded from every count exactly like the real INNER JOIN would."""
     def __init__(self, db):
         self.db = db
         self._last = None
         self._rows = None
 
+    def _valid_anomalies(self):
+        doc_ids = set(self.db.get('documents', {}).keys())
+        return [a for a in self.db['anomalies'] if a['invoice_document_id'] in doc_ids]
+
     def execute(self, sql, params=None):
         s = ' '.join(sql.split())
 
-        if s == 'SELECT COUNT(*) AS cnt FROM anomalies':
-            self._last = {'cnt': len(self.db['anomalies'])}
-        elif s == 'SELECT severity, COUNT(*) AS cnt FROM anomalies GROUP BY severity':
-            self._rows = _group_counts(self.db['anomalies'], 'severity')
-        elif s == 'SELECT anomaly_type, COUNT(*) AS cnt FROM anomalies GROUP BY anomaly_type':
-            self._rows = _group_counts(self.db['anomalies'], 'anomaly_type')
-        elif s == 'SELECT status, COUNT(*) AS cnt FROM anomalies GROUP BY status':
-            self._rows = _group_counts(self.db['anomalies'], 'status')
-        elif s == 'SELECT COUNT(*) AS cnt FROM extracted_fields':
-            self._last = {'cnt': len(self.db['extracted_fields'])}
-        elif s == 'SELECT MAX(run_at) AS last_run FROM anomaly_detection_runs':
+        if s == 'SELECT COUNT(*) AS cnt FROM anomalies a JOIN documents d ON a.invoice_document_id = d.document_id':
+            self._last = {'cnt': len(self._valid_anomalies())}
+        elif s == ('SELECT a.severity, COUNT(*) AS cnt FROM anomalies a '
+                    'JOIN documents d ON a.invoice_document_id = d.document_id GROUP BY a.severity'):
+            self._rows = _group_counts(self._valid_anomalies(), 'severity')
+        elif s == ('SELECT a.anomaly_type, COUNT(*) AS cnt FROM anomalies a '
+                    'JOIN documents d ON a.invoice_document_id = d.document_id GROUP BY a.anomaly_type'):
+            self._rows = _group_counts(self._valid_anomalies(), 'anomaly_type')
+        elif s == ('SELECT a.status, COUNT(*) AS cnt FROM anomalies a '
+                    'JOIN documents d ON a.invoice_document_id = d.document_id GROUP BY a.status'):
+            self._rows = _group_counts(self._valid_anomalies(), 'status')
+        elif s == ('SELECT COUNT(DISTINCT invoice_document_id) AS cnt, MAX(run_at) AS last_run '
+                    'FROM anomaly_detection_runs'):
+            if self.db.get('anomaly_detection_runs_raises'):
+                raise RuntimeError('simulated anomaly_detection_runs failure (e.g. missing/broken table)')
             runs = self.db['anomaly_detection_runs']
-            self._last = {'last_run': max(r['run_at'] for r in runs) if runs else None}
+            doc_ids = {r['invoice_document_id'] for r in runs}
+            self._last = {
+                'cnt': len(doc_ids),
+                'last_run': max((r['run_at'] for r in runs), default=None),
+            }
+        elif s == ('SELECT COUNT(DISTINCT a.invoice_document_id) AS cnt FROM anomalies a '
+                    'JOIN documents d ON a.invoice_document_id = d.document_id'):
+            self._last = {'cnt': len({a['invoice_document_id'] for a in self._valid_anomalies()})}
         else:
             raise AssertionError(f'AnomalyStatsCursor: unhandled SQL: {s}')
 
@@ -150,6 +170,9 @@ class FakeConn:
         return AnomalyStatsCursor(self.db) if cursor_factory is not None else ReviewsCursor(self.db)
 
     def commit(self):
+        pass
+
+    def rollback(self):
         pass
 
     def close(self):
@@ -189,12 +212,13 @@ def stats_db():
     dismissed. Required result: Anomalies Detected: 1, Round Amount: 1,
     Pending Review: 0, Reviewed list: 1 record."""
     return {
+        'documents': {3753: {'document_id': 3753, 'status': 'under_review'}},
         'anomalies': [
             {'anomaly_id': 42, 'invoice_document_id': 3753, 'status': 'reviewed',
              'severity': 'medium', 'anomaly_type': 'round', 'reviewed_by': 9, 'reviewed_at': 'prior'},
         ],
         'extracted_fields': [{'document_id': 3753}],
-        'anomaly_detection_runs': [{'run_at': datetime(2026, 2, 11, 10, 0, 0)}],
+        'anomaly_detection_runs': [{'invoice_document_id': 3753, 'run_at': datetime(2026, 2, 11, 10, 0, 0)}],
     }
 
 
@@ -239,6 +263,53 @@ def run_case_stats_pending_filter_empty_state_data_is_available():
     check('by_status.pending is 0 (Pending filter would show none)', body['by_status']['pending'] == 0, body)
     check('by_status.reviewed is 1 (the reviewed anomaly the empty-state message should mention)',
           body['by_status']['reviewed'] == 1, body)
+
+
+def run_case_stats_returns_200_when_anomaly_detection_runs_is_empty():
+    print('Case: anomaly_detection_runs has zero rows -> still 200, transactions_analysed falls back to distinct invoice_document_id from anomalies')
+    db = stats_db()
+    db['anomaly_detection_runs'] = []
+    app, auditor_token, _ = make_app(db)
+    client = app.test_client()
+
+    resp = client.get('/anomalies/stats', headers={'Authorization': f'Bearer {auditor_token}'})
+    check('200 OK even with an empty anomaly_detection_runs table', resp.status_code == 200, resp.get_json())
+    body = resp.get_json()
+    check('total is still 1 (unaffected by the empty runs table)', body['total'] == 1, body)
+    check('transactions_analysed falls back to distinct invoice_document_id from anomalies (1)',
+          body['transactions_analysed'] == 1, body)
+    check('last_analysed stays None/"Never" — no fallback source for that field', body['last_analysed'] is None, body)
+
+
+def run_case_stats_degrades_gracefully_when_anomaly_detection_runs_query_fails():
+    print('Case: anomaly_detection_runs query itself raises (e.g. missing/broken table) -> still 200, falls back, never a 500')
+    db = stats_db()
+    db['anomaly_detection_runs_raises'] = True
+    app, auditor_token, _ = make_app(db)
+    client = app.test_client()
+
+    resp = client.get('/anomalies/stats', headers={'Authorization': f'Bearer {auditor_token}'})
+    check('200 OK even when the anomaly_detection_runs query raises', resp.status_code == 200, resp.get_json())
+    body = resp.get_json()
+    check('total is still correct (the failure is isolated to the runs query)', body['total'] == 1, body)
+    check('transactions_analysed falls back to distinct invoice_document_id from anomalies (1)',
+          body['transactions_analysed'] == 1, body)
+
+
+def run_case_stats_excludes_orphan_anomaly_records():
+    print('Case: an anomaly whose invoice_document_id has no matching document row is excluded from every count')
+    db = stats_db()
+    db['anomalies'].append({
+        'anomaly_id': 99, 'invoice_document_id': 99999, 'status': 'pending',
+        'severity': 'high', 'anomaly_type': 'duplicate', 'reviewed_by': None, 'reviewed_at': None,
+    })
+    app, auditor_token, _ = make_app(db)
+    client = app.test_client()
+
+    body = client.get('/anomalies/stats', headers={'Authorization': f'Bearer {auditor_token}'}).get_json()
+    check('total still 1 — the orphan anomaly (no matching document) is excluded', body['total'] == 1, body)
+    check('by_status.pending still 0 — the orphan\'s pending status is not counted', body['by_status']['pending'] == 0, body)
+    check('by_type.duplicate still 0 — the orphan\'s type is not counted', body['by_type']['duplicate'] == 0, body)
 
 
 # ── Section E: final decision -> anomaly status mapping ──────────────
@@ -342,6 +413,9 @@ if __name__ == '__main__':
     run_case_stats_matches_required_numbers_for_the_reviewed_round_amount_case()
     run_case_stats_identical_regardless_of_active_list_filter_query_params()
     run_case_stats_pending_filter_empty_state_data_is_available()
+    run_case_stats_returns_200_when_anomaly_detection_runs_is_empty()
+    run_case_stats_degrades_gracefully_when_anomaly_detection_runs_query_fails()
+    run_case_stats_excludes_orphan_anomaly_records()
     run_case_approve_resolves_pending_anomalies_without_touching_reviewed_or_dismissed()
     run_case_send_back_leaves_every_anomaly_status_untouched()
     run_case_need_review_keeps_document_and_anomalies_untouched_but_logs_the_flag()
