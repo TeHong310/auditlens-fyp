@@ -18281,3 +18281,105 @@ Rollback instructions:
   its NEXT update, though SELECTs would still work fine - if a rollback
   is needed after this has been used in production, correct any
   'withdrawn_duplicate' rows' status first).
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Backend (auditlens-backend/):
+    - app.py: new _ensure_document_hash_columns() (same auto-migration
+      pattern as every other _ensure_* function) adds a
+      sha256_baseline VARCHAR(64) column to documents/purchase_orders/
+      goods_receipts. Matching migrations/2026-08-03_add_sha256_
+      baseline.sql kept for local dev / documentation parity
+      (gitignored, like every other *.sql in migrations/ - the auto-
+      migration in app.py is what actually runs on Render).
+    - routes/documents.py: the 3 upload routes (upload_document,
+      upload-po, upload-gr) now persist the SHA-256 hash each of them
+      was ALREADY computing (for AI-cache keying) as this new
+      sha256_baseline column - no new hashing added, just no longer
+      thrown away. New _compute_document_integrity(cursor, comparison)
+      recomputes each present document's hash from its stored
+      file_bytes and compares against that baseline: matches ->
+      'verified', mismatch -> 'warning', no baseline or bytes
+      unavailable -> 'not_recorded' (never a false 'verified'). Two new
+      read-only GET routes (auditor/admin only, same role-gate as the
+      comparison endpoint): /documents/<id>/integrity (used by the new
+      Record Detail card) and /documents/<id>/evidence-passport (the
+      full aggregation for the new page below - built entirely from
+      existing helpers: _build_case_context, build_comparison,
+      get_transaction_context_for_document, the same document_review_
+      steps/send_back_cycles queries the Timeline/Send-Back-History
+      endpoints already use - no matching/anomaly/authenticity/review-
+      step logic duplicated or changed).
+  Frontend (auditlens-frontend/):
+    - New "Audit Evidence Passport" card on Audit Review (Record
+      Detail), directly below the Document Workflow Timeline card (NOT
+      inside it - no timeline dot, no lock, no Mark as Reviewed, no
+      effect on canApprove/allMandatoryStepsReviewed gating). Shows
+      Status (Draft/Finalised/Correction Required/Further Review,
+      mapped from the SAME latestReviewAction caseFinalDecision already
+      reads) and Document Integrity (Verified/Warning/Not Yet Recorded,
+      from the new /integrity endpoint), with [View Evidence Passport]
+      and [Export PDF] buttons.
+    - New page at /auditor/evidence-passport/:document_id
+      (AuditorEvidencePassportComponent, same standalone-component/
+      Router-ActivatedRoute-HttpClient-getHeaders() shape as
+      auditor-matching-details) - one read-only summary of a single
+      transaction: transaction summary, invoice/PO/GR info, document
+      integrity + SHA-256 status, OCR confidence, three-way matching
+      result, exception findings, authenticity findings, anomaly
+      findings, auditor review steps (reviewer/time), correction/
+      resubmission history, final decision/remark/auditor/time, audit
+      activity timeline. "Back to Audit Review" top-right.
+    - Export PDF: this repo had no existing PDF-generation pattern (only
+      a disabled "Coming soon" button on the Report page, no jsPDF/
+      reportlab/etc. anywhere) - confirmed with the user before
+      building anything. Implemented as browser print-to-PDF instead:
+      an Export PDF button (both on the card and on the Passport page
+      itself) calls window.print(), and the page has a @media print
+      stylesheet that hides nav/buttons and paginates the summary
+      sections cleanly. Reaching the page via the card's Export PDF
+      button (?export=1) auto-triggers window.print() once the data
+      has loaded. Zero new dependencies.
+    - app.routes.ts: one new child route, same place as the existing
+      authenticity/:documentId path-param page in this layout.
+
+Why:
+  Auditors currently have to visit several separate pages (Record
+  Detail, Matching Details, Authenticity Detail, Anomaly Detail, review
+  history) to piece together one transaction's full audit trail. The
+  Evidence Passport gives them one read-only, exportable summary of
+  everything already known about a transaction, plus a genuinely new
+  piece of assurance - document integrity - that didn't exist before:
+  proof (or an honest "not yet recorded") that a document's bytes still
+  match what was uploaded, without ever claiming a false "Verified".
+
+Verified:
+  python tests/extraction/test_document_hash_integrity.py (new test,
+  real local Postgres, all cases pass): migration adds sha256_baseline
+  to all 3 tables and is idempotent (checked without ever DROPping the
+  column - unlike the reference migration test this one didn't want to
+  destructively wipe real baselines already on shared business tables
+  in this dev DB); a document whose recomputed hash matches its
+  baseline reads 'verified'; a tampered document reads 'warning', never
+  'verified'; a document with no recorded baseline reads 'not_recorded',
+  never a false 'verified'. python -c "import app" - clean import, new
+  migration and both new routes register without error. npx ng build
+  --configuration production - clean compile, only the same pre-
+  existing bundle-budget warnings as before (record-detail.css grew by
+  the new card's styles, already over budget beforehand). Did not run
+  the full backend suite or Playwright, per this task's own scope.
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy both the backend
+     (Docker web service) and the frontend static site.
+  2. Backend redeploy required (app.py, routes/documents.py changed) -
+     on first boot after deploy, check the Render logs for "Document
+     hash baseline columns ready" to confirm the migration applied.
+  3. No new environment variables, no new dependencies. Existing
+     documents/purchase_orders/goods_receipts rows keep
+     sha256_baseline = NULL (Document Integrity reads "Not Yet
+     Recorded" for them, by design - never backfilled, since a baseline
+     recorded after the fact wouldn't prove anything) until each is
+     next re-uploaded.

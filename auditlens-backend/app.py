@@ -286,6 +286,30 @@ def _ensure_file_bytes_columns():
         print(f'WARNING: could not add file_bytes columns: {type(e).__name__}: {e}')
 
 
+def _ensure_document_hash_columns():
+    """Audit Evidence Passport — document integrity. Adds sha256_baseline
+    (the SHA-256 hex digest captured at upload time) to documents/
+    purchase_orders/goods_receipts so a later Passport view can recompute
+    the hash from the stored file_bytes and compare against this baseline.
+    Same auto-create-on-startup pattern as the other _ensure_ functions
+    above (no migration runner in this repo). Existing rows keep this
+    NULL — never backfilled, since a baseline recorded after the fact
+    wouldn't actually prove anything."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        for table in ('documents', 'purchase_orders', 'goods_receipts'):
+            cursor.execute(f'''
+                ALTER TABLE {table}
+                  ADD COLUMN IF NOT EXISTS sha256_baseline VARCHAR(64)
+            ''')
+        conn.commit()
+        conn.close()
+        print('Document hash baseline columns ready')
+    except Exception as e:
+        print(f'WARNING: could not add sha256_baseline columns: {type(e).__name__}: {e}')
+
+
 def _ensure_3way_comparison_columns():
     """3-way audit Field Comparison table redesign: PO Ref, Item/
     Description, Quantity are regex-extracted (no Gemini call) and
@@ -961,6 +985,7 @@ _ensure_authenticity_v2_columns()
 _ensure_authenticity_v3_columns()
 _ensure_authenticity_evidence_corrections_table()
 _ensure_file_bytes_columns()
+_ensure_document_hash_columns()
 _ensure_3way_comparison_columns()
 _ensure_invoice_currency_column()
 _ensure_document_line_items_table()

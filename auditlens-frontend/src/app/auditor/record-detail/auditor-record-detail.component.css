@@ -552,6 +552,50 @@
   margin-top: 12px;
 }
 
+/* Audit Evidence Passport card — separate from .wt-card on purpose
+   (not a review step, no timeline marker). */
+.passport-card {
+  background: var(--bg-card);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  margin-top: 16px;
+}
+
+.passport-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--bg-hover);
+}
+
+.passport-status-row:last-of-type { border-bottom: none; }
+
+.passport-status-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.passport-status-draft          { background: var(--bg-hover);    color: var(--text-secondary); }
+.passport-status-finalised      { background: var(--success-bg);  color: var(--success); }
+.passport-status-correction     { background: var(--danger-bg);   color: var(--danger); }
+.passport-status-further-review { background: var(--warning-bg);  color: var(--warning); }
+
+.passport-integrity-verified     { background: var(--success-bg); color: var(--success); }
+.passport-integrity-warning      { background: var(--danger-bg);  color: var(--danger); }
+.passport-integrity-not_recorded { background: var(--bg-hover);   color: var(--text-secondary); }
+.passport-integrity-loading      { background: var(--bg-hover);   color: var(--text-muted); }
+
+.passport-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
 /* Approve disabled reason (Section 6) — sits between the Action
    Buttons row and the audit-trail note, same understated tone. */
 .approve-disabled-reason {

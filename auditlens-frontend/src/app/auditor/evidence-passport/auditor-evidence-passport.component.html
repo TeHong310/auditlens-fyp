@@ -1,0 +1,218 @@
+<div class="page-wrapper">
+
+  <div class="header">
+    <div class="header-left">
+      <p class="page-label">Audit Evidence Passport</p>
+      <p class="page-subtitle" *ngIf="passport">{{ passport.comparison.invoice.invoice_no || passport.comparison.invoice.filename }}</p>
+    </div>
+    <div class="header-actions">
+      <button class="btn-export" (click)="exportPdf()" *ngIf="passport"><i class="ph-duotone ph-file-pdf"></i> Export PDF</button>
+      <button class="btn-back" (click)="backToAuditReview()">← Back to Audit Review</button>
+    </div>
+  </div>
+
+  <div class="loading-wrap" *ngIf="isLoading">
+    <div class="spinner"></div>
+    <p>Loading evidence passport...</p>
+  </div>
+
+  <div class="empty-wrap" *ngIf="!isLoading && !passport">
+    <p>{{ errorMessage || 'No document selected.' }}</p>
+    <button class="btn-back" (click)="backToAuditReview()">← Back to Audit Review</button>
+  </div>
+
+  <ng-container *ngIf="!isLoading && passport">
+    <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
+
+    <!-- Transaction Summary -->
+    <div class="passport-section">
+      <h2 class="section-title"><i class="ph-duotone ph-package"></i> Transaction Summary</h2>
+      <ng-container *ngIf="passport.transaction_context as txn; else standaloneSummary">
+        <div class="kv-grid">
+          <div class="kv"><span class="kv-label">Package</span><span class="kv-value">{{ txn.package_name }}</span></div>
+          <div class="kv"><span class="kv-label">Status</span><span class="kv-value">{{ txn.status }}</span></div>
+          <div class="kv"><span class="kv-label">Documents</span><span class="kv-value">{{ txn.documents_count }}</span></div>
+          <div class="kv"><span class="kv-label">Invoices</span><span class="kv-value">{{ txn.invoices }}</span></div>
+          <div class="kv"><span class="kv-label">Purchase Orders</span><span class="kv-value">{{ txn.purchase_orders }}</span></div>
+          <div class="kv"><span class="kv-label">Goods Receipts</span><span class="kv-value">{{ txn.goods_receipts }}</span></div>
+        </div>
+      </ng-container>
+      <ng-template #standaloneSummary>
+        <p class="muted-note">Standalone invoice — not part of a Finance Transaction Package.</p>
+      </ng-template>
+    </div>
+
+    <!-- Invoice / PO / GR information -->
+    <div class="passport-section">
+      <h2 class="section-title"><i class="ph-duotone ph-files"></i> Document Information</h2>
+      <div class="doc-info-grid">
+        <div class="doc-info-block">
+          <p class="doc-info-block-title">Invoice</p>
+          <div class="kv"><span class="kv-label">No.</span><span class="kv-value">{{ passport.comparison.invoice.invoice_no || '-' }}</span></div>
+          <div class="kv"><span class="kv-label">Vendor</span><span class="kv-value">{{ passport.comparison.invoice.vendor_name || '-' }}</span></div>
+          <div class="kv"><span class="kv-label">Date</span><span class="kv-value">{{ formatDate(passport.comparison.invoice.invoice_date) }}</span></div>
+          <div class="kv"><span class="kv-label">Amount</span><span class="kv-value">{{ formatAmount(passport.comparison.invoice.total_amount, passport.comparison.invoice.currency) }}</span></div>
+          <div class="kv"><span class="kv-label">File</span><span class="kv-value">{{ passport.comparison.invoice.filename || '-' }}</span></div>
+        </div>
+        <div class="doc-info-block" *ngIf="passport.comparison.po as po; else poMissing">
+          <p class="doc-info-block-title">Purchase Order</p>
+          <div class="kv"><span class="kv-label">No.</span><span class="kv-value">{{ po.po_no || '-' }}</span></div>
+          <div class="kv"><span class="kv-label">Vendor</span><span class="kv-value">{{ po.vendor_name || '-' }}</span></div>
+          <div class="kv"><span class="kv-label">Date</span><span class="kv-value">{{ formatDate(po.po_date) }}</span></div>
+          <div class="kv"><span class="kv-label">Amount</span><span class="kv-value">{{ formatAmount(po.total_amount, po.currency) }}</span></div>
+          <div class="kv"><span class="kv-label">File</span><span class="kv-value">{{ po.filename || '-' }}</span></div>
+        </div>
+        <ng-template #poMissing>
+          <div class="doc-info-block doc-info-missing">
+            <p class="doc-info-block-title">Purchase Order</p>
+            <p class="muted-note">Not Uploaded</p>
+          </div>
+        </ng-template>
+        <div class="doc-info-block" *ngIf="passport.comparison.gr as gr; else grMissing">
+          <p class="doc-info-block-title">Goods Receipt</p>
+          <div class="kv"><span class="kv-label">No.</span><span class="kv-value">{{ gr.gr_no || '-' }}</span></div>
+          <div class="kv"><span class="kv-label">Vendor</span><span class="kv-value">{{ gr.vendor_name || '-' }}</span></div>
+          <div class="kv"><span class="kv-label">Date</span><span class="kv-value">{{ formatDate(gr.receipt_date) }}</span></div>
+          <div class="kv"><span class="kv-label">File</span><span class="kv-value">{{ gr.filename || '-' }}</span></div>
+        </div>
+        <ng-template #grMissing>
+          <div class="doc-info-block doc-info-missing">
+            <p class="doc-info-block-title">Goods Receipt</p>
+            <p class="muted-note">Not Uploaded</p>
+          </div>
+        </ng-template>
+      </div>
+    </div>
+
+    <!-- Document Integrity + SHA-256 -->
+    <div class="passport-section">
+      <h2 class="section-title"><i class="ph-duotone ph-shield-check"></i> Document Integrity</h2>
+      <div class="integrity-row" *ngFor="let type of ['invoice', 'po', 'gr']">
+        <ng-container *ngIf="passport.document_integrity.documents[type] as d">
+          <ng-container *ngIf="d.exists">
+            <span class="doc-type-label">{{ docTypeLabel(type) }}</span>
+            <span class="risk-chip" [ngClass]="'integrity-' + d.status">{{ integrityStatusLabel(d.status) }}</span>
+            <span class="hash-value" *ngIf="d.sha256_baseline">baseline: {{ d.sha256_baseline }}</span>
+            <span class="hash-value" *ngIf="d.sha256_current">current: {{ d.sha256_current }}</span>
+          </ng-container>
+        </ng-container>
+      </div>
+    </div>
+
+    <!-- OCR Confidence -->
+    <div class="passport-section">
+      <h2 class="section-title"><i class="ph-duotone ph-text-aa"></i> OCR Confidence</h2>
+      <div class="kv-grid">
+        <div class="kv"><span class="kv-label">Invoice</span><span class="kv-value">{{ passport.ocr_confidence.invoice !== null ? passport.ocr_confidence.invoice + '%' : '-' }}</span></div>
+        <div class="kv"><span class="kv-label">PO</span><span class="kv-value">{{ passport.ocr_confidence.po !== null ? passport.ocr_confidence.po + '%' : '-' }}</span></div>
+        <div class="kv"><span class="kv-label">GR</span><span class="kv-value">{{ passport.ocr_confidence.gr !== null ? passport.ocr_confidence.gr + '%' : '-' }}</span></div>
+      </div>
+    </div>
+
+    <!-- Three-Way Matching Result -->
+    <div class="passport-section">
+      <h2 class="section-title"><i class="ph-duotone ph-scales"></i> Three-Way Matching Result</h2>
+      <div class="kv-grid">
+        <div class="kv"><span class="kv-label">Vendor Match</span><span class="kv-value">{{ passport.comparison.match_result.vendor_match === true ? 'Match' : (passport.comparison.match_result.vendor_match === false ? 'Mismatch' : 'N/A') }}</span></div>
+        <div class="kv"><span class="kv-label">Amount Match</span><span class="kv-value">{{ passport.comparison.match_result.amount_match === true ? 'Match' : (passport.comparison.match_result.amount_match === false ? 'Mismatch' : 'N/A') }}</span></div>
+        <div class="kv"><span class="kv-label">PO Reference Match</span><span class="kv-value">{{ passport.comparison.match_result.po_reference_match === true ? 'Match' : (passport.comparison.match_result.po_reference_match === false ? 'Mismatch' : 'N/A') }}</span></div>
+        <div class="kv"><span class="kv-label">Overall</span><span class="kv-value">{{ passport.comparison.match_result.overall_status }}</span></div>
+      </div>
+    </div>
+
+    <!-- Exception Findings -->
+    <div class="passport-section">
+      <h2 class="section-title"><i class="ph-duotone ph-warning-circle"></i> Exception Findings</h2>
+      <ng-container *ngIf="passport.exception as exc; else noException">
+        <div class="kv-grid">
+          <div class="kv"><span class="kv-label">Type</span><span class="kv-value">{{ exc.label }}</span></div>
+          <div class="kv"><span class="kv-label">Severity</span><span class="kv-value">{{ exc.severity }}</span></div>
+          <div class="kv full-row"><span class="kv-label">Detail</span><span class="kv-value">{{ exc.detail }}</span></div>
+        </div>
+      </ng-container>
+      <ng-template #noException><p class="muted-note">No exceptions detected.</p></ng-template>
+    </div>
+
+    <!-- Authenticity Findings -->
+    <div class="passport-section">
+      <h2 class="section-title"><i class="ph-duotone ph-fingerprint"></i> Authenticity Findings</h2>
+      <div class="kv-grid" *ngIf="passport.authenticity; else noAuthenticity">
+        <div class="kv" *ngFor="let type of ['invoice', 'po', 'gr']">
+          <ng-container *ngIf="passport.authenticity[type] as a">
+            <span class="kv-label">{{ docTypeLabel(type) }}</span>
+            <span class="kv-value">{{ a.status }} <span class="cell-muted">({{ a.risk_level }} risk)</span></span>
+          </ng-container>
+        </div>
+      </div>
+      <ng-template #noAuthenticity><p class="muted-note">No authenticity checks recorded yet.</p></ng-template>
+    </div>
+
+    <!-- Anomaly Findings -->
+    <div class="passport-section">
+      <h2 class="section-title"><i class="ph-duotone ph-detective"></i> Anomaly Findings</h2>
+      <ng-container *ngIf="passport.anomalies?.length; else noAnomalies">
+        <div class="anomaly-row" *ngFor="let a of passport.anomalies">
+          <span class="risk-chip" [ngClass]="'risk-' + a.severity">{{ a.severity }}</span>
+          <span class="kv-value">{{ a.detected_pattern || a.anomaly_type }}</span>
+          <span class="cell-muted">{{ a.status }}</span>
+        </div>
+      </ng-container>
+      <ng-template #noAnomalies><p class="muted-note">No anomalies detected.</p></ng-template>
+    </div>
+
+    <!-- Auditor Review Steps -->
+    <div class="passport-section">
+      <h2 class="section-title"><i class="ph-duotone ph-list-checks"></i> Auditor Review Steps</h2>
+      <ng-container *ngIf="reviewStepEntries.length; else noReviewSteps">
+        <div class="kv" *ngFor="let entry of reviewStepEntries">
+          <span class="kv-label">{{ reviewStepLabel(entry.step) }}</span>
+          <span class="kv-value">{{ entry.data.reviewer_name }} · {{ formatDateTime(entry.data.reviewed_at) }}</span>
+        </div>
+      </ng-container>
+      <ng-template #noReviewSteps><p class="muted-note">No review steps recorded yet.</p></ng-template>
+    </div>
+
+    <!-- Correction and Resubmission History -->
+    <div class="passport-section">
+      <h2 class="section-title"><i class="ph-duotone ph-arrow-u-up-left"></i> Correction &amp; Resubmission History</h2>
+      <ng-container *ngIf="passport.send_back_cycles?.length; else noCycles">
+        <div class="cycle-block" *ngFor="let c of passport.send_back_cycles">
+          <p class="cycle-title">Cycle {{ c.cycle_number }} — {{ c.cycle_status }}</p>
+          <div class="kv"><span class="kv-label">Sent back by</span><span class="kv-value">{{ c.sent_back_by_name }} · {{ formatDateTime(c.sent_back_at) }}</span></div>
+          <div class="kv" *ngIf="c.return_reason_category"><span class="kv-label">Reason</span><span class="kv-value">{{ c.return_reason_category }}</span></div>
+          <div class="kv" *ngIf="c.auditor_instruction"><span class="kv-label">Instruction</span><span class="kv-value">{{ c.auditor_instruction }}</span></div>
+          <div class="kv" *ngIf="c.finance_response"><span class="kv-label">Finance response</span><span class="kv-value">{{ c.finance_response }}</span></div>
+          <div class="kv" *ngIf="c.finance_responded_by_name"><span class="kv-label">Responded</span><span class="kv-value">{{ c.finance_responded_by_name }} · {{ formatDateTime(c.finance_responded_at) }}</span></div>
+          <div class="kv" *ngIf="c.resubmitted_by_name"><span class="kv-label">Resubmitted</span><span class="kv-value">{{ c.resubmitted_by_name }} · {{ formatDateTime(c.resubmitted_at) }}</span></div>
+        </div>
+      </ng-container>
+      <ng-template #noCycles><p class="muted-note">No correction cycles for this record.</p></ng-template>
+    </div>
+
+    <!-- Final Decision -->
+    <div class="passport-section">
+      <h2 class="section-title"><i class="ph-duotone ph-gavel"></i> Final Decision</h2>
+      <ng-container *ngIf="passport.audit_history?.length; else noDecision">
+        <div class="cycle-block" *ngFor="let h of passport.audit_history">
+          <p class="cycle-title">{{ historyLabel(h.action) }}</p>
+          <div class="kv"><span class="kv-label">Auditor</span><span class="kv-value">{{ h.reviewer }} · {{ formatDateTime(h.reviewed_at) }}</span></div>
+          <div class="kv" *ngIf="h.remarks"><span class="kv-label">Remark</span><span class="kv-value">{{ h.remarks }}</span></div>
+        </div>
+      </ng-container>
+      <ng-template #noDecision><p class="muted-note">No decision recorded yet.</p></ng-template>
+    </div>
+
+    <!-- Audit Activity Timeline -->
+    <div class="passport-section">
+      <h2 class="section-title"><i class="ph-duotone ph-clock-counter-clockwise"></i> Audit Activity Timeline</h2>
+      <div class="timeline-row" *ngFor="let ev of passport.timeline_events">
+        <span class="risk-chip" [ngClass]="ev.status === 'completed' ? 'integrity-verified' : 'integrity-not_recorded'">{{ ev.status }}</span>
+        <span class="kv-value">{{ ev.label }}</span>
+        <span class="cell-muted">{{ ev.detail }}</span>
+        <span class="cell-muted" *ngIf="ev.timestamp">{{ formatDateTime(ev.timestamp) }}</span>
+      </div>
+    </div>
+
+  </ng-container>
+
+</div>

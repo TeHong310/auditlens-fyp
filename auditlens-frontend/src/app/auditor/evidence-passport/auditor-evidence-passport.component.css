@@ -1,0 +1,251 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+.page-wrapper {
+  padding: 20px 28px;
+  background: var(--bg-app);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.page-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+}
+
+.page-subtitle {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-top: 2px;
+  line-height: 1.2;
+}
+
+.btn-back, .btn-export {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .2s ease;
+}
+
+.btn-back:hover, .btn-export:hover { background: var(--bg-hover); }
+
+.btn-export { color: var(--accent-soft); border-color: var(--accent-soft); }
+
+.loading-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 60px;
+  color: var(--text-muted);
+  gap: 12px;
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent-soft);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.empty-wrap {
+  text-align: center;
+  padding: 60px;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+}
+
+.error-box {
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.passport-section {
+  background: var(--bg-card);
+  border-radius: 12px;
+  padding: 20px 24px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+  border-left: 3px solid var(--accent);
+}
+
+.section-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.muted-note {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.kv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px 20px;
+}
+
+.kv {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+}
+
+.kv.full-row { grid-column: 1 / -1; }
+
+.kv-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.kv-value {
+  font-size: 14px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.cell-muted { color: var(--text-muted); font-size: 12.5px; }
+
+.doc-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.doc-info-block {
+  background: var(--bg-hover);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.doc-info-block.doc-info-missing { display: flex; flex-direction: column; gap: 6px; }
+
+.doc-info-block-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.integrity-row, .anomaly-row, .timeline-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--bg-hover);
+}
+
+.integrity-row:last-child, .anomaly-row:last-child, .timeline-row:last-child { border-bottom: none; }
+
+.doc-type-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  min-width: 110px;
+}
+
+.hash-value {
+  font-family: 'Consolas', 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.risk-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.risk-chip.integrity-verified     { background: var(--success-bg); color: var(--success); }
+.risk-chip.integrity-warning      { background: var(--danger-bg);  color: var(--danger); }
+.risk-chip.integrity-not_recorded { background: var(--bg-hover);   color: var(--text-secondary); }
+
+.risk-chip.risk-high, .risk-chip.risk-critical { background: var(--danger-bg);  color: var(--danger); }
+.risk-chip.risk-medium                          { background: var(--warning-bg); color: var(--warning); }
+.risk-chip.risk-low                             { background: var(--success-bg); color: var(--success); }
+
+.cycle-block {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--bg-hover);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cycle-block:last-child { border-bottom: none; }
+
+.cycle-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+/* Print / Export PDF — the header nav and action buttons don't belong
+   in an exported document; sections paginate naturally as block boxes. */
+@media print {
+  .btn-back, .btn-export { display: none; }
+  .page-wrapper { background: #fff; padding: 0; }
+  .passport-section {
+    box-shadow: none;
+    border: 1px solid #ccc;
+    break-inside: avoid;
+  }
+}

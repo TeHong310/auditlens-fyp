@@ -458,6 +458,30 @@
 
           <div class="markstep-error-box" *ngIf="markStepError"><i class="ph-duotone ph-x-circle"></i> {{ markStepError }}</div>
         </div>
+
+        <!-- Audit Evidence Passport — a read-only summary/export card,
+             NOT a review step: no timeline dot, no lock, no "Mark as
+             Reviewed", and it never affects Approve/Send Back/Need
+             Review gating (canApprove/allMandatoryStepsReviewed above
+             are completely untouched by this card). Status reads the
+             SAME latestReviewAction caseFinalDecision already uses;
+             Document Integrity is the one new thing (SHA-256 baseline
+             vs. recomputed hash, GET /documents/<id>/integrity). -->
+        <div class="passport-card">
+          <h2 class="wt-title"><i class="ph-duotone ph-identification-card"></i> Audit Evidence Passport</h2>
+          <div class="passport-status-row">
+            <span class="passport-status-label">Status</span>
+            <span class="risk-chip" [ngClass]="passportStatusClass">{{ passportStatus }}</span>
+          </div>
+          <div class="passport-status-row">
+            <span class="passport-status-label">Document Integrity</span>
+            <span class="risk-chip" [ngClass]="'passport-integrity-' + documentIntegrityStatus">{{ passportIntegrityLabel }}</span>
+          </div>
+          <div class="passport-actions">
+            <button class="btn-wt-view" (click)="openEvidencePassport()">View Evidence Passport</button>
+            <button class="btn-wt-view" (click)="exportEvidencePassportPdf()">Export PDF</button>
+          </div>
+        </div>
       </div>
 
       <!-- Right: Audit Decision -->

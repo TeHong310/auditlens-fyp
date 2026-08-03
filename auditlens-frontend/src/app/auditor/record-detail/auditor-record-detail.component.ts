@@ -186,6 +186,13 @@ export class AuditorRecordDetailComponent implements OnInit {
   markingStep: ReviewStep | null = null;
   markStepError: string = '';
 
+  // Audit Evidence Passport card — Document Integrity line only; the
+  // Status line is derived from latestReviewAction below (already
+  // loaded via loadReviewHistory(), no separate call needed). Not a
+  // review step: no timeline dot, no gating of Approve/Send Back/Need
+  // Review. 'loading' until GET /documents/<id>/integrity resolves.
+  documentIntegrityStatus: 'loading' | 'verified' | 'warning' | 'not_recorded' = 'loading';
+
   private apiUrl = environment.apiUrl;
 
   constructor(
@@ -208,6 +215,7 @@ export class AuditorRecordDetailComponent implements OnInit {
         this.loadCycles();
         this.loadReviewHistory();
         this.loadRiskIndicators();
+        this.loadDocumentIntegrity();
       }
     });
   }
@@ -336,6 +344,25 @@ export class AuditorRecordDetailComponent implements OnInit {
     });
   }
 
+  // ── Audit Evidence Passport card (Document Integrity line only) ──
+  // Advisory/summary only, same non-blocking pattern as authenticity/
+  // riskIndicators above — a failure here never blocks the rest of the
+  // page. GET /documents/<id>/integrity recomputes SHA-256 from stored
+  // file_bytes and compares against the baseline captured at upload.
+
+  loadDocumentIntegrity() {
+    if (!this.documentId) return;
+    this.http.get<any>(`${this.apiUrl}/documents/${this.documentId}/integrity`, {
+      headers: this.getHeaders()
+    }).subscribe({
+      next: (res) => {
+        this.documentIntegrityStatus = res.overall_status || 'not_recorded';
+        this.cdr.detectChanges();
+      },
+      error: () => { this.documentIntegrityStatus = 'not_recorded'; }
+    });
+  }
+
   // ── Guided review checklist (Section 4/5) ───────────────
   // Three-Way Matching -> Exception Review -> Authenticity Review ->
   // Anomaly Review, each gated on the one before it. "Mark as
@@ -452,6 +479,18 @@ export class AuditorRecordDetailComponent implements OnInit {
     this.router.navigate(['/auditor/matching-details'], { queryParams });
   }
 
+  // Audit Evidence Passport card buttons — [Export PDF] opens the SAME
+  // page with ?export=1, which triggers window.print() once its data has
+  // loaded (see AuditorEvidencePassportComponent), rather than
+  // duplicating any data-fetching or PDF logic here.
+  openEvidencePassport() {
+    this.router.navigate(['/auditor/evidence-passport', this.documentId]);
+  }
+
+  exportEvidencePassportPdf() {
+    this.router.navigate(['/auditor/evidence-passport', this.documentId], { queryParams: { export: '1' } });
+  }
+
   openExceptionDetails() {
     this.router.navigate(['/auditor/exceptions'], { queryParams: { document_id: this.documentId, ref: 'audit-review' } });
   }
@@ -558,6 +597,33 @@ export class AuditorRecordDetailComponent implements OnInit {
     if (action === 'returned') return 'Sent Back to Finance';
     if (action === 'need_review') return 'Need Review';
     return 'Awaiting Auditor';
+  }
+
+  // Audit Evidence Passport card — Status line. Same latestReviewAction
+  // source as caseFinalDecision above, mapped to the Passport's own
+  // vocabulary. Not a review step: purely a read of existing decision
+  // state, never affects isFinalDecision/canApprove/gating.
+  get passportStatus(): string {
+    const action = this.latestReviewAction;
+    if (action === 'approved') return 'Finalised';
+    if (action === 'returned') return 'Correction Required';
+    if (action === 'need_review') return 'Further Review';
+    return 'Draft';
+  }
+
+  get passportStatusClass(): string {
+    const action = this.latestReviewAction;
+    if (action === 'approved') return 'passport-status-finalised';
+    if (action === 'returned') return 'passport-status-correction';
+    if (action === 'need_review') return 'passport-status-further-review';
+    return 'passport-status-draft';
+  }
+
+  get passportIntegrityLabel(): string {
+    if (this.documentIntegrityStatus === 'verified') return 'Verified';
+    if (this.documentIntegrityStatus === 'warning') return 'Warning';
+    if (this.documentIntegrityStatus === 'not_recorded') return 'Not Yet Recorded';
+    return 'Checking…';
   }
 
   // Final Audit Decision timeline step (Section: moved-in Remarks/Notes

@@ -25,7 +25,9 @@ from helpers.confidence_engine import compute_field_confidence, compute_line_ite
 from helpers.extraction_validator import validate_extraction
 from routes.authenticity import generate_invoice_authenticity_if_missing, generate_authenticity_if_missing
 from routes.ai_assistant import _build_case_context
-from helpers.time_format import to_utc_iso
+from routes.auditor import build_comparison
+from helpers.transaction_packages import get_transaction_context_for_document
+from helpers.time_format import to_utc_iso, serialize_row_datetimes
 from config import Config
 
 documents_bp = Blueprint('documents', __name__)
@@ -266,15 +268,20 @@ def upload_document():
         if db_file_bytes is None:
             print(f"DEBUG Document upload: {safe_name} is {len(file_bytes_data)} bytes, "
                   f"over MAX_DB_FILE_BYTES ({Config.MAX_DB_FILE_BYTES}) — not persisted to DB")
+        # Computed here (not just below, where it was previously only used
+        # for AI-cache keying) so the SAME hash is also stored as this
+        # document's Audit Evidence Passport integrity baseline.
+        file_hash = compute_file_hash(file_bytes_data)
 
         conn   = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
             '''INSERT INTO documents
-               (uploaded_by, file_name, file_path, file_type, input_method, status, file_bytes, file_mime)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING document_id''',
+               (uploaded_by, file_name, file_path, file_type, input_method, status, file_bytes, file_mime, sha256_baseline)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING document_id''',
             (user['user_id'], safe_name, file_path, file_ext, input_method, 'ocr_processing',
-             psycopg2.Binary(db_file_bytes) if db_file_bytes is not None else None, file_mime)
+             psycopg2.Binary(db_file_bytes) if db_file_bytes is not None else None, file_mime,
+             file_hash)
         )
         document_id = cursor.fetchone()[0]
         conn.commit()
@@ -292,7 +299,6 @@ def upload_document():
         # retries and Gunicorn worker processes (see helpers/
         # claude_cache.py / helpers/gemini_cache.py).
         # ══════════════════════════════════════════════════════
-        file_hash = compute_file_hash(file_bytes_data)
 
         def _claude_call():
             cached = get_cached_claude_result(file_hash, 'invoice')
@@ -620,14 +626,14 @@ def upload_purchase_order(document_id):
                (document_id, uploaded_by, file_name, file_path,
                 po_number, vendor_name, po_date, total_amount,
                 currency, raw_ocr_text, ocr_confidence, file_bytes, file_mime,
-                item_description, quantity)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                item_description, quantity, sha256_baseline)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING po_id''',
             (document_id, user['user_id'], safe_name, file_path,
              fields['po_number'], fields['vendor_name'], po_date,
              fields['total_amount'], fields['currency'], ocr_text, confidence,
              psycopg2.Binary(db_file_bytes) if db_file_bytes is not None else None, file_mime,
-             fields['item_description'], fields['quantity'])
+             fields['item_description'], fields['quantity'], file_hash)
         )
         po_id = cursor.fetchone()[0]
 
@@ -813,14 +819,14 @@ def upload_goods_receipt(document_id):
                (document_id, uploaded_by, file_name, file_path,
                 gr_number, vendor_name, receipt_date, total_amount,
                 currency, raw_ocr_text, ocr_confidence, file_bytes, file_mime,
-                po_reference, item_description, quantity)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                po_reference, item_description, quantity, sha256_baseline)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING gr_id''',
             (document_id, user['user_id'], safe_name, file_path,
              fields['gr_number'], fields['vendor_name'], receipt_date,
              fields['total_amount'], fields['currency'], ocr_text, confidence,
              psycopg2.Binary(db_file_bytes) if db_file_bytes is not None else None, file_mime,
-             fields['po_reference'], fields['item_description'], fields['quantity'])
+             fields['po_reference'], fields['item_description'], fields['quantity'], file_hash)
         )
         gr_id = cursor.fetchone()[0]
 
@@ -1577,6 +1583,200 @@ def _require_timeline_access(document_id):
             return None, (jsonify({'error': 'Access denied'}), 403)
 
     return user, None
+
+
+# ------------------------------------------------------------
+# AUDIT EVIDENCE PASSPORT — document integrity
+#
+# Recomputes each present document's SHA-256 from its stored file_bytes
+# and compares it against the sha256_baseline captured at upload time
+# (app.py::_ensure_document_hash_columns(), populated by the 3 upload
+# routes above). Never claims 'verified' without a stored baseline —
+# a document uploaded before this feature existed, or one whose bytes
+# were too large to persist to the DB (Config.MAX_DB_FILE_BYTES), reads
+# as 'not_recorded' instead of a false pass. Recomputed fresh on every
+# call, never cached.
+# ------------------------------------------------------------
+_INTEGRITY_TABLES = {
+    'invoice': ('documents', 'document_id'),
+    'po':      ('purchase_orders', 'po_id'),
+    'gr':      ('goods_receipts', 'gr_id'),
+}
+
+
+def _compute_document_integrity(cursor, comparison):
+    documents_detail = {}
+    for doc_type, (table, id_col) in _INTEGRITY_TABLES.items():
+        doc = comparison.get(doc_type)
+        if not doc:
+            documents_detail[doc_type] = {'exists': False, 'status': 'not_applicable'}
+            continue
+
+        row_id = doc['document_id'] if doc_type == 'invoice' else doc[id_col]
+        cursor.execute(f'SELECT file_bytes, sha256_baseline FROM {table} WHERE {id_col} = %s', (row_id,))
+        row = cursor.fetchone()
+        file_bytes = row['file_bytes'] if row else None
+        baseline = row['sha256_baseline'] if row else None
+
+        if baseline is None or file_bytes is None:
+            # No baseline recorded, OR the original bytes are gone
+            # (ephemeral disk wiped / over the DB size guard) — either
+            # way there is nothing to compare against, so this can't be
+            # claimed Verified.
+            documents_detail[doc_type] = {
+                'exists': True, 'status': 'not_recorded',
+                'sha256_baseline': baseline, 'sha256_current': None,
+            }
+        else:
+            current_hash = compute_file_hash(bytes(file_bytes))
+            documents_detail[doc_type] = {
+                'exists': True,
+                'status': 'verified' if current_hash == baseline else 'warning',
+                'sha256_baseline': baseline, 'sha256_current': current_hash,
+            }
+
+    statuses = [d['status'] for d in documents_detail.values() if d.get('exists')]
+    if 'warning' in statuses:
+        overall_status = 'warning'
+    elif 'not_recorded' in statuses:
+        overall_status = 'not_recorded'
+    elif statuses:
+        overall_status = 'verified'
+    else:
+        overall_status = 'not_recorded'
+
+    return {'overall_status': overall_status, 'documents': documents_detail}
+
+
+def _require_auditor_or_admin():
+    """Same role-check the comparison endpoint (routes/auditor.py::
+    get_record_comparison) already uses — the Evidence Passport reads
+    the same underlying data, gated the same way."""
+    user_id = get_jwt_identity()
+    user = get_user_by_id(user_id)
+    if user['role'] not in ('auditor', 'admin'):
+        return None, (jsonify({'error': 'Access denied. Auditor only.'}), 403)
+    return user, None
+
+
+@documents_bp.route('/<int:document_id>/integrity', methods=['GET'])
+@jwt_required()
+def get_document_integrity(document_id):
+    _, err = _require_auditor_or_admin()
+    if err:
+        return err
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        comparison = build_comparison(cursor, document_id)
+        if comparison is None:
+            conn.close()
+            return jsonify({'error': 'Invoice document not found'}), 404
+        integrity = _compute_document_integrity(cursor, comparison)
+        conn.close()
+        return jsonify({'document_id': document_id, **integrity}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@documents_bp.route('/<int:document_id>/evidence-passport', methods=['GET'])
+@jwt_required()
+def get_evidence_passport(document_id):
+    """One read-only aggregation of everything already known about a
+    single transaction — assembled entirely from existing helpers/
+    queries (_build_case_context, build_comparison,
+    get_transaction_context_for_document, the same document_review_
+    steps/send_back_cycles queries GET .../timeline and GET /reviews/
+    send-back-cycles/<id> already use). No matching, anomaly,
+    authenticity, or review-step logic is computed here — only read."""
+    _, err = _require_auditor_or_admin()
+    if err:
+        return err
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        comparison = build_comparison(cursor, document_id)
+        if comparison is None:
+            conn.close()
+            return jsonify({'error': 'Invoice document not found'}), 404
+
+        context = _build_case_context(cursor, document_id)
+        integrity = _compute_document_integrity(cursor, comparison)
+        transaction_context = get_transaction_context_for_document(document_id, 'invoice')
+        timeline_events = _build_timeline_events(context)
+
+        # PO/GR OCR confidence — build_comparison() only returns the
+        # invoice side of this; a small side read against the same
+        # tables/ids already resolved above, not a matching-logic change.
+        ocr_confidence = {'invoice': comparison['invoice']['ocr_confidence'], 'po': None, 'gr': None}
+        if comparison.get('po'):
+            cursor.execute('SELECT ocr_confidence FROM purchase_orders WHERE po_id = %s', (comparison['po']['po_id'],))
+            row = cursor.fetchone()
+            ocr_confidence['po'] = float(row['ocr_confidence']) if row and row['ocr_confidence'] is not None else None
+        if comparison.get('gr'):
+            cursor.execute('SELECT ocr_confidence FROM goods_receipts WHERE gr_id = %s', (comparison['gr']['gr_id'],))
+            row = cursor.fetchone()
+            ocr_confidence['gr'] = float(row['ocr_confidence']) if row and row['ocr_confidence'] is not None else None
+
+        # Review steps (reviewer/time) — same query as GET /documents/<id>/timeline.
+        cursor.execute(
+            '''SELECT drs.step, drs.reviewed_by, drs.reviewed_at, u.full_name AS reviewer_name
+               FROM document_review_steps drs
+               JOIN users u ON drs.reviewed_by = u.user_id
+               WHERE drs.document_id = %s''',
+            (document_id,)
+        )
+        review_steps = {
+            row['step']: {
+                'reviewed_by':   row['reviewed_by'],
+                'reviewer_name': row['reviewer_name'],
+                'reviewed_at':   to_utc_iso(row['reviewed_at']),
+            }
+            for row in cursor.fetchall()
+        }
+
+        # Correction / resubmission history — same query as
+        # GET /reviews/send-back-cycles/<id>.
+        cursor.execute(
+            '''SELECT sbc.*, u1.full_name AS sent_back_by_name,
+                      u2.full_name AS finance_responded_by_name,
+                      u3.full_name AS resubmitted_by_name
+               FROM send_back_cycles sbc
+               JOIN users u1 ON sbc.sent_back_by = u1.user_id
+               LEFT JOIN users u2 ON sbc.finance_responded_by = u2.user_id
+               LEFT JOIN users u3 ON sbc.resubmitted_by = u3.user_id
+               WHERE sbc.document_id = %s
+               ORDER BY sbc.cycle_number ASC''',
+            (document_id,)
+        )
+        send_back_cycles = []
+        for row in cursor.fetchall():
+            c = dict(row)
+            serialize_row_datetimes(c)
+            send_back_cycles.append(c)
+
+        conn.close()
+
+        return jsonify({
+            'document_id':         document_id,
+            'comparison':          comparison,
+            'transaction_context': transaction_context,
+            'exception':           context.get('exception'),
+            'authenticity':        context.get('authenticity'),
+            'anomalies':           context.get('anomalies') or [],
+            'audit_history':       context.get('audit_history') or [],
+            'ocr_confidence':      ocr_confidence,
+            'document_integrity':  integrity,
+            'review_steps':        review_steps,
+            'send_back_cycles':    send_back_cycles,
+            'timeline_events':     timeline_events,
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # ------------------------------------------------------------
