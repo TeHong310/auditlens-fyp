@@ -36,6 +36,12 @@ export class AuditorEvidencePassportComponent implements OnInit {
   // page's own Export PDF button.
   private autoExport: boolean = false;
 
+  // Header "Generated" timestamp — set once, at the moment this
+  // Passport view actually loaded, not a stored server value.
+  generatedAt: string = '';
+
+  private static REVIEW_STEP_ORDER = ['three_way_matching', 'exception_review', 'authenticity_review', 'anomaly_review'];
+
   private apiUrl = environment.apiUrl;
 
   constructor(
@@ -82,6 +88,7 @@ export class AuditorEvidencePassportComponent implements OnInit {
     }).subscribe({
       next: (res) => {
         this.passport = res;
+        this.generatedAt = new Date().toISOString();
         this.isLoading = false;
         this.cdr.detectChanges();
         if (this.autoExport) {
@@ -136,8 +143,18 @@ export class AuditorEvidencePassportComponent implements OnInit {
     return action;
   }
 
+  // Final Audit Decision (Section 6/7) — only the LAST entry, and only
+  // when it's a terminal action (approved/returned), is framed as the
+  // case's actual final decision; an earlier need_review/returned later
+  // superseded by an Approve keeps its own plain wording.
+  decisionEntryLabel(action: string, isLast: boolean): string {
+    if (isLast && action === 'approved') return 'Final Audit Decision: Approved';
+    if (isLast && action === 'returned') return 'Final Audit Decision: Sent Back to Finance';
+    return this.historyLabel(action);
+  }
+
   reviewStepLabel(step: string): string {
-    if (step === 'three_way_matching') return 'Three-Way Matching';
+    if (step === 'three_way_matching') return 'Three-Way Matching Review';
     if (step === 'exception_review') return 'Exception Review';
     if (step === 'authenticity_review') return 'Authenticity Review';
     if (step === 'anomaly_review') return 'Anomaly Review';
@@ -147,7 +164,7 @@ export class AuditorEvidencePassportComponent implements OnInit {
   integrityStatusLabel(status: string): string {
     if (status === 'verified') return 'Verified';
     if (status === 'warning') return 'Warning';
-    if (status === 'not_recorded') return 'Not Yet Recorded';
+    if (status === 'not_recorded') return 'Baseline Not Available';
     return 'Not Applicable';
   }
 
@@ -157,11 +174,100 @@ export class AuditorEvidencePassportComponent implements OnInit {
     return 'Goods Receipt';
   }
 
-  // review_steps / anomalies / send_back_cycles arrive as either an
-  // object or array depending on section — small helpers so the
-  // template can iterate consistently.
+  objectKeys(obj: any): string[] {
+    return obj ? Object.keys(obj) : [];
+  }
+
+  // review_steps arrives as an object keyed by step — always rendered
+  // in the fixed workflow order (Three-Way Matching -> Exception ->
+  // Authenticity -> Anomaly), not whatever order the DB happened to
+  // return rows in.
   get reviewStepEntries(): { step: string; data: any }[] {
     const steps = this.passport?.review_steps || {};
-    return Object.keys(steps).map(step => ({ step, data: steps[step] }));
+    return AuditorEvidencePassportComponent.REVIEW_STEP_ORDER
+      .filter(step => steps[step])
+      .map(step => ({ step, data: steps[step] }));
+  }
+
+  // ── Passport header (Section 2) ──
+
+  get passportId(): string {
+    return this.documentId ? `EVP-${this.documentId}` : '-';
+  }
+
+  // Same latestReviewAction/caseFinalDecision derivation
+  // auditor-record-detail.component.ts already uses for its own
+  // Passport card — audit_history is ASC-ordered (last = most recent),
+  // same convention as that page's reviewHistory. Purely a read of the
+  // existing decision state; makes no decision itself.
+  private get latestDecisionAction(): string | null {
+    const history = this.passport?.audit_history || [];
+    return history.length ? history[history.length - 1].action : null;
+  }
+
+  get passportStatus(): string {
+    const action = this.latestDecisionAction;
+    if (action === 'approved') return 'Finalised';
+    if (action === 'returned') return 'Correction Required';
+    if (action === 'need_review') return 'Further Review';
+    return 'Draft';
+  }
+
+  get passportStatusClass(): string {
+    const action = this.latestDecisionAction;
+    if (action === 'approved') return 'passport-status-finalised';
+    if (action === 'returned') return 'passport-status-correction';
+    if (action === 'need_review') return 'passport-status-further-review';
+    return 'passport-status-draft';
+  }
+
+  // ── Transaction Summary (Section 1) — package status derived from
+  // which documents are ACTUALLY linked (comparison.po/gr presence),
+  // not merely whether this invoice belongs to a formal Finance
+  // Transaction Package — a standalone 3-way-matched invoice with a
+  // real PO and GR attached is a Complete Transaction Package, not a
+  // "standalone invoice" as the page used to (incorrectly) say. ──
+
+  get transactionStatusLabel(): string {
+    const hasPo = !!this.passport?.comparison?.po;
+    const hasGr = !!this.passport?.comparison?.gr;
+    if (hasPo && hasGr) return 'Complete Transaction Package';
+    if (hasPo || hasGr) return 'Incomplete Transaction Package';
+    return 'Standalone Invoice';
+  }
+
+  get transactionMissingNote(): string | null {
+    const hasPo = !!this.passport?.comparison?.po;
+    const hasGr = !!this.passport?.comparison?.gr;
+    if (hasPo && !hasGr) return 'Missing: Goods Receipt';
+    if (hasGr && !hasPo) return 'Missing: Purchase Order';
+    return null;
+  }
+
+  get documentsIncludedLabel(): string {
+    const included = ['Invoice'];
+    if (this.passport?.comparison?.po) included.push('Purchase Order');
+    if (this.passport?.comparison?.gr) included.push('Goods Receipt');
+    return included.join(', ');
+  }
+
+  // ── Wording consistency (Section 7) — normalizes whatever casing the
+  // underlying enum/status value happens to be stored in (some are
+  // UPPERCASE like match_result.overall_status, some lowercase like
+  // authenticity_status/anomaly severity) into one consistent Title
+  // Case display, without needing to know each field's exact stored
+  // casing. Does not change any stored value, only how it's shown. ──
+
+  titleCase(value: string | null | undefined): string {
+    if (!value) return '-';
+    return value.toString().toLowerCase().replace(/(^|[\s_-])(\w)/g, (_m, sep, ch) => (sep === '_' || sep === '-' ? ' ' : sep) + ch.toUpperCase());
+  }
+
+  matchOverallLabel(status: string | null | undefined): string {
+    if (status === 'PASS') return 'Passed';
+    if (status === 'FAIL') return 'Failed';
+    if (status === 'REVIEW') return 'Review Required';
+    if (status === 'PARTIAL') return 'Partial Match';
+    return this.titleCase(status);
   }
 }

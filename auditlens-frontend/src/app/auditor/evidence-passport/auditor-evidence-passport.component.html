@@ -4,6 +4,11 @@
     <div class="header-left">
       <p class="page-label">Audit Evidence Passport</p>
       <p class="page-subtitle" *ngIf="passport">{{ passport.comparison.invoice.invoice_no || passport.comparison.invoice.filename }}</p>
+      <div class="header-meta" *ngIf="passport">
+        <span class="header-meta-item">Passport ID: <strong>{{ passportId }}</strong></span>
+        <span class="risk-chip" [ngClass]="passportStatusClass">{{ passportStatus }}</span>
+        <span class="header-meta-item">Generated {{ formatDateTime(generatedAt) }} (Asia/Kuala_Lumpur)</span>
+      </div>
     </div>
     <div class="header-actions">
       <button class="btn-export" (click)="exportPdf()" *ngIf="passport"><i class="ph-duotone ph-file-pdf"></i> Export PDF</button>
@@ -24,22 +29,36 @@
   <ng-container *ngIf="!isLoading && passport">
     <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
 
-    <!-- Transaction Summary -->
+    <!-- Transaction Summary — package status is derived from which
+         documents are ACTUALLY linked (Invoice/PO/GR presence), not
+         merely whether this invoice belongs to a formal Finance
+         Transaction Package. Package Creation Method (ZIP Batch Upload
+         vs Manually Created) is deliberately NOT shown: the
+         transaction_packages table has no such column, and the task
+         explicitly says not to add a new DB field just for this —
+         omitted rather than fabricated. -->
     <div class="passport-section">
       <h2 class="section-title"><i class="ph-duotone ph-package"></i> Transaction Summary</h2>
-      <ng-container *ngIf="passport.transaction_context as txn; else standaloneSummary">
-        <div class="kv-grid">
-          <div class="kv"><span class="kv-label">Package</span><span class="kv-value">{{ txn.package_name }}</span></div>
-          <div class="kv"><span class="kv-label">Status</span><span class="kv-value">{{ txn.status }}</span></div>
-          <div class="kv"><span class="kv-label">Documents</span><span class="kv-value">{{ txn.documents_count }}</span></div>
-          <div class="kv"><span class="kv-label">Invoices</span><span class="kv-value">{{ txn.invoices }}</span></div>
-          <div class="kv"><span class="kv-label">Purchase Orders</span><span class="kv-value">{{ txn.purchase_orders }}</span></div>
-          <div class="kv"><span class="kv-label">Goods Receipts</span><span class="kv-value">{{ txn.goods_receipts }}</span></div>
+      <div class="kv-grid">
+        <div class="kv">
+          <span class="kv-label">Package Status</span>
+          <span class="kv-value">{{ transactionStatusLabel }}</span>
+        </div>
+        <div class="kv" *ngIf="transactionMissingNote">
+          <span class="kv-label">Missing Document</span>
+          <span class="kv-value">{{ transactionMissingNote }}</span>
+        </div>
+        <div class="kv full-row">
+          <span class="kv-label">Documents Included</span>
+          <span class="kv-value">{{ documentsIncludedLabel }}</span>
+        </div>
+      </div>
+      <ng-container *ngIf="passport.transaction_context as txn">
+        <div class="kv-grid" style="margin-top:10px;">
+          <div class="kv"><span class="kv-label">Package Name</span><span class="kv-value">{{ txn.package_name }}</span></div>
+          <div class="kv"><span class="kv-label">Package Workflow Status</span><span class="kv-value">{{ titleCase(txn.status) }}</span></div>
         </div>
       </ng-container>
-      <ng-template #standaloneSummary>
-        <p class="muted-note">Standalone invoice — not part of a Finance Transaction Package.</p>
-      </ng-template>
     </div>
 
     <!-- Invoice / PO / GR information -->
@@ -84,17 +103,23 @@
       </div>
     </div>
 
-    <!-- Document Integrity + SHA-256 -->
+    <!-- Document Integrity + SHA-256 — Verified only ever means the
+         recomputed hash matched a stored baseline; Baseline Not
+         Available is explicitly NOT an integrity failure, just an
+         absent baseline (pre-dates this feature), and says so. -->
     <div class="passport-section">
       <h2 class="section-title"><i class="ph-duotone ph-shield-check"></i> Document Integrity</h2>
-      <div class="integrity-row" *ngFor="let type of ['invoice', 'po', 'gr']">
+      <div *ngFor="let type of ['invoice', 'po', 'gr']">
         <ng-container *ngIf="passport.document_integrity.documents[type] as d">
-          <ng-container *ngIf="d.exists">
+          <div class="integrity-row" *ngIf="d.exists">
             <span class="doc-type-label">{{ docTypeLabel(type) }}</span>
             <span class="risk-chip" [ngClass]="'integrity-' + d.status">{{ integrityStatusLabel(d.status) }}</span>
             <span class="hash-value" *ngIf="d.sha256_baseline">baseline: {{ d.sha256_baseline }}</span>
             <span class="hash-value" *ngIf="d.sha256_current">current: {{ d.sha256_current }}</span>
-          </ng-container>
+          </div>
+          <p class="integrity-explainer" *ngIf="d.exists && d.status === 'not_recorded'">
+            This document was uploaded before integrity tracking was enabled. This does not indicate an integrity failure; the original SHA-256 baseline was not recorded at upload time.
+          </p>
         </ng-container>
       </div>
     </div>
@@ -116,7 +141,7 @@
         <div class="kv"><span class="kv-label">Vendor Match</span><span class="kv-value">{{ passport.comparison.match_result.vendor_match === true ? 'Match' : (passport.comparison.match_result.vendor_match === false ? 'Mismatch' : 'N/A') }}</span></div>
         <div class="kv"><span class="kv-label">Amount Match</span><span class="kv-value">{{ passport.comparison.match_result.amount_match === true ? 'Match' : (passport.comparison.match_result.amount_match === false ? 'Mismatch' : 'N/A') }}</span></div>
         <div class="kv"><span class="kv-label">PO Reference Match</span><span class="kv-value">{{ passport.comparison.match_result.po_reference_match === true ? 'Match' : (passport.comparison.match_result.po_reference_match === false ? 'Mismatch' : 'N/A') }}</span></div>
-        <div class="kv"><span class="kv-label">Overall</span><span class="kv-value">{{ passport.comparison.match_result.overall_status }}</span></div>
+        <div class="kv"><span class="kv-label">Overall</span><span class="kv-value">{{ matchOverallLabel(passport.comparison.match_result.overall_status) }}</span></div>
       </div>
     </div>
 
@@ -126,11 +151,11 @@
       <ng-container *ngIf="passport.exception as exc; else noException">
         <div class="kv-grid">
           <div class="kv"><span class="kv-label">Type</span><span class="kv-value">{{ exc.label }}</span></div>
-          <div class="kv"><span class="kv-label">Severity</span><span class="kv-value">{{ exc.severity }}</span></div>
+          <div class="kv"><span class="kv-label">Severity</span><span class="kv-value">{{ titleCase(exc.severity) }}</span></div>
           <div class="kv full-row"><span class="kv-label">Detail</span><span class="kv-value">{{ exc.detail }}</span></div>
         </div>
       </ng-container>
-      <ng-template #noException><p class="muted-note">No exceptions detected.</p></ng-template>
+      <ng-template #noException><p class="muted-note">No Exceptions Detected</p></ng-template>
     </div>
 
     <!-- Authenticity Findings -->
@@ -140,11 +165,56 @@
         <div class="kv" *ngFor="let type of ['invoice', 'po', 'gr']">
           <ng-container *ngIf="passport.authenticity[type] as a">
             <span class="kv-label">{{ docTypeLabel(type) }}</span>
-            <span class="kv-value">{{ a.status }} <span class="cell-muted">({{ a.risk_level }} risk)</span></span>
+            <span class="kv-value">{{ titleCase(a.status) }} <span class="cell-muted">({{ titleCase(a.risk_level) }} Risk)</span></span>
           </ng-container>
         </div>
       </div>
       <ng-template #noAuthenticity><p class="muted-note">No authenticity checks recorded yet.</p></ng-template>
+    </div>
+
+    <!-- Evidence Coverage & Limitations — only what actually matters:
+         required evidence that WAS detected, critical gaps (required
+         but missing), non-critical limitations (optional signals
+         missing on a document that didn't cleanly pass), and anything
+         the auditor manually corrected. Never lists every undetected
+         optional signal on an otherwise-clean document — see
+         _build_evidence_coverage's own docstring (routes/documents.py)
+         for the required/optional classification, reused as-is from
+         the existing authenticity engine. -->
+    <div class="passport-section">
+      <h2 class="section-title"><i class="ph-duotone ph-list-magnifying-glass"></i> Evidence Coverage &amp; Limitations</h2>
+      <ng-container *ngIf="passport.evidence_coverage && objectKeys(passport.evidence_coverage).length; else noCoverage">
+        <div class="coverage-block" *ngFor="let type of ['invoice', 'po', 'gr']">
+          <ng-container *ngIf="passport.evidence_coverage[type] as cov">
+            <p class="doc-info-block-title">{{ docTypeLabel(type) }}</p>
+
+            <div class="kv full-row" *ngIf="cov.required_evidence_detected.length">
+              <span class="kv-label">Required Evidence Detected</span>
+              <span class="kv-value">{{ cov.required_evidence_detected.join(', ') }}</span>
+            </div>
+
+            <div class="kv full-row" *ngIf="cov.critical_evidence_gaps.length">
+              <span class="kv-label">Critical Evidence Gap</span>
+              <span class="risk-chip integrity-warning" *ngFor="let g of cov.critical_evidence_gaps" style="margin-right:6px;">{{ g }}</span>
+            </div>
+
+            <div class="kv full-row" *ngIf="cov.non_critical_limitations.length">
+              <span class="kv-label">Non-critical Evidence Limitation</span>
+              <span class="kv-value">{{ cov.non_critical_limitations.join(', ') }}</span>
+            </div>
+
+            <div class="kv full-row" *ngIf="cov.auditor_corrected_evidence.length">
+              <span class="kv-label">Manually Added / Corrected by Auditor</span>
+              <span class="kv-value">{{ cov.auditor_corrected_evidence.join(', ') }}</span>
+            </div>
+
+            <p class="muted-note" *ngIf="!cov.critical_evidence_gaps.length">
+              No critical evidence gaps were identified. Optional undetected signals do not affect the current audit conclusion.
+            </p>
+          </ng-container>
+        </div>
+      </ng-container>
+      <ng-template #noCoverage><p class="muted-note">No authenticity evidence recorded yet.</p></ng-template>
     </div>
 
     <!-- Anomaly Findings -->
@@ -152,12 +222,12 @@
       <h2 class="section-title"><i class="ph-duotone ph-detective"></i> Anomaly Findings</h2>
       <ng-container *ngIf="passport.anomalies?.length; else noAnomalies">
         <div class="anomaly-row" *ngFor="let a of passport.anomalies">
-          <span class="risk-chip" [ngClass]="'risk-' + a.severity">{{ a.severity }}</span>
+          <span class="risk-chip" [ngClass]="'risk-' + a.severity">{{ titleCase(a.severity) }}</span>
           <span class="kv-value">{{ a.detected_pattern || a.anomaly_type }}</span>
-          <span class="cell-muted">{{ a.status }}</span>
+          <span class="cell-muted">{{ titleCase(a.status) }}</span>
         </div>
       </ng-container>
-      <ng-template #noAnomalies><p class="muted-note">No anomalies detected.</p></ng-template>
+      <ng-template #noAnomalies><p class="muted-note">No Anomalies Detected</p></ng-template>
     </div>
 
     <!-- Auditor Review Steps -->
@@ -177,7 +247,7 @@
       <h2 class="section-title"><i class="ph-duotone ph-arrow-u-up-left"></i> Correction &amp; Resubmission History</h2>
       <ng-container *ngIf="passport.send_back_cycles?.length; else noCycles">
         <div class="cycle-block" *ngFor="let c of passport.send_back_cycles">
-          <p class="cycle-title">Cycle {{ c.cycle_number }} — {{ c.cycle_status }}</p>
+          <p class="cycle-title">Cycle {{ c.cycle_number }} — {{ titleCase(c.cycle_status) }}</p>
           <div class="kv"><span class="kv-label">Sent back by</span><span class="kv-value">{{ c.sent_back_by_name }} · {{ formatDateTime(c.sent_back_at) }}</span></div>
           <div class="kv" *ngIf="c.return_reason_category"><span class="kv-label">Reason</span><span class="kv-value">{{ c.return_reason_category }}</span></div>
           <div class="kv" *ngIf="c.auditor_instruction"><span class="kv-label">Instruction</span><span class="kv-value">{{ c.auditor_instruction }}</span></div>
@@ -189,12 +259,12 @@
       <ng-template #noCycles><p class="muted-note">No correction cycles for this record.</p></ng-template>
     </div>
 
-    <!-- Final Decision -->
+    <!-- Final Audit Decision -->
     <div class="passport-section">
-      <h2 class="section-title"><i class="ph-duotone ph-gavel"></i> Final Decision</h2>
+      <h2 class="section-title"><i class="ph-duotone ph-gavel"></i> Final Audit Decision</h2>
       <ng-container *ngIf="passport.audit_history?.length; else noDecision">
-        <div class="cycle-block" *ngFor="let h of passport.audit_history">
-          <p class="cycle-title">{{ historyLabel(h.action) }}</p>
+        <div class="cycle-block" *ngFor="let h of passport.audit_history; let last = last">
+          <p class="cycle-title">{{ decisionEntryLabel(h.action, last) }}</p>
           <div class="kv"><span class="kv-label">Auditor</span><span class="kv-value">{{ h.reviewer }} · {{ formatDateTime(h.reviewed_at) }}</span></div>
           <div class="kv" *ngIf="h.remarks"><span class="kv-label">Remark</span><span class="kv-value">{{ h.remarks }}</span></div>
         </div>
@@ -205,8 +275,11 @@
     <!-- Audit Activity Timeline -->
     <div class="passport-section">
       <h2 class="section-title"><i class="ph-duotone ph-clock-counter-clockwise"></i> Audit Activity Timeline</h2>
+      <p class="legacy-notice" *ngIf="passport.legacy_notice">
+        <i class="ph-duotone ph-info"></i> Legacy Record Notice: The final decision was recorded before guided review-step tracking was completed.
+      </p>
       <div class="timeline-row" *ngFor="let ev of passport.timeline_events">
-        <span class="risk-chip" [ngClass]="ev.status === 'completed' ? 'integrity-verified' : 'integrity-not_recorded'">{{ ev.status }}</span>
+        <span class="risk-chip" [ngClass]="ev.status === 'completed' ? 'integrity-verified' : (ev.status === 'action_required' ? 'integrity-warning' : 'integrity-not_recorded')">{{ titleCase(ev.status) }}</span>
         <span class="kv-value">{{ ev.label }}</span>
         <span class="cell-muted">{{ ev.detail }}</span>
         <span class="cell-muted" *ngIf="ev.timestamp">{{ formatDateTime(ev.timestamp) }}</span>

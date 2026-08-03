@@ -27,6 +27,7 @@ from routes.authenticity import generate_invoice_authenticity_if_missing, genera
 from routes.ai_assistant import _build_case_context
 from routes.auditor import build_comparison
 from helpers.transaction_packages import get_transaction_context_for_document
+from helpers.evidence_corrections import get_corrections_for
 from helpers.time_format import to_utc_iso, serialize_row_datetimes
 from config import Config
 
@@ -1648,6 +1649,200 @@ def _compute_document_integrity(cursor, comparison):
     return {'overall_status': overall_status, 'documents': documents_detail}
 
 
+# ------------------------------------------------------------
+# AUDIT EVIDENCE PASSPORT — Evidence Coverage & Limitations
+#
+# Reads the ALREADY-COMPUTED, ALREADY-STORED ai_visual_result JSONB from
+# authenticity_checks (populated by helpers/authenticity_check.py's
+# run_authenticity_check(), which already classifies every evidence
+# signal's required-ness via _required_for() — signature is never
+# required, company_logo is optional on PO/GR, stamp depends on
+# helpers/auth_rules.py's AUTH_RULES per document type). This is a pure
+# read of that existing classification, plus any auditor-made
+# authenticity_evidence_corrections — no new AI call, no new
+# authenticity rule.
+# ------------------------------------------------------------
+_EVIDENCE_LABELS = {
+    'company_logo':     'Company Logo',
+    'company_name':     'Company Name',
+    'supplier_address': 'Supplier Address',
+    'stamp':             'Company Stamp / Chop',
+    'signature':          'Signature',
+}
+
+
+def _build_evidence_coverage(cursor, document_id, comparison):
+    coverage = {}
+    for doc_type in ('invoice', 'po', 'gr'):
+        if not comparison.get(doc_type):
+            continue
+        cursor.execute(
+            'SELECT ai_visual_result, authenticity_status FROM authenticity_checks '
+            'WHERE document_id = %s AND document_type = %s',
+            (document_id, doc_type)
+        )
+        row = cursor.fetchone()
+        if not row or not row['ai_visual_result']:
+            continue
+
+        evidence = (row['ai_visual_result'] or {}).get('document_visual_evidence') or {}
+        status = row['authenticity_status']
+
+        required_detected = []
+        critical_gaps = []
+        non_critical_limitations = []
+        for key, entry in evidence.items():
+            label = _EVIDENCE_LABELS.get(key, entry.get('label') or key)
+            required = bool(entry.get('required'))
+            detected = bool(entry.get('detected'))
+            if detected and required:
+                required_detected.append(label)
+            elif not detected and required:
+                critical_gaps.append(label)
+            elif not detected and not required and status != 'passed':
+                # Only surfaced when this document didn't cleanly pass —
+                # an optional signal missing on an otherwise-clean
+                # document isn't worth reporting (see the frontend's "No
+                # critical evidence gaps" fallback for that clean case).
+                non_critical_limitations.append(label)
+
+        corrections = get_corrections_for(document_id, doc_type)
+        corrected_labels = sorted({
+            _EVIDENCE_LABELS.get(c['evidence_type'], c['evidence_type'])
+            for c in corrections
+        })
+
+        coverage[doc_type] = {
+            'required_evidence_detected': required_detected,
+            'critical_evidence_gaps':     critical_gaps,
+            'non_critical_limitations':   non_critical_limitations,
+            'auditor_corrected_evidence': corrected_labels,
+        }
+
+    return coverage
+
+
+# ------------------------------------------------------------
+# AUDIT EVIDENCE PASSPORT — Audit Activity Timeline
+#
+# A dedicated, chronologically-sorted event list built entirely from
+# data get_evidence_passport() already gathers elsewhere (uploaded_at/
+# ocr_confidence via _build_case_context, the guided review_steps
+# query, the send_back_cycles query, audit_history via _build_case_
+# context). Deliberately NOT this file's shared _build_timeline_events()
+# above, which Finance's own Correction Detail workflow timeline (GET
+# /documents/<id>/timeline) also consumes — that function, and its
+# "Final Approval" wording, stay untouched for that other page. Every
+# event here is read-only presentation of already-recorded state; no
+# review-step/decision logic is computed or altered.
+# ------------------------------------------------------------
+_PASSPORT_REVIEW_STEP_ORDER = ['three_way_matching', 'exception_review', 'authenticity_review', 'anomaly_review']
+_PASSPORT_REVIEW_STEP_LABELS = {
+    'three_way_matching':  'Three-Way Matching Review',
+    'exception_review':    'Exception Review',
+    'authenticity_review': 'Authenticity Review',
+    'anomaly_review':      'Anomaly Review',
+}
+
+
+def _build_passport_timeline(context, review_steps, send_back_cycles):
+    events = []
+    uploaded_at = context.get('uploaded_at')
+
+    events.append({
+        'event': 'document_uploaded', 'label': 'Document Uploaded',
+        'status': 'completed', 'detail': None, 'timestamp': uploaded_at,
+    })
+
+    ocr_confidence = context.get('ocr_confidence')
+    if ocr_confidence is not None:
+        events.append({
+            'event': 'ocr_extraction', 'label': 'OCR Extraction',
+            'status': 'completed', 'detail': f'Confidence: {ocr_confidence:.2f}%',
+            # OCR runs synchronously during upload in this pipeline —
+            # there's no separately-tracked OCR-completed timestamp, so
+            # uploaded_at is the accurate proxy, not a new assumption.
+            'timestamp': uploaded_at,
+        })
+    else:
+        events.append({
+            'event': 'ocr_extraction', 'label': 'OCR Extraction',
+            'status': 'pending', 'detail': 'Awaiting extraction', 'timestamp': None,
+        })
+
+    for step in _PASSPORT_REVIEW_STEP_ORDER:
+        entry = review_steps.get(step)
+        if entry:
+            events.append({
+                'event': step, 'label': _PASSPORT_REVIEW_STEP_LABELS[step],
+                'status': 'completed',
+                'detail': f"Reviewed by {entry['reviewer_name']}",
+                'timestamp': entry['reviewed_at'],
+            })
+
+    # Need Review / Send Back / Resubmission — every individual auditor
+    # decision in chronological order (not just the latest, per
+    # _build_case_context's own "last element is most recent" ordering),
+    # so a case sent back more than once shows each cycle. Only the LAST
+    # approved/returned entry is framed as this case's Final Audit
+    # Decision — an earlier need_review/returned that was later
+    # superseded by an actual Approve is not "final".
+    audit_history = context.get('audit_history') or []
+    for i, h in enumerate(audit_history):
+        is_last = (i == len(audit_history) - 1)
+        action = h.get('action')
+        if action == 'need_review':
+            events.append({
+                'event': 'need_review', 'label': 'Marked for Further Review',
+                'status': 'action_required', 'detail': h.get('remarks'),
+                'timestamp': h.get('reviewed_at'),
+            })
+        elif action == 'returned':
+            events.append({
+                'event': 'returned',
+                'label': 'Final Audit Decision' if is_last else 'Sent Back to Finance',
+                'status': 'action_required', 'detail': 'Sent Back to Finance',
+                'timestamp': h.get('reviewed_at'),
+            })
+        elif action == 'approved':
+            events.append({
+                'event': 'approved',
+                'label': 'Final Audit Decision' if is_last else 'Approved',
+                'status': 'completed', 'detail': 'Approved',
+                'timestamp': h.get('reviewed_at'),
+            })
+
+    for cycle in (send_back_cycles or []):
+        if cycle.get('resubmitted_at'):
+            events.append({
+                'event': 'resubmitted', 'label': 'Resubmitted by Finance',
+                'status': 'completed',
+                'detail': f"Cycle {cycle['cycle_number']}" if cycle.get('cycle_number') else None,
+                'timestamp': cycle['resubmitted_at'],
+            })
+
+    # Chronological order — to_utc_iso()'s fixed-width 'YYYY-MM-DDTHH:MM:SSZ'
+    # format sorts correctly as plain strings. An event with no timestamp
+    # (only "OCR Extraction: Awaiting extraction" when it hasn't run
+    # yet) sorts last, since it hasn't happened.
+    events.sort(key=lambda e: (e['timestamp'] is None, e['timestamp'] or ''))
+
+    # Legacy Record Notice — a case whose final decision timestamp
+    # predates a guided review-step timestamp means the auditor decided
+    # before this record's guided checklist was completed (or existed).
+    # Purely a display note computed from existing timestamps; no
+    # historical row is read differently or altered.
+    legacy_notice = False
+    final_events = [e for e in events if e['label'] == 'Final Audit Decision']
+    if final_events:
+        final_ts = final_events[-1]['timestamp']
+        step_timestamps = [entry['reviewed_at'] for entry in review_steps.values() if entry.get('reviewed_at')]
+        if final_ts and any(ts and ts > final_ts for ts in step_timestamps):
+            legacy_notice = True
+
+    return events, legacy_notice
+
+
 def _require_auditor_or_admin():
     """Same role-check the comparison endpoint (routes/auditor.py::
     get_record_comparison) already uses — the Evidence Passport reads
@@ -1705,8 +1900,8 @@ def get_evidence_passport(document_id):
 
         context = _build_case_context(cursor, document_id)
         integrity = _compute_document_integrity(cursor, comparison)
+        evidence_coverage = _build_evidence_coverage(cursor, document_id, comparison)
         transaction_context = get_transaction_context_for_document(document_id, 'invoice')
-        timeline_events = _build_timeline_events(context)
 
         # PO/GR OCR confidence — build_comparison() only returns the
         # invoice side of this; a small side read against the same
@@ -1758,6 +1953,12 @@ def get_evidence_passport(document_id):
             serialize_row_datetimes(c)
             send_back_cycles.append(c)
 
+        # Audit Activity Timeline — built AFTER review_steps/send_back_
+        # cycles above so it can fold them into one chronological list
+        # (see _build_passport_timeline's own docstring for why this is
+        # a dedicated builder, not the shared _build_timeline_events()).
+        timeline_events, legacy_notice = _build_passport_timeline(context, review_steps, send_back_cycles)
+
         conn.close()
 
         return jsonify({
@@ -1766,6 +1967,7 @@ def get_evidence_passport(document_id):
             'transaction_context': transaction_context,
             'exception':           context.get('exception'),
             'authenticity':        context.get('authenticity'),
+            'evidence_coverage':   evidence_coverage,
             'anomalies':           context.get('anomalies') or [],
             'audit_history':       context.get('audit_history') or [],
             'ocr_confidence':      ocr_confidence,
@@ -1773,6 +1975,7 @@ def get_evidence_passport(document_id):
             'review_steps':        review_steps,
             'send_back_cycles':    send_back_cycles,
             'timeline_events':     timeline_events,
+            'legacy_notice':       legacy_notice,
         }), 200
 
     except Exception as e:

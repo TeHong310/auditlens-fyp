@@ -18383,3 +18383,127 @@ Setup/config needed:
      Recorded" for them, by design - never backfilled, since a baseline
      recorded after the fact wouldn't prove anything) until each is
      next re-uploaded.
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Backend (auditlens-backend/routes/documents.py only):
+    - Transaction Summary bug fix is entirely frontend (see below) - no
+      backend change needed there, comparison.po/gr were already in the
+      response.
+    - New _build_evidence_coverage(cursor, document_id, comparison):
+      Evidence Coverage & Limitations section. Reads the ALREADY-STORED
+      authenticity_checks.ai_visual_result JSONB (populated by
+      helpers/authenticity_check.py's run_authenticity_check(), which
+      already classifies every evidence signal's required-ness via the
+      existing _required_for() - signature never required, company_logo
+      optional on PO/GR, stamp required-ness from AUTH_RULES per
+      document type) plus helpers/evidence_corrections.py's
+      get_corrections_for(). No new AI call, no new authenticity rule -
+      a pure read of classification that already existed, bucketed into
+      required-evidence-detected / critical-evidence-gaps / non-
+      critical-limitations (only shown when the document didn't cleanly
+      pass) / auditor-corrected-evidence.
+    - New _build_passport_timeline(context, review_steps,
+      send_back_cycles): a DEDICATED Audit Activity Timeline builder for
+      the Passport only - deliberately NOT the existing shared
+      _build_timeline_events() (left completely untouched), which
+      Finance's own Correction Detail workflow timeline (GET
+      /documents/<id>/timeline) also consumes and must keep saying
+      "Final Approval" exactly as before. The new builder folds
+      Document Uploaded/OCR Extraction/all 4 guided review steps (in
+      workflow order, correctly labelled "Three-Way Matching Review"
+      etc.)/every individual Need Review/Send Back/Approve decision/
+      every Resubmission into one list, sorted chronologically by
+      timestamp, with only the LAST approved/returned entry labelled
+      "Final Audit Decision" (never "Final Approval" - no payment-
+      approval wording anywhere in this new output). Also computes
+      legacy_notice: true when that final decision's timestamp predates
+      a guided review-step timestamp (a Legacy Record Notice, purely
+      informational - no historical row is read differently or
+      altered).
+    - get_evidence_passport(): reordered so review_steps/
+      send_back_cycles are computed before the timeline (the new
+      builder needs both), added evidence_coverage and legacy_notice to
+      the response. _compute_document_integrity() (SHA-256 calculation)
+      and every matching/exception/authenticity/anomaly helper this
+      route already called are UNCHANGED - only new fields added to the
+      response.
+  Frontend (auditlens-frontend/.../evidence-passport/ only):
+    - Transaction Summary: now derives Complete/Incomplete/Standalone
+      purely from which documents are actually linked
+      (comparison.po/gr presence) instead of only checking
+      transaction_context - fixes the reported bug where a fully 3-way-
+      matched standalone invoice (real Invoice+PO+GR, no formal Finance
+      Transaction Package) incorrectly read "Standalone invoice". Shows
+      which document is missing for an incomplete package, and
+      "Documents Included". Package Creation Method is deliberately NOT
+      shown - checked migrations/2026-07-23_create_transaction_
+      packages_tables.sql and confirmed transaction_packages has no
+      such column; the task said not to add a new DB field for this, so
+      it's omitted rather than fabricated.
+    - Header now shows Passport ID (EVP-<document_id>, purely derived,
+      no new field), Passport Status (Draft/Finalised/Correction
+      Required/Further Review - same audit_history-derived logic
+      auditor-record-detail's own Passport card already uses), and
+      Generated <date/time> (Asia/Kuala_Lumpur, computed client-side at
+      load time via the existing shared formatMalaysiaDateTime -
+      src/app/shared/datetime.util.ts - untouched). Invoice/PO/GR
+      business dates still go through the page's own date-only
+      formatDate(), never timezone-shifted.
+    - Document Integrity: "Not Yet Recorded" relabelled "Baseline Not
+      Available" with the requested explanation text; Verified/Warning
+      logic itself (backend) is unchanged.
+    - Auditor Review Steps: now always rendered in fixed workflow order
+      (Three-Way Matching Review -> Exception Review -> Authenticity
+      Review -> Anomaly Review) instead of whatever order the DB
+      query happened to return rows in.
+    - Wording consistency: added titleCase()/matchOverallLabel() so
+      match/authenticity/anomaly status and severity values (some
+      stored UPPERCASE, some lowercase) display consistently, and fixed
+      the "No exceptions/anomalies detected." sentences to "No
+      Exceptions Detected"/"No Anomalies Detected".
+    - Print/PDF (@media print + a new @page block in the component
+      CSS): explicit dark, high-contrast colors for every text class
+      instead of relying on the page's dark-theme CSS variables (which
+      read as washed-out grey on white paper); break-inside: avoid
+      moved from the whole .passport-section down to individual
+      rows/blocks, so a long section (Timeline, Evidence Coverage) can
+      now flow naturally onto a second page instead of being forced
+      onto one; page numbers ("Page X of Y") and a "Generated by
+      AuditLens" footer via @page's @bottom-right/@bottom-left margin
+      boxes. Still window.print() - no new PDF library, per the
+      decision already made and confirmed with the user when this page
+      was first built.
+
+Why:
+  Follow-up correctness/reporting pass on the Evidence Passport shipped
+  earlier this session: the Transaction Summary bug was actively
+  misleading (a fully-matched 3-way transaction reading as
+  "standalone"), "Not Yet Recorded" for document integrity read as an
+  ambiguous warning instead of the neutral "no baseline exists yet"
+  state it actually is, the exported PDF was low-contrast and hard to
+  read on paper, and "Final Approval" is payment-approval language that
+  doesn't belong in an AUDIT decision timeline.
+
+Verified:
+  python tests/extraction/test_document_hash_integrity.py - all cases
+  still pass (SHA-256 calculation/_compute_document_integrity are
+  unchanged by this pass). python -c "import app" - clean import, new
+  helpers and the reordered route register without error. npx ng build
+  --configuration production - clean compile, including the new @page
+  margin-box CSS; only the same pre-existing bundle-budget warnings on
+  two unrelated files this task never touched. Did not run the full
+  backend suite or Playwright, per this task's own scope. Confirmed via
+  git diff --stat that only routes/documents.py and the evidence-
+  passport component's 3 files changed - matching logic, exception
+  rules, authenticity rules, anomaly rules, the guided review sequence,
+  Approve/Send Back/Need Review routes, database history, and sidebar
+  pages are all untouched.
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy both the backend
+     (Docker web service) and the frontend static site.
+  2. Backend redeploy required (routes/documents.py changed only - no
+     new migration, no new dependency, no new environment variable).
