@@ -256,12 +256,12 @@
     </div>
   </div>
 
-  <!-- Recent Upload Queue -->
+  <!-- Recent Transaction Packages -->
   <div class="table-card">
     <div class="table-header">
       <div>
-        <h2 class="section-title">Recent Upload Queue</h2>
-        <p class="section-subtitle">Click "Attach PO/GR" on any invoice to upload supporting documents</p>
+        <h2 class="section-title">Recent Transaction Packages</h2>
+        <p class="section-subtitle">Click "Attach PO/GR" on any package or invoice missing a supporting document</p>
       </div>
       <div class="table-actions">
         <button class="btn-filter">Filter</button>
@@ -272,10 +272,10 @@
       <table class="data-table">
         <thead>
           <tr>
-            <th>File Name</th>
+            <th>Invoice / Package</th>
+            <th>Related Documents</th>
             <th>Upload Date</th>
-            <th>Type</th>
-            <th>Status</th>
+            <th>Package Status</th>
             <th>Action</th>
           </tr>
         </thead>
@@ -289,27 +289,27 @@
             </td>
           </tr>
           <tr *ngFor="let doc of paginatedDocuments"
-            [class.selected-row]="selectedDocumentId === doc.document_id">
+            [class.selected-row]="doc.documentIds.includes(selectedDocumentId)">
             <td class="doc-name">
               <div class="doc-name-wrapper">
                 <div class="doc-icon">
                   <i class="ph-duotone ph-file-text" style="font-size:14px;"></i>
                 </div>
-                {{ doc.file_name }}
+                {{ doc.invoiceLabel }}
               </div>
             </td>
-            <td>{{ formatDate(doc.uploaded_at) }}</td>
-            <td><span class="type-badge">{{ doc.file_type?.toUpperCase() }}</span></td>
+            <td class="related-docs-cell">{{ doc.relatedDocumentsLabel }}</td>
+            <td>{{ formatDate(doc.uploadedAt) }}</td>
             <td>
-              <span class="badge" [ngClass]="getStatusClass(doc.status)">
-                {{ getStatusLabel(doc.status) }}
+              <span class="badge" [ngClass]="doc.statusClass">
+                {{ doc.statusLabel }}
               </span>
             </td>
             <td>
               <div style="display:flex; gap:6px;">
-                <button class="btn-view" (click)="viewDocument(doc)">View</button>
-                <button class="btn-delete" (click)="deleteDocument(doc)">Delete</button>
-                <button class="btn-attach" (click)="selectDocumentForSupporting(doc)">
+                <button class="btn-view" (click)="viewRow(doc)">View</button>
+                <button class="btn-delete" *ngIf="doc.eligibleForDelete" (click)="deleteRow(doc)">Delete</button>
+                <button class="btn-attach" *ngIf="doc.showAttach" (click)="attachRow(doc)">
                   Attach PO/GR
                 </button>
               </div>

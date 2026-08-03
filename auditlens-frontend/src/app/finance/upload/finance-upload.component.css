@@ -350,6 +350,15 @@
   color: var(--text-primary);
 }
 
+.related-docs-cell {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
 .type-badge {
   padding: 2px 8px;
   background: var(--bg-hover);

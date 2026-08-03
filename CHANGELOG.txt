@@ -18761,3 +18761,84 @@ Setup/config needed:
      site (no backend change this time, so a backend redeploy isn't
      required, though Render will likely still rebuild it as part of
      the same deploy).
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Frontend only (auditlens-frontend/.../finance/upload/finance-upload.
+  component.ts/.html/.css) - no backend touched.
+    - "Recent Upload Queue" renamed "Recent Transaction Packages" and
+      regrouped to one row per real transaction package, same problem/
+      fix shape as the earlier Finance Report grouping fix.
+    - Added loadPoGrLists() and loadTransactionPackages(), copied
+      unchanged from finance-home.component.ts (same GET /documents/
+      po/list + GET /documents/gr/list for a standalone invoice's own
+      linked PO/GR, same GET /transaction-packages + GET /transaction-
+      packages/<id> + packageGroupByDocId map shape for real package
+      membership) - the exact same grouping Finance Home's own Document
+      Processing Queue already uses, not document_id, vendor name, or
+      guessed PO numbers.
+    - New computeGroupedRows()/buildRow(): groups invoiceRecords (the
+      existing GET /documents/ upload-list response, previously shown
+      one row per invoice) by package; an invoice not linked into any
+      package stays its own row, exactly like Finance Home's standalone
+      rows. Each row shows every invoice number together, the unique
+      PO/GR numbers (Set-deduped, never repeated), and the newest
+      upload date among its members.
+    - Columns now Invoice / Package, Related Documents, Upload Date,
+      Package Status, Action (previously File Name, Upload Date, Type,
+      Status, Action).
+    - Package Status is a 5-value cascade: Returned for Correction (any
+      member returned) -> Under Review (any member under review) ->
+      Approved (every member approved) -> Missing Documents (no review
+      activity yet AND the package has no PO or no GR linked at all,
+      checked at the package level since one shared PO/GR can cover
+      multiple invoices) -> otherwise Pending.
+    - Action column: View reuses the existing viewDocument() (opens the
+      raw file) for a standalone row, or navigates to the existing
+      finance/transactions/detail?id=<transaction_package_id> page for
+      a package row - no new page. Attach PO/GR only renders when the
+      row is genuinely missing a PO or a GR (reuses the existing
+      selectDocumentForSupporting() unchanged, targeting the row's
+      highest-priority member invoice). Delete only renders for a
+      standalone row still in an eligible draft/unprocessed state
+      (ocr_processing/ocr_done, i.e. hasn't reached the audit workflow
+      yet) - never for a formal transaction package regardless of
+      status, and never once a standalone invoice reaches under_review/
+      approved/returned. deleteDocument() itself (the confirm dialog,
+      the DELETE call, error handling) is unchanged; only its local-
+      state-refresh line was adapted to filter invoiceRecords and re-
+      group instead of filtering the now-grouped this.documents
+      directly - a direct, necessary consequence of this.documents
+      changing shape, not a change to the delete logic itself.
+    - Removed getStatusClass()/getStatusLabel(): the old per-row raw-
+      status badge helpers, now unused since Package Status replaced
+      the old Status column and computes its own label/class inline.
+    - Untouched, confirmed by reading the rest of the page: ZIP upload,
+      individual upload/drag-drop, staged-file document-type
+      confirmation ("Confirm Document Types"), the Processing Summary
+      panel, and the Upload Queue Status table all read their own
+      separate state (stagedFiles/uploadQueue) and were not touched.
+      No "Create Package" feature exists anywhere on this page to
+      preserve (confirmed by reading the full HTML/TS - nothing
+      resembling it was found here, only on other Finance pages).
+
+Why:
+  Same underlying problem as the Finance Report fix: a Finance user
+  who grouped several invoices into one transaction package saw that
+  one real case fragmented into several disconnected upload-queue rows
+  instead of one row per package, making it hard to judge a package's
+  true completeness/status at a glance from the Upload page.
+
+Verified:
+  npx ng build --configuration production - clean compile; only the
+  same pre-existing bundle-budget warnings on two unrelated files this
+  task never touched. Did not run backend tests or Playwright, per this
+  task's own scope (no backend file was changed to test). git diff
+  --stat confirms only the 3 finance-upload component files changed -
+  no backend file, no new endpoint, no other page/component touched.
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy the frontend static
+     site (no backend change, so a backend redeploy isn't required).

@@ -2,10 +2,20 @@ import { Component, OnInit, OnDestroy, ElementRef, ViewChild, ChangeDetectorRef 
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders, HttpEventType, HttpEvent } from '@angular/common/http';
+import { forkJoin, of } from 'rxjs';
+import { catchError } from 'rxjs/operators';
 import JSZip from 'jszip';
 import { environment } from '../../../environments/environment';
 import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
 import { FinanceUserMenuComponent } from '../shared/finance-user-menu.component';
+
+// Same "pick the most urgent member" ranking finance-home.component.ts
+// ::computeQueueGroups() already uses to choose a group's primary doc
+// (status/vendor display, View/Attach/Delete targeting) — copied
+// unchanged.
+const STATUS_PRIORITY: Record<string, number> = {
+  returned: 5, under_review: 4, resubmitted: 4, ocr_processing: 3, ocr_done: 2, approved: 1,
+};
 
 // The 3 document types this page recognizes from a filename — kept
 // separate from any backend document_type enum (e.g. authenticity_
@@ -69,7 +79,31 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
   @ViewChild('poInput') poInputRef!: ElementRef;
   @ViewChild('grInput') grInputRef!: ElementRef;
 
+  // "Recent Transaction Packages" — one row per real transaction
+  // package (or standalone invoice), built by computeGroupedRows()
+  // below once documents/PO+GR lists/packages have all loaded. This is
+  // the table/pagination-facing array; the underlying per-invoice
+  // records live in invoiceRecords.
   documents: any[] = [];
+  private invoiceRecords: any[] = [];
+  private documentsLoaded: boolean = false;
+
+  // Package grouping — reuses the EXACT SAME data sources and shapes
+  // finance-home.component.ts's own Document Processing Queue groups
+  // by: GET /documents/po/list + GET /documents/gr/list (for standalone
+  // invoices' own directly-linked PO/GR) and GET /transaction-packages
+  // + GET /transaction-packages/<id> (for real transaction_package_id
+  // membership) — not document_id, vendor name, or guessed PO numbers.
+  // No new endpoint, no new grouping logic: copied unchanged from
+  // finance-home.component.ts.
+  private poList: any[] = [];
+  private grList: any[] = [];
+  private poByDocId: Map<number, string> = new Map();
+  private grNumbersByDocId: Map<number, string[]> = new Map();
+  private poGrLoaded: boolean = false;
+  private packageGroupByDocId: Map<number, { packageId: number; invoiceNumbers: string[]; poNumbers: string[]; grNumbers: string[] }> = new Map();
+  private packagesLoaded: boolean = false;
+
   isLoading: boolean = false;
   isUploading: boolean = false;
   errorMessage: string = '';
@@ -112,7 +146,13 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
 
   ngOnInit() {
     this.loadQueueFromStorage();
+    // Fired together, in parallel — whichever resolves last is the one
+    // that actually produces the grouped rows (see computeGroupedRows()
+    // 's own gate), same multi-source-load pattern finance-home.
+    // component.ts uses for its own Document Processing Queue.
     this.loadDocuments();
+    this.loadPoGrLists();
+    this.loadTransactionPackages();
   }
 
   ngOnDestroy() {
@@ -140,12 +180,203 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
       headers: this.getHeaders()
     }).subscribe({
       next: (res) => {
-        this.documents = res.documents;
-        this.isLoading = false;
-        this.cdr.detectChanges();
+        this.invoiceRecords = res.documents;
+        this.documentsLoaded = true;
+        this.computeGroupedRows();
       },
       error: () => { this.isLoading = false; }
     });
+  }
+
+  // Copied unchanged from finance-home.component.ts::loadPoGrLists() —
+  // reuses the EXISTING GET /documents/po/list and GET /documents/gr/
+  // list endpoints (already finance-scoped server-side) to know, per
+  // standalone invoice, whether its own directly-linked PO/GR exists.
+  loadPoGrLists() {
+    forkJoin({
+      po: this.http.get<any>(`${this.apiUrl}/documents/po/list`, { headers: this.getHeaders() })
+        .pipe(catchError(() => of({ purchase_orders: [] }))),
+      gr: this.http.get<any>(`${this.apiUrl}/documents/gr/list`, { headers: this.getHeaders() })
+        .pipe(catchError(() => of({ goods_receipts: [] }))),
+    }).subscribe(({ po, gr }) => {
+      this.poList = po.purchase_orders || [];
+      this.grList = gr.goods_receipts || [];
+      this.poByDocId = new Map();
+      for (const p of this.poList) {
+        if (p.po_number) this.poByDocId.set(p.document_id, p.po_number);
+      }
+      this.grNumbersByDocId = new Map();
+      for (const g of this.grList) {
+        if (!g.gr_number) continue;
+        const arr = this.grNumbersByDocId.get(g.document_id) || [];
+        arr.push(g.gr_number);
+        this.grNumbersByDocId.set(g.document_id, arr);
+      }
+      this.poGrLoaded = true;
+      this.computeGroupedRows();
+    });
+  }
+
+  // Copied unchanged from finance-home.component.ts::
+  // loadTransactionPackages() — reuses the EXISTING GET /transaction-
+  // packages (list) and GET /transaction-packages/<id> (detail, same
+  // get_package_documents() helper backing it) endpoints. No new
+  // backend endpoint, no transaction-package logic touched.
+  loadTransactionPackages() {
+    this.http.get<any[]>(`${this.apiUrl}/transaction-packages`, { headers: this.getHeaders() })
+      .pipe(catchError(() => of([])))
+      .subscribe((packages: any[]) => {
+        if (!packages.length) {
+          this.packagesLoaded = true;
+          this.computeGroupedRows();
+          return;
+        }
+
+        const requests: { [id: number]: any } = {};
+        for (const pkg of packages) {
+          requests[pkg.id] = this.http.get<any>(`${this.apiUrl}/transaction-packages/${pkg.id}`, { headers: this.getHeaders() })
+            .pipe(catchError(() => of(null)));
+        }
+
+        forkJoin(requests).subscribe((results: any) => {
+          const map = new Map<number, { packageId: number; invoiceNumbers: string[]; poNumbers: string[]; grNumbers: string[] }>();
+          for (const pkg of packages) {
+            const detail = results[pkg.id];
+            const docs = detail?.documents;
+            if (!docs) continue;
+
+            const group = {
+              packageId: pkg.id,
+              invoiceNumbers: Array.from(new Set<string>(docs.invoices.map((d: any) => d.invoice_number).filter(Boolean))),
+              poNumbers: Array.from(new Set<string>(docs.purchase_orders.map((p: any) => p.po_number).filter(Boolean))),
+              grNumbers: Array.from(new Set<string>(docs.goods_receipts.map((g: any) => g.gr_number).filter(Boolean))),
+            };
+            for (const inv of docs.invoices) {
+              map.set(inv.document_id, group);
+            }
+          }
+          this.packageGroupByDocId = map;
+          this.packagesLoaded = true;
+          this.computeGroupedRows();
+        });
+      });
+  }
+
+  // Groups invoiceRecords by real transaction_package_id (via
+  // packageGroupByDocId) into one row per package; an invoice not
+  // linked into any package stays its own row, exactly like Finance
+  // Home's own standalone rows. Needs all 3 loads done.
+  private computeGroupedRows() {
+    if (!this.documentsLoaded || !this.poGrLoaded || !this.packagesLoaded) return;
+
+    const docsByPackageId = new Map<number, any[]>();
+    const standaloneDocs: any[] = [];
+    for (const doc of this.invoiceRecords) {
+      const group = this.packageGroupByDocId.get(doc.document_id);
+      if (group) {
+        const arr = docsByPackageId.get(group.packageId) || [];
+        arr.push(doc);
+        docsByPackageId.set(group.packageId, arr);
+      } else {
+        standaloneDocs.push(doc);
+      }
+    }
+
+    const rows: any[] = [];
+    for (const docs of docsByPackageId.values()) {
+      const group = this.packageGroupByDocId.get(docs[0].document_id)!;
+      rows.push(this.buildRow(group.packageId, docs, group.poNumbers, group.grNumbers));
+    }
+    for (const doc of standaloneDocs) {
+      const poNumber = this.poByDocId.get(doc.document_id);
+      const poNumbers = poNumber ? [poNumber] : [];
+      const grNumbers = this.grNumbersByDocId.get(doc.document_id) || [];
+      rows.push(this.buildRow(null, [doc], poNumbers, grNumbers));
+    }
+
+    rows.sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime());
+    this.documents = rows;
+
+    this.isLoading = false;
+    this.cdr.detectChanges();
+  }
+
+  // One package's (or one standalone invoice's) aggregate row.
+  // poNumbers/grNumbers are already deduped by the caller (package:
+  // from packageGroupByDocId, itself Set-deduped at load time;
+  // standalone: at most one PO / this invoice's own GR numbers).
+  private buildRow(packageId: number | null, docs: any[], poNumbers: string[], grNumbers: string[]): any {
+    const primary = [...docs].sort((a, b) => (STATUS_PRIORITY[b.status] || 0) - (STATUS_PRIORITY[a.status] || 0))[0];
+    const newest = [...docs].sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())[0];
+
+    const invoiceNumbers = Array.from(new Set(docs.map(d => d.invoice_number).filter(Boolean)));
+    const missingDocs = poNumbers.length === 0 || grNumbers.length === 0;
+
+    // Package Status — workflow state (Returned/Under Review/Approved-
+    // only-if-complete) takes priority since it reflects actual auditor
+    // engagement; Missing Documents only applies when no review has
+    // started yet and a required PO/GR is genuinely absent; otherwise
+    // Pending.
+    let statusLabel: string;
+    if (docs.some(d => d.status === 'returned')) statusLabel = 'Returned for Correction';
+    else if (docs.some(d => d.status === 'under_review')) statusLabel = 'Under Review';
+    else if (docs.every(d => d.status === 'approved')) statusLabel = 'Approved';
+    else if (missingDocs) statusLabel = 'Missing Documents';
+    else statusLabel = 'Pending';
+
+    // Delete stays available only for an eligible draft/unprocessed
+    // STANDALONE upload (still mid-OCR-pipeline, never reached the
+    // audit workflow) — never for a formal transaction package,
+    // regardless of status, and never once a standalone invoice has
+    // reached under_review/approved/returned.
+    const eligibleForDelete = packageId === null && (primary.status === 'ocr_processing' || primary.status === 'ocr_done');
+
+    return {
+      packageId,
+      documentIds: docs.map(d => d.document_id),
+      primaryDoc: primary,
+      invoiceLabel: invoiceNumbers.length ? invoiceNumbers.join(', ') : (docs[0].file_name || '-'),
+      relatedDocumentsLabel: this.formatRelatedDocuments(poNumbers, grNumbers),
+      uploadedAt: newest.uploaded_at,
+      statusLabel,
+      statusClass: this.packageStatusClassFor(statusLabel),
+      showAttach: missingDocs,
+      eligibleForDelete,
+    };
+  }
+
+  private formatRelatedDocuments(poNumbers: string[], grNumbers: string[]): string {
+    const po = poNumbers.length ? `PO: ${poNumbers.join(', ')}` : 'PO: Not Uploaded';
+    const gr = grNumbers.length ? `GR: ${grNumbers.join(', ')}` : 'GR: Not Uploaded';
+    return `${po} · ${gr}`;
+  }
+
+  private packageStatusClassFor(label: string): string {
+    if (label === 'Approved') return 'badge-matched';
+    if (label === 'Returned for Correction') return 'badge-returned';
+    if (label === 'Under Review') return 'badge-review';
+    if (label === 'Missing Documents') return 'badge-returned';
+    return 'badge-pending'; // Pending
+  }
+
+  // Action column wrappers — each extracts the right underlying raw
+  // document from the grouped row and reuses the EXISTING single-
+  // document handlers below unchanged.
+
+  viewRow(row: any) {
+    if (row.packageId) {
+      this.router.navigate(['/finance/transactions/detail'], { queryParams: { id: row.packageId } });
+    } else {
+      this.viewDocument(row.primaryDoc);
+    }
+  }
+
+  attachRow(row: any) {
+    this.selectDocumentForSupporting(row.primaryDoc);
+  }
+
+  deleteRow(row: any) {
+    this.deleteDocument(row.primaryDoc);
   }
 
   onBrowseFiles() {
@@ -736,16 +967,6 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
     this.cdr.detectChanges();
   }
 
-  getStatusClass(status: string): string {
-    switch (status) {
-      case 'ocr_done': return 'badge-processed';
-      case 'under_review': return 'badge-review';
-      case 'approved': return 'badge-matched';
-      case 'returned': return 'badge-returned';
-      default: return 'badge-pending';
-    }
-  }
-
   currentPage: number = 1;
   pageSize: number = 5;
 
@@ -773,8 +994,12 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
     headers: new HttpHeaders({ 'Authorization': `Bearer ${token}` })
   }).subscribe({
     next: () => {
-      this.documents = this.documents.filter(d => d.document_id !== doc.document_id);
-      this.cdr.detectChanges();
+      // this.documents now holds GROUPED rows (see computeGroupedRows()
+      // above), not raw per-invoice records — remove the deleted
+      // invoice from the underlying invoiceRecords and re-derive the
+      // grouped view, rather than filtering this.documents directly.
+      this.invoiceRecords = this.invoiceRecords.filter(d => d.document_id !== doc.document_id);
+      this.computeGroupedRows();
     },
     error: (err) => {
       this.errorMessage = err.error?.error || 'Failed to delete.';
@@ -782,17 +1007,6 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
     }
   });
 }
-
-  getStatusLabel(status: string): string {
-    switch (status) {
-      case 'ocr_done': return 'Processed';
-      case 'under_review': return 'Under Review';
-      case 'approved': return 'Approved';
-      case 'returned': return 'Returned';
-      case 'ocr_processing': return 'Processing...';
-      default: return status;
-    }
-  }
 
   formatDate(dateStr: string): string {
     if (!dateStr) return '-';
