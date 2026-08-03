@@ -522,6 +522,23 @@
 .btn-wt-mark:hover:not(:disabled) { filter: brightness(1.1); }
 .btn-wt-mark:disabled { opacity: 0.6; cursor: not-allowed; }
 
+/* Small, visually secondary vs. btn-wt-view/btn-wt-mark — pure
+   navigation to the previous step's detail page, never a status
+   change, so it shouldn't compete for attention with either. */
+.btn-wt-prev {
+  padding: 5px 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-wt-prev:hover { background: var(--bg-hover); color: var(--text-primary); }
+
 .markstep-error-box {
   display: flex;
   align-items: center;

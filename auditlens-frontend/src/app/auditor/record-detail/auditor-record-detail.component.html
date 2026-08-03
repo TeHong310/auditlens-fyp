@@ -321,6 +321,11 @@
                     Reviewed by {{ reviewSteps['exception_review'].reviewer_name }} · {{ formatDateTime(reviewSteps['exception_review'].reviewed_at) }}
                   </p>
                   <div class="wt-step-actions">
+                    <!-- ← Previous Step (Section 5) — shown only while this
+                         is the step the auditor is currently working on;
+                         pure navigation to the previous step's own detail
+                         page, never touches Reviewed status. -->
+                    <button class="btn-wt-prev" *ngIf="currentReviewStep === 'exception_review' && previousReviewStep" (click)="openPreviousStepDetails()">← Previous Step</button>
                     <button class="btn-wt-view" (click)="openExceptionDetails()">View Exception Details</button>
                     <button class="btn-wt-mark" *ngIf="!isStepReviewed('exception_review')" [disabled]="markingStep === 'exception_review'"
                             (click)="markStepReviewed('exception_review')">
@@ -347,6 +352,7 @@
                     Reviewed by {{ reviewSteps['authenticity_review'].reviewer_name }} · {{ formatDateTime(reviewSteps['authenticity_review'].reviewed_at) }}
                   </p>
                   <div class="wt-step-actions">
+                    <button class="btn-wt-prev" *ngIf="currentReviewStep === 'authenticity_review' && previousReviewStep" (click)="openPreviousStepDetails()">← Previous Step</button>
                     <button class="btn-wt-view" (click)="openAuthenticityDetails()">View Authenticity Review</button>
                     <button class="btn-wt-mark" *ngIf="!isStepReviewed('authenticity_review')" [disabled]="markingStep === 'authenticity_review'"
                             (click)="markStepReviewed('authenticity_review')">
@@ -373,6 +379,7 @@
                     Reviewed by {{ reviewSteps['anomaly_review'].reviewer_name }} · {{ formatDateTime(reviewSteps['anomaly_review'].reviewed_at) }}
                   </p>
                   <div class="wt-step-actions">
+                    <button class="btn-wt-prev" *ngIf="currentReviewStep === 'anomaly_review' && previousReviewStep" (click)="openPreviousStepDetails()">← Previous Step</button>
                     <button class="btn-wt-view" (click)="openAnomalyDetails()">View Anomaly Details</button>
                     <button class="btn-wt-mark" *ngIf="!isStepReviewed('anomaly_review')" [disabled]="markingStep === 'anomaly_review'"
                             (click)="markStepReviewed('anomaly_review')">
@@ -386,16 +393,64 @@
               </div>
             </div>
 
-            <!-- 7. Final Audit Decision — reflects caseFinalDecision,
-                 the SAME value Case Summary's Audit Decision chip
-                 already shows; never its own separate action here. -->
+            <!-- 7. Final Audit Decision — reflects caseFinalDecision, the
+                 SAME value Case Summary's Audit Decision chip already
+                 shows. Need Review / Send Back to Finance / Approve and
+                 Remarks/Notes now live here (moved from the old
+                 standalone Audit Decision panel below the timeline —
+                 not duplicated there anymore), reusing the EXACT SAME
+                 approveDocument()/needReviewDocument()/openSendBackModal
+                 ()/auditNote/canApprove/approveDisabledReason as before.
+                 See isFinalDecision/isNeedReviewRecorded/
+                 latestDecisionEntry above for the 3-state show/hide
+                 rules (before a decision / Need Review recorded /
+                 Approved or Sent Back). -->
             <div class="wt-item wt-last">
               <div class="wt-marker" [ngClass]="finalDecisionStepClass">
                 <i class="ph-duotone" [ngClass]="finalDecisionStepIcon"></i>
               </div>
               <div class="wt-content">
                 <p class="wt-label">Final Audit Decision</p>
-                <p class="wt-detail">{{ caseFinalDecision }}</p>
+
+                <p class="wt-detail" *ngIf="!isFinalDecision && !isNeedReviewRecorded">Status: {{ caseFinalDecision }}</p>
+                <p class="wt-detail" *ngIf="isNeedReviewRecorded">Need Review recorded</p>
+                <ng-container *ngIf="isFinalDecision">
+                  <p class="wt-detail">{{ caseFinalDecision }}</p>
+                  <ng-container *ngIf="latestDecisionEntry as d">
+                    <p class="wt-timestamp">{{ d.reviewer_name }} · {{ formatDateTime(d.reviewed_at) }}</p>
+                    <p class="wt-detail" *ngIf="d.remarks">{{ d.remarks }}</p>
+                  </ng-container>
+                </ng-container>
+
+                <ng-container *ngIf="userRole === 'auditor' && !isFinalDecision">
+                  <div class="note-section">
+                    <label class="note-label">Remarks / Notes</label>
+                    <textarea class="note-input" [(ngModel)]="auditNote" rows="4"
+                      placeholder="Add audit remarks, findings, or follow-up instructions..."></textarea>
+                  </div>
+
+                  <div class="action-buttons">
+                    <button class="btn-need-review" *ngIf="!isNeedReviewRecorded" (click)="needReviewDocument()" [disabled]="isSubmitting">
+                      <i class="ph-duotone ph-warning"></i> Need Review
+                    </button>
+                    <button class="btn-return" (click)="openSendBackModal()" [disabled]="isSubmitting">
+                      <i class="ph-duotone ph-arrow-u-up-left"></i> {{ sendBackButtonLabel }}
+                    </button>
+                    <button class="btn-approve" (click)="approveDocument()" [disabled]="isSubmitting || !canApprove"
+                            [title]="!canApprove ? approveDisabledReason : ''">
+                      <ng-container *ngIf="!isSubmitting"><i class="ph-duotone ph-check-circle"></i> Approve</ng-container>
+                      <ng-container *ngIf="isSubmitting">Processing...</ng-container>
+                    </button>
+                  </div>
+
+                  <p class="approve-disabled-reason" *ngIf="!canApprove">
+                    <i class="ph-duotone ph-info"></i> {{ approveDisabledReason }}
+                  </p>
+
+                  <p class="audit-trail-note">
+                    Last updated by auditor • Audit trail recorded automatically
+                  </p>
+                </ng-container>
               </div>
             </div>
 
@@ -611,40 +666,6 @@
             </button>
           </div>
         </div>
-
-        <!-- Audit Note -->
-        <div class="note-section" *ngIf="userRole === 'auditor'">
-          <label class="note-label">Remarks / Notes</label>
-          <textarea class="note-input" [(ngModel)]="auditNote" rows="4"
-            placeholder="Add audit remarks, findings, or follow-up instructions..."></textarea>
-        </div>
-
-        <!-- Action Buttons — Send Back and Need Review stay available at
-             every stage of the review checklist (Section 6); only
-             Approve is gated on all 4 mandatory steps being reviewed
-             and no blocking issue on record (canApprove/
-             approveDisabledReason above). -->
-        <div class="action-buttons" *ngIf="userRole === 'auditor'">
-          <button class="btn-need-review" (click)="needReviewDocument()" [disabled]="isSubmitting">
-            <i class="ph-duotone ph-warning"></i> Need Review
-          </button>
-          <button class="btn-return" (click)="openSendBackModal()" [disabled]="isSubmitting">
-            <i class="ph-duotone ph-arrow-u-up-left"></i> {{ sendBackButtonLabel }}
-          </button>
-          <button class="btn-approve" (click)="approveDocument()" [disabled]="isSubmitting || !canApprove"
-                  [title]="!canApprove ? approveDisabledReason : ''">
-            <ng-container *ngIf="!isSubmitting"><i class="ph-duotone ph-check-circle"></i> Approve</ng-container>
-            <ng-container *ngIf="isSubmitting">Processing...</ng-container>
-          </button>
-        </div>
-
-        <p class="approve-disabled-reason" *ngIf="userRole === 'auditor' && !canApprove">
-          <i class="ph-duotone ph-info"></i> {{ approveDisabledReason }}
-        </p>
-
-        <p class="audit-trail-note" *ngIf="userRole === 'auditor'">
-          Last updated by auditor • Audit trail recorded automatically
-        </p>
 
         <!-- Admin Control — Admin-only oversight actions, kept entirely
              separate from the Auditor's own approve/return above (which

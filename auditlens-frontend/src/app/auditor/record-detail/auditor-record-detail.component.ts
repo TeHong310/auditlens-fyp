@@ -466,6 +466,30 @@ export class AuditorRecordDetailComponent implements OnInit {
     this.router.navigate(['/auditor/anomalies'], { queryParams: { document_id: this.documentId, ref: 'audit-review' } });
   }
 
+  // "← Previous Step" (Section 5) — pure navigation to the manual
+  // review step immediately before the one the auditor is currently
+  // working on (the first unlocked-but-not-yet-reviewed step). Opens
+  // that step's EXISTING detail page via the SAME open*Details()
+  // methods above; never calls markStepReviewed() or anything else
+  // that touches Reviewed status.
+  get currentReviewStep(): ReviewStep | null {
+    return REVIEW_STEP_ORDER.find(s => this.isStepUnlocked(s) && !this.isStepReviewed(s)) ?? null;
+  }
+
+  get previousReviewStep(): ReviewStep | null {
+    const current = this.currentReviewStep;
+    if (!current) return null;
+    const idx = REVIEW_STEP_ORDER.indexOf(current);
+    return idx > 0 ? REVIEW_STEP_ORDER[idx - 1] : null;
+  }
+
+  openPreviousStepDetails() {
+    const prev = this.previousReviewStep;
+    if (prev === 'three_way_matching') this.openMatchingDetails();
+    else if (prev === 'exception_review') this.openExceptionDetails();
+    else if (prev === 'authenticity_review') this.openAuthenticityDetails();
+  }
+
   // Icon/label/severity mapping deliberately mirrors auditor-anomalies.
   // component.ts (the full Anomaly Detection page) exactly, so the same
   // finding reads identically in both places — but this section only
@@ -534,6 +558,40 @@ export class AuditorRecordDetailComponent implements OnInit {
     if (action === 'returned') return 'Sent Back to Finance';
     if (action === 'need_review') return 'Need Review';
     return 'Awaiting Auditor';
+  }
+
+  // Final Audit Decision timeline step (Section: moved-in Remarks/Notes
+  // + action buttons) — three states, all derived from the SAME
+  // latestReviewAction this page already computes, no new decision
+  // logic:
+  //  - isFinalDecision (Approved or Sent Back — both already terminal:
+  //    approveDocument()/submitSendBack() redirect away from this page
+  //    and their backend routes reject being called again once the
+  //    document leaves 'under_review'/'resubmitted'): all 3 buttons
+  //    hide, the recorded decision/Auditor/time/remark show instead.
+  //  - isNeedReviewRecorded: per needReviewDocument()'s own existing
+  //    comment, this is explicitly NOT a workflow-ending disposition —
+  //    the case stays fully actionable, so only the Need Review button
+  //    itself hides (prevents duplicate Need Review clicks); Approve
+  //    and Send Back remain, Approve still gated by canApprove exactly
+  //    as before.
+  //  - neither: the normal "before any decision" state, unchanged.
+  get isFinalDecision(): boolean {
+    const action = this.latestReviewAction;
+    return action === 'approved' || action === 'returned';
+  }
+
+  get isNeedReviewRecorded(): boolean {
+    return this.latestReviewAction === 'need_review';
+  }
+
+  // The reviewHistory entry the Final Audit Decision step displays
+  // (decision/Auditor/time/remark) once isFinalDecision is true — same
+  // reviewHistory array/"last entry is the latest action" reasoning
+  // latestReviewAction already uses above, just exposing the whole
+  // entry instead of only its action string.
+  get latestDecisionEntry(): any {
+    return this.reviewHistory.length ? this.reviewHistory[this.reviewHistory.length - 1] : null;
   }
 
   // Final Audit Decision timeline step marker — approved reads as
