@@ -162,24 +162,24 @@
             <td colspan="9" class="empty-row">No transaction packages found</td>
           </tr>
           <tr *ngFor="let doc of paginatedDocuments">
-            <td class="doc-name">{{ doc.invoice_number || doc.file_name }}</td>
-            <td class="related-docs-cell">{{ getRelatedDocuments(doc) }}</td>
-            <td class="vendor-name">{{ doc.vendor_name || '-' }}</td>
-            <td>{{ doc.total_amount ? (doc.currency || '') + ' ' + doc.total_amount : '-' }}</td>
-            <td>{{ formatDate(doc.uploaded_at) }}</td>
+            <td class="doc-name">{{ doc.invoiceLabel }}</td>
+            <td class="related-docs-cell">{{ doc.relatedDocumentsLabel }}</td>
+            <td class="vendor-name">{{ doc.vendorName || '-' }}</td>
+            <td>{{ doc.totalAmount != null ? (doc.currency || '') + ' ' + doc.totalAmount : '-' }}</td>
+            <td>{{ formatDate(doc.uploadedAt) }}</td>
             <td>
-              <span class="badge" [ngClass]="getMatchStatusClass(doc)">
-                {{ getMatchStatusLabel(doc) }}
+              <span class="badge" [ngClass]="doc.matchStatusClass">
+                {{ doc.matchStatusLabel }}
               </span>
             </td>
             <td>
-              <span class="badge" [ngClass]="getStatusClass(doc.status)">
-                {{ getStatusLabel(doc.status) }}
+              <span class="badge" [ngClass]="doc.auditStatusClass">
+                {{ doc.auditStatusLabel }}
               </span>
             </td>
-            <td class="comment-cell">{{ doc.comments || '-' }}</td>
+            <td class="comment-cell">{{ doc.latestRemark || '-' }}</td>
             <td>
-              <button class="btn-view" (click)="viewDocument(doc)">View</button>
+              <button class="btn-view" (click)="viewRow(doc)">View</button>
             </td>
           </tr>
         </tbody>

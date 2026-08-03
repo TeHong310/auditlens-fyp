@@ -2,6 +2,8 @@ import { Component, OnInit, AfterViewInit, ElementRef, ViewChild, ChangeDetector
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { forkJoin, of } from 'rxjs';
+import { catchError } from 'rxjs/operators';
 import { Chart, registerables } from 'chart.js';
 import { FormsModule } from '@angular/forms';
 import { environment } from '../../../environments/environment';
@@ -26,6 +28,14 @@ const COLOR_PENDING  = '#8B95A7'; // Pending
 // reserved for status meaning above).
 const VENDOR_SHADES = ['#2E6DA4', '#3E8ED0', '#4DA3FF', '#6FB6FF', '#9CCBFF', '#8B95A7'];
 
+// A package or standalone-invoice's status is derived from the highest-
+// priority member document — same ranking finance-home.component.ts's
+// computeQueueGroups() already uses to pick each group's "primary" doc
+// (vendor display, etc.), reused here unchanged.
+const STATUS_PRIORITY: Record<string, number> = {
+  returned: 5, under_review: 4, resubmitted: 4, ocr_processing: 3, ocr_done: 2, approved: 1,
+};
+
 @Component({
   selector: 'app-finance-report',
   standalone: true,
@@ -38,20 +48,36 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
   @ViewChild('vendorChart') vendorChartRef!: ElementRef;
   @ViewChild('trendChart') trendChartRef!: ElementRef;
 
-  // Deduped: one row per document_id (see dedupeByDocument below).
+  // One row per transaction package (or standalone invoice) — the
+  // table/KPI/chart-facing array. Built by computeGroupedRows() below
+  // once BOTH the per-invoice report and the package grouping data have
+  // loaded.
   documents: any[] = [];
-  // As returned by the API, unmodified — GET /reviews/finance-report
-  // LEFT JOINs review_records, so a document reviewed more than once
-  // (sent back, then later approved) comes back as multiple rows.
-  // Needed only for the Processing Trend's Approved/Returned event
-  // counts, where each row genuinely represents one distinct review
-  // action on its own date.
-  private rawDocuments: any[] = [];
+
+  // Deduped per-invoice records (one per document_id, latest review
+  // record wins) from GET /reviews/finance-report — the input to
+  // grouping, and still the source for invoice-level figures that
+  // don't make sense re-averaged per package (Average OCR Confidence).
+  private invoiceRecords: any[] = [];
+  private reportLoaded: boolean = false;
+
+  // Package grouping — reuses the EXACT SAME data source and shape
+  // Finance Home's own Document Processing Queue groups by (GET
+  // /transaction-packages + GET /transaction-packages/<id>, the same
+  // Finance-scoped endpoints finance-home.component.ts::
+  // loadTransactionPackages() already calls) — not document_id, vendor
+  // name, or guessed PO numbers. No new endpoint, no new grouping
+  // logic: this is the same map shape and the same forkJoin-per-package
+  // fetch, copied from finance-home.component.ts.
+  private packageGroupByDocId: Map<number, { packageId: number; invoiceNumbers: string[]; poNumbers: string[]; grNumbers: string[] }> = new Map();
+  private packagesLoaded: boolean = false;
+
   isLoading: boolean = false;
   chartReady: boolean = false;
   searchText: string = '';
 
-  // KPIs
+  // KPIs — all counted over grouped rows (this.documents), per "count
+  // grouped packages, not individual invoices".
   totalPackages: number = 0;
   totalApproved: number = 0;
   totalReturned: number = 0;
@@ -77,7 +103,13 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
   ) { }
 
   ngOnInit() {
+    // Fired together, in parallel — neither is chained behind the
+    // other; whichever resolves last is the one that actually produces
+    // the grouped rows (see computeGroupedRows()'s own gate), same
+    // pattern finance-home.component.ts uses for its own multi-source
+    // load.
     this.loadReport();
+    this.loadTransactionPackages();
   }
 
   ngAfterViewInit() {
@@ -95,39 +127,19 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
       headers: this.getHeaders()
     }).subscribe({
       next: (res) => {
-        this.rawDocuments = res.documents;
-        this.documents = this.dedupeByDocument(res.documents);
-
-        // "Transaction Packages" = count of invoice-level records this
-        // endpoint already returns. Its query selects FROM documents
-        // only (POs/GRs live in their own tables and are never joined
-        // in as extra rows here — see purchase_order_number/
-        // goods_receipt_number below, which are single columns, not
-        // extra rows) — so this was never inflated by counting a PO or
-        // GR as a separate "package" in the first place.
-        this.totalPackages = this.documents.length;
-        this.totalApproved = this.documents.filter((d: any) => d.status === 'approved').length;
-        this.totalReturned = this.documents.filter((d: any) => d.status === 'returned').length;
-        this.totalUnderReview = this.documents.filter((d: any) => d.status === 'under_review').length;
-
-        const withOcr = this.documents.filter((d: any) => d.ocr_confidence != null);
-        if (withOcr.length > 0) {
-          const sum = withOcr.reduce((acc: number, d: any) => acc + parseFloat(d.ocr_confidence), 0);
-          this.avgOcrConfidence = Math.round(sum / withOcr.length);
-        }
-
-        this.isLoading = false;
-        this.chartReady = true;
-        this.cdr.detectChanges();
-        setTimeout(() => this.renderAllCharts(), 200);
+        this.invoiceRecords = this.dedupeByDocument(res.documents);
+        this.reportLoaded = true;
+        this.computeGroupedRows();
       },
       error: () => { this.isLoading = false; }
     });
   }
 
   // Keeps the row with the most recent reviewed_at (its Latest Remark)
-  // for each document_id — left un-deduped, KPI counts and the table
-  // would double/triple-count a document reviewed more than once.
+  // for each document_id — GET /reviews/finance-report LEFT JOINs
+  // review_records, so a document reviewed more than once (sent back,
+  // then later approved) comes back as multiple rows; left un-deduped,
+  // grouping/KPI counts would double/triple-count that one document.
   private dedupeByDocument(docs: any[]): any[] {
     const byId = new Map<number, any>();
     for (const doc of docs) {
@@ -139,12 +151,199 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
     return Array.from(byId.values());
   }
 
+  // Package grouping data source — copied from finance-home.component.
+  // ts::loadTransactionPackages() unchanged (same two endpoints, same
+  // request shape, same packageGroupByDocId map shape) so grouping here
+  // can never disagree with what Finance Home already shows for the
+  // same packages.
+  loadTransactionPackages() {
+    this.http.get<any[]>(`${this.apiUrl}/transaction-packages`, { headers: this.getHeaders() })
+      .pipe(catchError(() => of([])))
+      .subscribe((packages: any[]) => {
+        if (!packages.length) {
+          this.packagesLoaded = true;
+          this.computeGroupedRows();
+          return;
+        }
+
+        const requests: { [id: number]: any } = {};
+        for (const pkg of packages) {
+          requests[pkg.id] = this.http.get<any>(`${this.apiUrl}/transaction-packages/${pkg.id}`, { headers: this.getHeaders() })
+            .pipe(catchError(() => of(null)));
+        }
+
+        forkJoin(requests).subscribe((results: any) => {
+          const map = new Map<number, { packageId: number; invoiceNumbers: string[]; poNumbers: string[]; grNumbers: string[] }>();
+          for (const pkg of packages) {
+            const detail = results[pkg.id];
+            const docs = detail?.documents;
+            if (!docs) continue;
+
+            const group = {
+              packageId: pkg.id,
+              invoiceNumbers: Array.from(new Set<string>(docs.invoices.map((d: any) => d.invoice_number).filter(Boolean))),
+              poNumbers: Array.from(new Set<string>(docs.purchase_orders.map((p: any) => p.po_number).filter(Boolean))),
+              grNumbers: Array.from(new Set<string>(docs.goods_receipts.map((g: any) => g.gr_number).filter(Boolean))),
+            };
+            for (const inv of docs.invoices) {
+              map.set(inv.document_id, group);
+            }
+          }
+          this.packageGroupByDocId = map;
+          this.packagesLoaded = true;
+          this.computeGroupedRows();
+        });
+      });
+  }
+
+  // Groups invoiceRecords by real transaction_package_id (via
+  // packageGroupByDocId) into one row per package; an invoice not
+  // linked into any package stays its own row, exactly like Finance
+  // Home's own standalone rows. Needs both loads done.
+  private computeGroupedRows() {
+    if (!this.reportLoaded || !this.packagesLoaded) return;
+
+    const docsByPackageId = new Map<number, any[]>();
+    const standaloneDocs: any[] = [];
+    for (const doc of this.invoiceRecords) {
+      const group = this.packageGroupByDocId.get(doc.document_id);
+      if (group) {
+        const arr = docsByPackageId.get(group.packageId) || [];
+        arr.push(doc);
+        docsByPackageId.set(group.packageId, arr);
+      } else {
+        standaloneDocs.push(doc);
+      }
+    }
+
+    const rows: any[] = [];
+    for (const docs of docsByPackageId.values()) {
+      const group = this.packageGroupByDocId.get(docs[0].document_id)!;
+      rows.push(this.buildRow(group.packageId, docs, group.poNumbers, group.grNumbers));
+    }
+    for (const doc of standaloneDocs) {
+      const poNumbers = doc.purchase_order_number ? [doc.purchase_order_number] : [];
+      const grNumbers = doc.goods_receipt_number ? [doc.goods_receipt_number] : [];
+      rows.push(this.buildRow(null, [doc], poNumbers, grNumbers));
+    }
+
+    rows.sort((a, b) => new Date(b.uploadedAt || 0).getTime() - new Date(a.uploadedAt || 0).getTime());
+    this.documents = rows;
+
+    this.computeStats();
+    this.isLoading = false;
+    this.chartReady = true;
+    this.cdr.detectChanges();
+    setTimeout(() => this.renderAllCharts(), 200);
+  }
+
+  // One package's (or one standalone invoice's) aggregate row.
+  // poNumbers/grNumbers are already deduped by the caller (package:
+  // from packageGroupByDocId, itself deduped via Set at load time;
+  // standalone: a single-element array).
+  private buildRow(packageId: number | null, docs: any[], poNumbers: string[], grNumbers: string[]): any {
+    const primary = [...docs].sort((a, b) => (STATUS_PRIORITY[b.status] || 0) - (STATUS_PRIORITY[a.status] || 0))[0];
+    const newest = [...docs].sort((a, b) => new Date(b.uploaded_at || 0).getTime() - new Date(a.uploaded_at || 0).getTime())[0];
+    const latestReviewed = docs
+      .filter(d => d.reviewed_at)
+      .sort((a, b) => (b.reviewed_at || '').localeCompare(a.reviewed_at || ''))[0] || null;
+
+    const invoiceNumbers = Array.from(new Set(docs.map(d => d.invoice_number).filter(Boolean)));
+    const withAmount = docs.filter(d => d.total_amount != null);
+    const totalAmount = withAmount.length ? withAmount.reduce((sum, d) => sum + Number(d.total_amount), 0) : null;
+    const currency = docs.find(d => d.currency)?.currency || null;
+
+    // Audit Status — Returned if ANY member is currently returned for
+    // correction; Under Review if any active member is under review;
+    // Approved only when the COMPLETE package is approved; otherwise
+    // Pending.
+    let auditStatusLabel: string;
+    if (docs.some(d => d.status === 'returned')) auditStatusLabel = 'Returned';
+    else if (docs.some(d => d.status === 'under_review')) auditStatusLabel = 'Under Review';
+    else if (docs.every(d => d.status === 'approved')) auditStatusLabel = 'Approved';
+    else auditStatusLabel = 'Pending';
+
+    // Match Status — required PO/GR genuinely missing at the PACKAGE
+    // level (poNumbers/grNumbers empty — a shared PO/GR covering
+    // multiple invoices in the package still counts as present) decides
+    // "Missing Documents" first; otherwise the worst-first cascade over
+    // each member's own real matching result (overall_status, from the
+    // same build_comparison()-backed value GET /reviews/finance-report
+    // already returns per invoice — no new scoring formula).
+    let matchStatusLabel: string;
+    if (poNumbers.length === 0 || grNumbers.length === 0) {
+      matchStatusLabel = 'Missing Documents';
+    } else if (docs.some(d => d.overall_status === 'FAIL')) {
+      matchStatusLabel = 'Mismatch';
+    } else if (docs.some(d => d.overall_status === 'REVIEW' || d.overall_status === 'PARTIAL')) {
+      matchStatusLabel = 'Review Required';
+    } else if (docs.every(d => d.overall_status === 'PASS')) {
+      matchStatusLabel = 'Full Match';
+    } else {
+      matchStatusLabel = 'Pending';
+    }
+
+    return {
+      packageId,
+      documentIds: docs.map(d => d.document_id),
+      invoiceLabel: invoiceNumbers.length ? invoiceNumbers.join(', ') : (docs[0].file_name || '-'),
+      relatedDocumentsLabel: this.formatRelatedDocuments(poNumbers, grNumbers),
+      vendorName: primary.vendor_name || '-',
+      totalAmount,
+      currency,
+      uploadedAt: newest.uploaded_at,
+      matchStatusLabel,
+      matchStatusClass: this.matchStatusClassFor(matchStatusLabel),
+      auditStatusLabel,
+      auditStatusClass: this.auditStatusClassFor(auditStatusLabel),
+      latestRemark: latestReviewed?.comments || null,
+      latestReviewedAt: latestReviewed?.reviewed_at || null,
+    };
+  }
+
+  private formatRelatedDocuments(poNumbers: string[], grNumbers: string[]): string {
+    const po = poNumbers.length ? `PO: ${poNumbers.join(', ')}` : 'PO: Not Uploaded';
+    const gr = grNumbers.length ? `GR: ${grNumbers.join(', ')}` : 'GR: Not Uploaded';
+    return `${po} · ${gr}`;
+  }
+
+  private matchStatusClassFor(label: string): string {
+    if (label === 'Full Match') return 'badge-approved';
+    if (label === 'Review Required') return 'badge-review';
+    if (label === 'Mismatch' || label === 'Missing Documents') return 'badge-returned';
+    return 'badge-pending'; // Pending
+  }
+
+  private auditStatusClassFor(label: string): string {
+    if (label === 'Approved') return 'badge-approved';
+    if (label === 'Returned') return 'badge-returned';
+    if (label === 'Under Review') return 'badge-review';
+    return 'badge-pending'; // Pending
+  }
+
+  private computeStats() {
+    this.totalPackages = this.documents.length;
+    this.totalApproved = this.documents.filter((d: any) => d.auditStatusLabel === 'Approved').length;
+    this.totalReturned = this.documents.filter((d: any) => d.auditStatusLabel === 'Returned').length;
+    this.totalUnderReview = this.documents.filter((d: any) => d.auditStatusLabel === 'Under Review').length;
+
+    // Average OCR Confidence stays per INVOICE (an OCR score belongs to
+    // one scanned document, not a package) — averaged across
+    // invoiceRecords directly rather than averaging package-level
+    // averages, which would over-weight packages with fewer invoices.
+    const withOcr = this.invoiceRecords.filter((d: any) => d.ocr_confidence != null);
+    if (withOcr.length > 0) {
+      const sum = withOcr.reduce((acc: number, d: any) => acc + parseFloat(d.ocr_confidence), 0);
+      this.avgOcrConfidence = Math.round(sum / withOcr.length);
+    }
+  }
+
   get filteredDocuments() {
     if (!this.searchText) return this.documents;
-    return this.documents.filter(d =>
-      d.file_name?.toLowerCase().includes(this.searchText.toLowerCase()) ||
-      d.invoice_number?.toLowerCase().includes(this.searchText.toLowerCase()) ||
-      d.vendor_name?.toLowerCase().includes(this.searchText.toLowerCase())
+    const q = this.searchText.toLowerCase();
+    return this.documents.filter((d: any) =>
+      d.invoiceLabel?.toLowerCase().includes(q) ||
+      d.vendorName?.toLowerCase().includes(q)
     );
   }
 
@@ -187,17 +386,17 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
     });
   }
 
-  // C. Top Vendors by Transaction Volume — counts deduped documents
-  // (one per invoice/package), never the underlying PO/GR supporting
+  // C. Top Vendors by Transaction Volume — counts grouped rows (one per
+  // package/standalone invoice), never the underlying PO/GR supporting
   // files.
   renderVendorChart() {
     if (!this.vendorChartRef) return;
     if (this.vendorChartInstance) this.vendorChartInstance.destroy();
 
     const vendorCounts: { [key: string]: number } = {};
-    this.documents.forEach(doc => {
-      const vendor = doc.vendor_name
-        ? doc.vendor_name.substring(0, 24)
+    this.documents.forEach((row: any) => {
+      const vendor = row.vendorName && row.vendorName !== '-'
+        ? row.vendorName.substring(0, 24)
         : 'Unknown';
       vendorCounts[vendor] = (vendorCounts[vendor] || 0) + 1;
     });
@@ -247,15 +446,14 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
     });
   }
 
-  // B. Processing Trend — last 14 Malaysia calendar days. "Uploaded"
-  // counts each document once (deduped documents, by uploaded_at);
-  // "Approved"/"Returned" count actual review EVENTS from the raw,
-  // un-deduped rows — a document sent back then later approved
-  // genuinely has both events, on their own separate days. Reuses the
-  // existing uploaded_at/reviewed_at timestamps and the app's shared
-  // Malaysia-date-key grouping (src/app/shared/datetime.util.ts, the
-  // same utility Record Detail/Report pages elsewhere already use for
-  // this exact purpose) — no new date-bucketing logic.
+  // B. Processing Trend — last 14 Malaysia calendar days, counting
+  // grouped rows (not individual invoices). "Uploaded" buckets each
+  // row by its newest member's uploaded_at; "Approved"/"Returned"
+  // bucket a row by its latestReviewedAt when its aggregate
+  // auditStatusLabel is that status. Reuses the existing uploaded_at/
+  // reviewed_at timestamps and the app's shared Malaysia-date-key
+  // grouping (src/app/shared/datetime.util.ts) — no new date-bucketing
+  // logic.
   renderTrendChart() {
     if (!this.trendChartRef) return;
     if (this.trendChartInstance) this.trendChartInstance.destroy();
@@ -270,19 +468,19 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
     }
 
     const uploaded: { [key: string]: number } = {};
-    this.documents.forEach(doc => {
-      const key = toMalaysiaDateKey(doc.uploaded_at);
-      if (key) uploaded[key] = (uploaded[key] || 0) + 1;
-    });
-
     const approved: { [key: string]: number } = {};
     const returned: { [key: string]: number } = {};
-    this.rawDocuments.forEach(doc => {
-      if (!doc.reviewed_at) return;
-      const key = toMalaysiaDateKey(doc.reviewed_at);
-      if (!key) return;
-      if (doc.action === 'approved') approved[key] = (approved[key] || 0) + 1;
-      if (doc.action === 'returned') returned[key] = (returned[key] || 0) + 1;
+    this.documents.forEach((row: any) => {
+      const uploadKey = toMalaysiaDateKey(row.uploadedAt);
+      if (uploadKey) uploaded[uploadKey] = (uploaded[uploadKey] || 0) + 1;
+
+      if (row.latestReviewedAt) {
+        const reviewKey = toMalaysiaDateKey(row.latestReviewedAt);
+        if (reviewKey) {
+          if (row.auditStatusLabel === 'Approved') approved[reviewKey] = (approved[reviewKey] || 0) + 1;
+          if (row.auditStatusLabel === 'Returned') returned[reviewKey] = (returned[reviewKey] || 0) + 1;
+        }
+      }
     });
 
     const labels = days.map(key => {
@@ -330,68 +528,6 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
     });
   }
 
-  // Audit Status — collapses every in-process document.status value
-  // (ocr_processing, ocr_done, resubmitted, etc.) into the 4 values
-  // this redesign specifies.
-  getStatusClass(status: string): string {
-    switch (status) {
-      case 'approved': return 'badge-approved';
-      case 'returned': return 'badge-returned';
-      case 'under_review': return 'badge-review';
-      default: return 'badge-pending';
-    }
-  }
-
-  getStatusLabel(status: string): string {
-    switch (status) {
-      case 'approved': return 'Approved';
-      case 'returned': return 'Returned';
-      case 'under_review': return 'Under Review';
-      default: return 'Pending';
-    }
-  }
-
-  // Match Status — two-step: whether PO/GR are ACTUALLY linked
-  // (purchase_order_number/goods_receipt_number, the real linkage the
-  // backend now joins) decides "Missing Documents" FIRST, independent
-  // of overall_status; only once both are present does overall_status
-  // — the real, currently-active matching result from routes/
-  // auditor.py::build_comparison()/_matching_status_for_comparison()
-  // ('PASS'/'REVIEW'/'PARTIAL'/'FAIL', or 'PENDING' when matching
-  // hasn't produced a result yet) — decide Full Match/Review Required/
-  // Mismatch/Pending. Never a new score or formula, and "Missing
-  // Documents" is never the fallback for a null/unknown status when
-  // both documents are actually present.
-  private hasBothSupportingDocs(doc: any): boolean {
-    return !!doc.purchase_order_number && !!doc.goods_receipt_number;
-  }
-
-  getMatchStatusLabel(doc: any): string {
-    if (!this.hasBothSupportingDocs(doc)) return 'Missing Documents';
-    if (doc.overall_status === 'PASS') return 'Full Match';
-    if (doc.overall_status === 'REVIEW' || doc.overall_status === 'PARTIAL') return 'Review Required';
-    if (doc.overall_status === 'FAIL') return 'Mismatch';
-    return 'Pending';
-  }
-
-  getMatchStatusClass(doc: any): string {
-    if (!this.hasBothSupportingDocs(doc)) return 'badge-returned';
-    if (doc.overall_status === 'PASS') return 'badge-approved';
-    if (doc.overall_status === 'REVIEW' || doc.overall_status === 'PARTIAL') return 'badge-review';
-    if (doc.overall_status === 'FAIL') return 'badge-returned';
-    return 'badge-pending';
-  }
-
-  // Related Documents — purchase_order_number/goods_receipt_number are
-  // the actual linked PO/GR numbers (backend now joins them the same
-  // way routes/auditor.py::build_comparison() already does, by
-  // document_id, latest row wins) — never a placeholder or guess.
-  getRelatedDocuments(doc: any): string {
-    const po = doc.purchase_order_number ? `PO: ${doc.purchase_order_number}` : 'PO: Not Uploaded';
-    const gr = doc.goods_receipt_number ? `GR: ${doc.goods_receipt_number}` : 'GR: Not Uploaded';
-    return `${po} · ${gr}`;
-  }
-
   formatDate(dateStr: string): string {
     if (!dateStr) return '-';
     return new Date(dateStr).toLocaleDateString('en-MY', {
@@ -399,17 +535,20 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
     });
   }
 
-  // View action — reuses the existing Finance single-document detail
-  // page (finance/corrections/detail?document_id=X), which already
+  // Action — a package row goes to the existing Finance transaction
+  // detail page (finance/transactions/detail?id=<transaction_package_
+  // id>, the same page Finance Transactions already links to); a
+  // standalone invoice goes to the existing single-document detail
+  // page (finance/corrections/detail?document_id=X, which already
   // loads original invoice info + correction history + PO/GR status
-  // for ANY document regardless of status (see finance-correction-
-  // detail.component.ts's own loadAll()) — not exclusive to returned/
-  // correction-flow documents, so it works as a single "View" target
-  // for every row here without needing a transaction_package_id (this
-  // report has none, and adding one would mean another backend change
-  // beyond the PO/GR numbers already added).
-  viewDocument(doc: any) {
-    this.router.navigate(['/finance/corrections/detail'], { queryParams: { document_id: doc.document_id } });
+  // for ANY document regardless of status). No new endpoint, no new
+  // page.
+  viewRow(row: any) {
+    if (row.packageId) {
+      this.router.navigate(['/finance/transactions/detail'], { queryParams: { id: row.packageId } });
+    } else {
+      this.router.navigate(['/finance/corrections/detail'], { queryParams: { document_id: row.documentIds[0] } });
+    }
   }
 
   // Pagination
@@ -438,16 +577,16 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
   }
 
   exportReport() {
-    const headers = ['Invoice No', 'Vendor', 'Amount', 'Upload Date', 'Related Documents', 'Match Status', 'Audit Status', 'Latest Remark'];
-    const rows = this.documents.map(d => [
-      d.invoice_number || '-',
-      d.vendor_name || '-',
-      d.total_amount ? (d.currency || '') + ' ' + d.total_amount : '-',
-      this.formatDate(d.uploaded_at),
-      this.getRelatedDocuments(d),
-      this.getMatchStatusLabel(d),
-      this.getStatusLabel(d.status),
-      d.comments || '-'
+    const headers = ['Invoice / Package', 'Related Documents', 'Vendor', 'Amount', 'Upload Date', 'Match Status', 'Audit Status', 'Latest Remark'];
+    const rows = this.documents.map((d: any) => [
+      d.invoiceLabel || '-',
+      d.relatedDocumentsLabel,
+      d.vendorName || '-',
+      d.totalAmount != null ? (d.currency || '') + ' ' + d.totalAmount : '-',
+      this.formatDate(d.uploadedAt),
+      d.matchStatusLabel,
+      d.auditStatusLabel,
+      d.latestRemark || '-'
     ]);
 
     const csv = [headers, ...rows].map(r => r.join(',')).join('\n');

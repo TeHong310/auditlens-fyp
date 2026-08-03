@@ -18683,3 +18683,81 @@ Setup/config needed:
      (Docker web service) and the frontend static site.
   2. Backend redeploy required (routes/reviews.py changed - no new
      migration, no new dependency, no new environment variable).
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Frontend only (auditlens-frontend/.../finance/report/finance-report.
+  component.ts and .html) - no backend touched this time.
+    - Problem: the report showed one row per invoice even when several
+      invoices belonged to the same transaction package, instead of one
+      row per real AP case.
+    - Fix: added loadTransactionPackages(), copied unchanged from
+      finance-home.component.ts (same GET /transaction-packages +
+      GET /transaction-packages/<id> calls, same packageGroupByDocId
+      map shape and forkJoin-per-package fetch) - the exact same
+      real transaction_package_id-based grouping Finance Home's own
+      Document Processing Queue already uses, not document_id, vendor
+      name, or guessed PO numbers.
+    - New computeGroupedRows()/buildRow(): groups the deduped per-
+      invoice records from GET /reviews/finance-report by package (an
+      invoice not linked into any package stays its own row, exactly
+      like Finance Home's standalone rows). Each package row now shows
+      every invoice number, the package's unique PO/GR numbers (never
+      duplicated - reused straight from packageGroupByDocId's own
+      Set-deduped arrays), and the summed invoice total (Finance Home
+      itself never computes or shows a package total anywhere, so
+      there was no existing figure to reuse instead).
+    - Match Status aggregate: "Missing Documents" if the package has no
+      PO or no GR linked at all (checked at the package level, since
+      one shared PO/GR can legitimately cover multiple invoices in a
+      package); otherwise a worst-first cascade over each invoice's own
+      real overall_status (from the previous fix's build_comparison()-
+      backed value) - any FAIL -> Mismatch, any REVIEW/PARTIAL ->
+      Review Required, all PASS -> Full Match, otherwise Pending. No
+      new scoring formula.
+    - Audit Status aggregate: Returned if any invoice is currently
+      returned, Under Review if any active invoice is under review,
+      Approved only when every invoice in the package is approved,
+      otherwise Pending.
+    - Latest Remark: the comment from whichever invoice in the package
+      was reviewed most recently (reviewed_at), matching Finance Home's
+      own "pick the most relevant member" convention.
+    - KPI cards, all 3 charts (including the Processing Trend's
+      Uploaded/Approved/Returned buckets), "Showing X packages", search
+      and pagination now all operate on the grouped rows - confirmed
+      none of them still iterate the pre-grouping per-invoice array.
+      Average OCR Confidence is the one intentional exception (stays
+      averaged per invoice, since a scan-quality score belongs to one
+      document, not a package - documented inline).
+    - Action: a package row now navigates to the existing finance/
+      transactions/detail?id=<transaction_package_id> page (confirmed
+      by reading finance-transaction-detail.component.ts that it reads
+      the "id" query param); a standalone invoice still navigates to
+      finance/corrections/detail?document_id=X as before. No new
+      endpoint, no new page.
+
+Why:
+  A Finance user creating one transaction package from several related
+  invoices (e.g. a split billing) was seeing that one real case
+  fragmented into several disconnected report rows, each only showing
+  its own invoice's numbers and status - making it impossible to see
+  the package as one unit or judge its true overall match/audit state
+  at a glance.
+
+Verified:
+  tests/extraction/test_finance_report_match_status.py (backend,
+  unchanged by this task, re-run to confirm no regression underneath
+  the new grouping) - all cases still pass. npx ng build --configuration
+  production - clean compile; only the same pre-existing bundle-budget
+  warnings on two unrelated files this task never touched. Did not run
+  the full backend suite or Playwright, per this task's own scope.
+  git diff --stat confirms only the 2 finance-report component files
+  changed - no backend file, no new endpoint, no other page touched.
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy the frontend static
+     site (no backend change this time, so a backend redeploy isn't
+     required, though Render will likely still rebuild it as part of
+     the same deploy).
