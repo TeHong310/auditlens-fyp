@@ -432,78 +432,10 @@
   box-shadow: none;
 }
 
-/* ── PDF Quick-View Modal ── */
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.modal-box {
-  background: white;
-  border-radius: 12px;
-  width: 100%;
-  max-width: 900px;
-  height: 90vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 10px 40px rgba(0,0,0,0.25);
-  overflow: hidden;
-}
-
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border);
-  background: var(--accent-bg);
-}
-
-.modal-header-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.modal-filename {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 420px;
-}
-
-.modal-doctype-badge {
-  background: var(--accent);
-  color: var(--text-primary);
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 10px;
-  border-radius: 20px;
-  white-space: nowrap;
-}
-
-.modal-close-btn {
-  background: transparent;
-  border: none;
-  font-size: 18px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  line-height: 1;
-  padding: 4px 8px;
-  border-radius: 6px;
-}
-
-.modal-close-btn:hover { background: var(--border); color: var(--text-primary); }
-
+/* ── Original Document Viewer (left panel) ──
+   Reuses the same body/spinner/error/footer styling the old PDF
+   quick-view modal used — only the backdrop/box/header shell around it
+   is gone, since the viewer is now always visible instead of a popup. */
 .modal-body {
   flex: 1;
   position: relative;
@@ -549,19 +481,6 @@
 .btn-modal-secondary:hover:not(:disabled) { background: var(--bg-hover); }
 .btn-modal-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.btn-modal-primary {
-  padding: 8px 18px;
-  background: linear-gradient(135deg, var(--accent), var(--accent));
-  color: var(--text-primary);
-  border: none;
-  border-radius: 8px;
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.btn-modal-primary:disabled { opacity: 0.6; cursor: not-allowed; }
-
 /* Enterprise Matching Summary */
 .enterprise-status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
 .enterprise-status-label, .enterprise-stat-label { color: var(--text-secondary); font-weight: 500; font-size: 13px; }
@@ -586,3 +505,95 @@
 .txn-context-compact { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
 .txn-context-main { display: flex; align-items: center; gap: 8px; }
 .txn-context-breakdown { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-secondary); }
+
+/* Split Workspace — Original Document Viewer + Matching results,
+   each independently scrollable within a fixed-height row. */
+.workspace-row {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr;
+  gap: 16px;
+  height: calc(100vh - 150px);
+  min-height: 420px;
+}
+
+.doc-viewer-panel,
+.matching-panel {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.matching-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.doc-viewer-panel {
+  background: var(--bg-card);
+  border-radius: 12px;
+  border-left: 3px solid var(--accent);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  gap: 14px;
+  overflow: hidden;
+}
+
+.doc-viewer-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.doc-tabs { display: flex; gap: 8px; }
+
+.doc-tab {
+  padding: 8px 18px;
+  border-radius: 8px;
+  border: 1.5px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all .2s ease;
+}
+
+.doc-tab:hover { background: var(--border); }
+
+.doc-tab.active {
+  background: linear-gradient(135deg, var(--accent), var(--accent));
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.doc-viewer-panel .modal-body {
+  flex: 1;
+  border-radius: 8px;
+  min-height: 0;
+}
+
+.not-uploaded-panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #9CA3AF;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.not-uploaded-panel i { font-size: 32px; }
+
+@media (max-width: 900px) {
+  .workspace-row {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .doc-viewer-panel { height: 65vh; }
+  .matching-panel { overflow-y: visible; }
+}

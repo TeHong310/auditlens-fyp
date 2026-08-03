@@ -30,6 +30,45 @@
 
   <ng-container *ngIf="!isLoading && comparison">
 
+    <!-- Split Workspace: Original Document Viewer (left) + Three-Way
+         Matching results (right), each independently scrollable. -->
+    <div class="workspace-row">
+
+      <!-- Left: Original Document Viewer -->
+      <div class="doc-viewer-panel">
+        <div class="doc-viewer-header">
+          <h2 class="comparison-title"><i class="ph-duotone ph-file-text"></i> Original Document Viewer</h2>
+          <div class="doc-tabs">
+            <button class="doc-tab" [class.active]="modalDocType === 'invoice'" (click)="openDocModal('invoice')">Invoice</button>
+            <button class="doc-tab" [class.active]="modalDocType === 'po'" (click)="openDocModal('po')">PO</button>
+            <button class="doc-tab" [class.active]="modalDocType === 'gr'" (click)="openDocModal('gr')">GR</button>
+          </div>
+        </div>
+
+        <div class="modal-body">
+          <div class="modal-spinner-wrap" *ngIf="modalLoading">
+            <div class="spinner"></div>
+            <p>Loading document...</p>
+          </div>
+          <div class="not-uploaded-panel" *ngIf="!modalLoading && !isDocAvailable(modalDocType)">
+            <i class="ph-duotone ph-file-x"></i>
+            <p>Not Uploaded</p>
+          </div>
+          <div class="modal-error-wrap" *ngIf="modalError">
+            <p>{{ modalError }}</p>
+          </div>
+          <iframe *ngIf="modalIframeUrl && !modalLoading" [src]="modalIframeUrl" width="100%" height="100%" frameborder="0"></iframe>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn-modal-secondary" (click)="openInNewTab()" [disabled]="!modalRawBlobUrl">Open in New Tab</button>
+          <button class="btn-modal-secondary" (click)="downloadFile()" [disabled]="!modalRawBlobUrl">Download</button>
+        </div>
+      </div>
+
+      <!-- Right: Three-Way Matching results -->
+      <div class="matching-panel">
+
     <div class="error-box" *ngIf="errorMessage"><i class="ph-duotone ph-x-circle"></i> {{ errorMessage }}</div>
 
     <!-- Enterprise Matching Summary — only when this invoice belongs to
@@ -274,11 +313,14 @@
         </table>
       </div>
 
-      <!-- Source Documents -->
-      <div class="source-docs-section">
+      <!-- Source Documents — sibling/related invoices, POs and GRs within
+           a Finance Transaction Package. The primary Invoice/PO/GR for
+           THIS record now live in the Original Document Viewer tabs on
+           the left, so this section only renders when there are extra
+           package documents beyond those three to reach. -->
+      <div class="source-docs-section" *ngIf="transactionDetail as txn">
         <h3 class="source-docs-title"><i class="ph-duotone ph-file-text"></i> Source Documents</h3>
 
-        <ng-container *ngIf="transactionDetail as txn; else legacySourceDocs">
           <div class="source-docs-group" *ngIf="txn.documents.invoices?.length">
             <p class="source-docs-group-label">Invoices</p>
             <div class="source-docs-buttons">
@@ -317,37 +359,6 @@
               </button>
             </div>
           </div>
-        </ng-container>
-
-        <ng-template #legacySourceDocs>
-          <div class="source-docs-buttons">
-            <button class="btn-view-doc" (click)="openDocModal('invoice')">
-              <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
-              <span class="btn-view-doc-text">
-                <span class="btn-view-doc-label">View Invoice</span>
-                <span class="btn-view-doc-filename">{{ comparison.invoice.filename }}</span>
-              </span>
-            </button>
-            <button class="btn-view-doc" [disabled]="!isDocAvailable('po')"
-                    [title]="!isDocAvailable('po') ? 'Missing — awaiting Finance submission' : ''"
-                    (click)="openDocModal('po')">
-              <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
-              <span class="btn-view-doc-text">
-                <span class="btn-view-doc-label">View PO</span>
-                <span class="btn-view-doc-filename">{{ comparison.po?.filename || 'Missing' }}</span>
-              </span>
-            </button>
-            <button class="btn-view-doc" [disabled]="!isDocAvailable('gr')"
-                    [title]="!isDocAvailable('gr') ? 'Missing — awaiting Finance submission' : ''"
-                    (click)="openDocModal('gr')">
-              <span class="btn-view-doc-icon"><i class="ph-duotone ph-eye"></i></span>
-              <span class="btn-view-doc-text">
-                <span class="btn-view-doc-label">View GR</span>
-                <span class="btn-view-doc-filename">{{ comparison.gr?.filename || 'Missing' }}</span>
-              </span>
-            </button>
-          </div>
-        </ng-template>
       </div>
     </div>
 
@@ -381,34 +392,10 @@
       <button class="btn-back" (click)="backToAuditReview()">← Back to Audit Review</button>
     </div>
 
-  </ng-container>
+      </div> <!-- .matching-panel -->
 
-  <!-- ── PDF Quick-View Modal ── -->
-  <div class="modal-backdrop" *ngIf="showModal" (click)="closeModal()">
-    <div class="modal-box" (click)="$event.stopPropagation()">
-      <div class="modal-header">
-        <div class="modal-header-left">
-          <span class="modal-filename">{{ modalFileName }}</span>
-          <span class="modal-doctype-badge">{{ docTypeLabel(modalDocType) }}</span>
-        </div>
-        <button class="modal-close-btn" (click)="closeModal()"><i class="ph-duotone ph-x"></i></button>
-      </div>
-      <div class="modal-body">
-        <div class="modal-spinner-wrap" *ngIf="modalLoading">
-          <div class="spinner"></div>
-          <p>Loading document...</p>
-        </div>
-        <div class="modal-error-wrap" *ngIf="modalError">
-          <p>{{ modalError }}</p>
-        </div>
-        <iframe *ngIf="modalIframeUrl && !modalLoading" [src]="modalIframeUrl" width="100%" height="100%" frameborder="0"></iframe>
-      </div>
-      <div class="modal-footer">
-        <button class="btn-modal-secondary" (click)="openInNewTab()" [disabled]="!modalRawBlobUrl">Open in New Tab</button>
-        <button class="btn-modal-secondary" (click)="downloadFile()" [disabled]="!modalRawBlobUrl">Download</button>
-        <button class="btn-modal-primary" (click)="closeModal()">Close</button>
-      </div>
-    </div>
-  </div>
+    </div> <!-- .workspace-row -->
+
+  </ng-container>
 
 </div>

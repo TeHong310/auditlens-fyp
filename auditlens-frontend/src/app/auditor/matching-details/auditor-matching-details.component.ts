@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, HostListener, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router, ActivatedRoute } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
@@ -30,8 +30,8 @@ export class AuditorMatchingDetailsComponent implements OnInit, OnDestroy {
   isLoading: boolean = false;
   errorMessage: string = '';
 
-  // PDF quick-view modal
-  showModal: boolean = false;
+  // Original Document Viewer (left panel) — tab state + blob-preview
+  // fetch, same fetch/sanitize logic the old PDF quick-view modal used.
   modalDocType: DocType = 'invoice';
   modalFileName: string = '';
   modalIframeUrl: SafeResourceUrl | null = null;
@@ -88,6 +88,7 @@ export class AuditorMatchingDetailsComponent implements OnInit, OnDestroy {
       next: (res) => {
         this.comparison = res;
         this.isLoading = false;
+        this.openDocModal('invoice');
         this.cdr.detectChanges();
         if (res.transaction_context) {
           this.loadTransactionDetail(res.transaction_context.transaction_package_id);
@@ -345,27 +346,25 @@ export class AuditorMatchingDetailsComponent implements OnInit, OnDestroy {
     return '';
   }
 
-  docTypeLabel(type: DocType): string {
-    if (type === 'invoice') return 'Invoice';
-    if (type === 'po') return 'Purchase Order';
-    return 'Goods Receipt';
-  }
-
   isDocAvailable(type: DocType): boolean {
     return !!this.fileUrlFor(type);
   }
 
   openDocModal(type: DocType) {
-    const url = this.fileUrlFor(type);
-    if (!url) return;
-
     this.revokeModalBlobUrl();
     this.modalDocType = type;
     this.modalFileName = this.fileNameFor(type);
-    this.modalLoading = true;
     this.modalError = '';
     this.modalIframeUrl = null;
-    this.showModal = true;
+
+    const url = this.fileUrlFor(type);
+    if (!url) {
+      this.modalLoading = false;
+      this.cdr.detectChanges();
+      return;
+    }
+
+    this.modalLoading = true;
     this.cdr.detectChanges();
 
     this.http.get(url, { headers: this.getHeaders(), responseType: 'blob' }).subscribe({
@@ -381,12 +380,6 @@ export class AuditorMatchingDetailsComponent implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       }
     });
-  }
-
-  closeModal() {
-    this.showModal = false;
-    this.revokeModalBlobUrl();
-    this.cdr.detectChanges();
   }
 
   openInNewTab() {
@@ -408,8 +401,4 @@ export class AuditorMatchingDetailsComponent implements OnInit, OnDestroy {
     }
   }
 
-  @HostListener('document:keydown.escape')
-  onEscapeKey() {
-    if (this.showModal) this.closeModal();
-  }
 }
