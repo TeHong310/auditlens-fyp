@@ -11,6 +11,7 @@ from helpers.send_back import (
 )
 from helpers.time_format import serialize_row_datetimes, to_utc_iso
 from helpers.duplicate_resolution import get_suspected_original, WITHDRAWN_DUPLICATE_STATUS
+from routes.auditor import build_comparison, _matching_status_for_comparison
 
 reviews_bp = Blueprint('reviews', __name__)
 
@@ -1031,9 +1032,18 @@ def finance_report():
         # for Three-Way Matching (purchase_orders/goods_receipts rows
         # carry a document_id FK back to the invoice, latest row wins if
         # more than one was ever uploaded) - reused here directly via a
-        # LATERAL join instead of calling build_comparison() per row
-        # (which would also compute the full match result this report
-        # doesn't need). No new matching logic, no new endpoint.
+        # LATERAL join instead of calling build_comparison() per row here
+        # too (that happens just below, for overall_status only).
+        #
+        # record_matches (previously joined here for match_score/
+        # overall_status) is dead: nothing in the current codebase INSERTs
+        # into it anymore (routes/matching.py's run_matching() - the only
+        # write path left - writes to three_way_matches, a different
+        # table; record_matches only ever appears in DELETE cleanup
+        # statements now). That's why overall_status always came back
+        # NULL here regardless of whether PO/GR were actually uploaded,
+        # which the frontend's fallback then misread as "Missing
+        # Documents". Dropped the join entirely.
         cursor.execute('''
             SELECT
                 d.document_id,
@@ -1048,8 +1058,6 @@ def finance_report():
                 ef.tax_amount,
                 ef.currency,
                 ef.ocr_confidence,
-                rm.match_score,
-                rm.overall_status,
                 rr.action,
                 rr.remarks AS comments,
                 rr.reviewed_at,
@@ -1057,7 +1065,6 @@ def finance_report():
                 gr.gr_number AS goods_receipt_number
             FROM documents d
             LEFT JOIN extracted_fields ef ON d.document_id = ef.document_id
-            LEFT JOIN record_matches rm ON ef.extraction_id = rm.extraction_id
             LEFT JOIN review_records rr ON d.document_id = rr.document_id
             LEFT JOIN LATERAL (
                 SELECT po_number FROM purchase_orders
@@ -1074,17 +1081,29 @@ def finance_report():
         ''', (user['user_id'],))
 
         documents = cursor.fetchall()
-        conn.close()
 
+        # overall_status: the REAL, currently-active matching result -
+        # the exact same build_comparison()/_matching_status_for_
+        # comparison() every other matching-aware page (Record Detail,
+        # Matching Details, Evidence Passport, the Auditor queue's own
+        # standalone-invoice rows) already reads, returning one of
+        # 'PASS'/'REVIEW'/'PARTIAL'/'FAIL', or 'PENDING' when no
+        # comparison exists yet. No new matching logic - this calls the
+        # existing engine, once per document (bounded to this one
+        # Finance user's own uploads).
         result = []
         for doc in documents:
             row = dict(doc)
+            comparison = build_comparison(cursor, row['document_id'])
+            row['overall_status'] = _matching_status_for_comparison(comparison) if comparison else 'PENDING'
             for k, v in row.items():
                 if hasattr(v, 'isoformat'):
                     row[k] = v.isoformat()
                 elif hasattr(v, '__float__'):
                     row[k] = float(v)
             result.append(row)
+
+        conn.close()
 
         return jsonify({'documents': result}), 200
 

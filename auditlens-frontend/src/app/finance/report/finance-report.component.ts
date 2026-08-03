@@ -351,22 +351,35 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
     }
   }
 
-  // Match Status — reads the existing matching engine's own stored
-  // overall_status (routes/matching.py: 'full_match'/'partial_match'/
-  // 'mismatch'), never a new score or formula. No record_matches row
-  // at all (overall_status null) means matching never ran, i.e. a
-  // supporting document is missing.
+  // Match Status — two-step: whether PO/GR are ACTUALLY linked
+  // (purchase_order_number/goods_receipt_number, the real linkage the
+  // backend now joins) decides "Missing Documents" FIRST, independent
+  // of overall_status; only once both are present does overall_status
+  // — the real, currently-active matching result from routes/
+  // auditor.py::build_comparison()/_matching_status_for_comparison()
+  // ('PASS'/'REVIEW'/'PARTIAL'/'FAIL', or 'PENDING' when matching
+  // hasn't produced a result yet) — decide Full Match/Review Required/
+  // Mismatch/Pending. Never a new score or formula, and "Missing
+  // Documents" is never the fallback for a null/unknown status when
+  // both documents are actually present.
+  private hasBothSupportingDocs(doc: any): boolean {
+    return !!doc.purchase_order_number && !!doc.goods_receipt_number;
+  }
+
   getMatchStatusLabel(doc: any): string {
-    if (doc.overall_status === 'full_match') return 'Full Match';
-    if (doc.overall_status === 'partial_match') return 'Review Required';
-    if (doc.overall_status === 'mismatch') return 'Mismatch';
-    return 'Missing Documents';
+    if (!this.hasBothSupportingDocs(doc)) return 'Missing Documents';
+    if (doc.overall_status === 'PASS') return 'Full Match';
+    if (doc.overall_status === 'REVIEW' || doc.overall_status === 'PARTIAL') return 'Review Required';
+    if (doc.overall_status === 'FAIL') return 'Mismatch';
+    return 'Pending';
   }
 
   getMatchStatusClass(doc: any): string {
-    if (doc.overall_status === 'full_match') return 'badge-approved';
-    if (doc.overall_status === 'partial_match') return 'badge-review';
-    return 'badge-returned';
+    if (!this.hasBothSupportingDocs(doc)) return 'badge-returned';
+    if (doc.overall_status === 'PASS') return 'badge-approved';
+    if (doc.overall_status === 'REVIEW' || doc.overall_status === 'PARTIAL') return 'badge-review';
+    if (doc.overall_status === 'FAIL') return 'badge-returned';
+    return 'badge-pending';
   }
 
   // Related Documents — purchase_order_number/goods_receipt_number are

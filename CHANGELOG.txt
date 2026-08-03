@@ -18620,3 +18620,66 @@ Setup/config needed:
      (Docker web service) and the frontend static site.
   2. Backend redeploy required (routes/reviews.py changed - no new
      migration, no new dependency, no new environment variable).
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Backend (auditlens-backend/routes/reviews.py only):
+    - Root cause found: finance_report()'s overall_status came from
+      LEFT JOIN record_matches rm ON ef.extraction_id = rm.extraction_id
+      - but record_matches is a DEAD table. Nothing in the current
+        codebase inserts into it anymore; routes/matching.py's
+        run_matching() (the only write path left with that name) writes
+        to a DIFFERENT table, three_way_matches. So overall_status was
+        NULL for every single document regardless of whether PO/GR were
+        uploaded, and the frontend's old fallback logic misread every
+        one of those NULLs as "Missing Documents" - even when Related
+        Documents clearly showed both PO and GR linked.
+    - Fix: dropped the dead record_matches join entirely. overall_status
+      is now computed per document via build_comparison()/
+      _matching_status_for_comparison() (routes/auditor.py) - the exact
+      same live matching engine Record Detail, Matching Details, the
+      Evidence Passport, and the Auditor queue's own standalone-invoice
+      rows already trust - returning 'PASS'/'REVIEW'/'PARTIAL'/'FAIL',
+      or 'PENDING' when no comparison exists yet. No new matching logic
+      (calls the existing engine), no new endpoint. Runs once per
+      document in this one Finance user's own upload list.
+  Frontend (auditlens-frontend/.../finance/report/finance-report.component.ts only):
+    - getMatchStatusLabel()/getMatchStatusClass() rewritten as a
+      two-step check: hasBothSupportingDocs() (purchase_order_number
+      AND goods_receipt_number both present - the real linkage already
+      added to this endpoint) decides "Missing Documents" FIRST,
+      independent of overall_status; only once both documents are
+      genuinely present does overall_status decide Full Match (PASS) /
+      Review Required (REVIEW or PARTIAL) / Mismatch (FAIL) / Pending
+      (anything else, e.g. PENDING or an unrecognized value) - so an
+      unknown/null status on a document that DOES have both documents
+      linked now reads "Pending", never "Missing Documents".
+
+Why:
+  Reported bug: almost every package showed "Missing Documents" even
+  when Related Documents clearly contained both PO and GR - traced to
+  the query silently reading a table nothing writes to anymore, and a
+  frontend fallback that couldn't tell "no status" apart from "no
+  documents".
+
+Verified:
+  New tests/extraction/test_finance_report_match_status.py (real local
+  Postgres, skips cleanly if unavailable) - confirms finance_report()'s
+  SQL no longer JOINs record_matches, confirms it computes overall_status
+  via build_comparison()/_matching_status_for_comparison(), and against
+  real data in this dev DB confirmed a document with both a PO and GR
+  linked (document 3753) now returns a real status ('PASS') instead of
+  the old silent None/Missing Documents misread. python -c "import app"
+  - clean import, no circular-import issue from the new routes.auditor
+  import into routes/reviews.py. npx ng build --configuration
+  production - clean compile; only the same pre-existing bundle-budget
+  warnings on two unrelated files this task never touched. Did not run
+  the full backend suite or Playwright, per this task's own scope.
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy both the backend
+     (Docker web service) and the frontend static site.
+  2. Backend redeploy required (routes/reviews.py changed - no new
+     migration, no new dependency, no new environment variable).
