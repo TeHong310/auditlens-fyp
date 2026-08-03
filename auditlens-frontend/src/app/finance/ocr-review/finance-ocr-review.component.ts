@@ -229,13 +229,19 @@ export class FinanceOcrReviewComponent implements OnInit {
       next: () => {
         this.isSubmitting = false;
         this.successMessage = 'Document submitted to Auditor successfully!';
-        this.documents = this.documents.filter(d => d.document_id !== this.selectedDoc.document_id);
-        this.grList = this.grList.filter(
-          g => g.document_id !== this.selectedDoc.document_id
-        );
-        this.poList = this.poList.filter(
-          p => p.document_id !== this.selectedDoc.document_id
-        );
+        const submittedDocumentId = this.selectedDoc.document_id;
+        this.documents = this.documents.filter(d => d.document_id !== submittedDocumentId);
+        this.grList = this.grList.filter(g => g.document_id !== submittedDocumentId);
+        this.poList = this.poList.filter(p => p.document_id !== submittedDocumentId);
+        // A PO has no submit button of its own — it disappears from
+        // this queue only as a side effect of its parent invoice's
+        // submission (see loadPOList()'s own comment). If the auditor
+        // had it open in the PO detail panel when the invoice was
+        // submitted, clear that selection too instead of leaving it
+        // pointing at a now-removed row.
+        if (this.selectedPO?.document_id === submittedDocumentId) {
+          this.selectedPO = null;
+        }
         this.selectedDoc = null;
         this.cdr.detectChanges();
         setTimeout(() => { this.successMessage = ''; this.cdr.detectChanges(); }, 4000);
@@ -280,9 +286,17 @@ export class FinanceOcrReviewComponent implements OnInit {
 
   // ── PO ───────────────────────────────────────────────────
 
+  // pending_review=1: OCR Review's PO tab is a "still requiring OCR
+  // review" queue, the same meaning the Invoice tab already uses
+  // (loadDocuments() below filters to status === 'ocr_done'). A PO has
+  // no reviewable status of its own — it's derived from its parent
+  // invoice's — so the backend now filters this for us when asked; see
+  // routes/documents.py::get_po_list()'s own comment for why this is
+  // opt-in (Finance Home/Finance Upload call the SAME endpoint and need
+  // POs for invoices in every status, not just 'ocr_done').
   loadPOList() {
     this.isLoadingPO = true;
-    this.http.get<any>(`${this.apiUrl}/documents/po/list`, {
+    this.http.get<any>(`${this.apiUrl}/documents/po/list?pending_review=1`, {
       headers: this.getHeaders()
     }).subscribe({
       next: (res) => {

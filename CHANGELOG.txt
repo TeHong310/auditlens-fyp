@@ -18842,3 +18842,76 @@ Verified:
 Setup/config needed:
   1. Push to GitHub - Render should auto-deploy the frontend static
      site (no backend change, so a backend redeploy isn't required).
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Backend (auditlens-backend/routes/documents.py):
+    - Root cause found: get_po_list() (GET /documents/po/list) returned
+      EVERY PO belonging to the finance user, with no status filter at
+      all. A PO has no reviewable status of its own — its OCR Review
+      visibility is meant to be derived from its parent invoice's
+      status, the same way GR's list already worked — but unlike GR,
+      whose frontend (loadGRList()) was already filtering client-side
+      to only invoices still 'ocr_done', PO had no equivalent filter
+      anywhere, backend or frontend. So once an invoice was submitted
+      (status -> 'under_review'), its GR correctly vanished from the
+      queue on next load, but its PO stayed forever.
+    - Fix: get_po_list() now accepts an opt-in ?pending_review=1 query
+      param. When present, the SQL adds AND d.status = 'ocr_done' (the
+      exact same "still requiring OCR review" definition the Invoice
+      tab's own loadDocuments() already uses). Deliberately NOT an
+      unconditional filter: finance-home.component.ts and finance-
+      upload.component.ts also call this SAME endpoint and need POs for
+      invoices in EVERY status — confirmed by reading finance-home.
+      component.ts, whose "Missing PO" correction-analysis check
+      specifically inspects RETURNED invoices (poDocumentIds.has(...)),
+      and finance-upload.component.ts's own Related Documents column
+      for already-approved/under-review packages. An unconditional
+      filter would have silently broken both. The default (no query
+      param) behaviour is byte-for-byte unchanged.
+  Frontend (auditlens-frontend/.../finance/ocr-review/finance-ocr-
+  review.component.ts):
+    - loadPOList() now requests ?pending_review=1, so the PO tab shows
+      only POs still requiring review, straight from the backend -
+      matching what loadGRList() already achieved with its own client-
+      side filter.
+    - submitToAuditor()'s success handler now also clears selectedPO
+      when it was pointing at the just-submitted invoice's PO (a PO has
+      no submit button of its own, so this is the one place its
+      selection needs clearing) - previously only selectedDoc was
+      cleared. The existing this.documents/grList/poList local-state
+      filtering, the confirm-on-failure behaviour (nothing is removed
+      unless the HTTP call succeeds), and the transaction-package
+      sibling-submission logic in POST /reviews/submit/<id> are all
+      unchanged.
+
+Why:
+  Reported bug: after Finance submits an invoice, its Invoice and GR
+  rows correctly disappear from OCR Review, but the matching PO record
+  stayed visible in the Purchase Order tab indefinitely (surviving page
+  reloads), because nothing - not the endpoint, not the frontend - ever
+  excluded it once its parent invoice moved past 'ocr_done'.
+
+Verified:
+  New tests/extraction/test_po_ocr_review_queue.py (real local
+  Postgres, skips cleanly if unavailable) - confirms get_po_list()'s
+  source has the opt-in filter and an unchanged unfiltered default
+  branch; against real data in this dev DB, confirmed an actual PO
+  belonging to a non-ocr_done invoice is excluded by the pending_review
+  =1 query while remaining present in the default query (proving
+  Finance Home/Finance Upload's existing behaviour survives). python -c
+  "import app" - clean import. npx ng build --configuration production
+  - clean compile; only the same pre-existing bundle-budget warnings on
+  two unrelated files this task never touched. Did not run the full
+  backend suite or Playwright, per this task's own scope. git diff
+  --stat confirms only routes/documents.py and finance-ocr-review.
+  component.ts changed - no PO record deleted, no matching/extraction
+  logic touched, no other page modified.
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy both the backend
+     (Docker web service) and the frontend static site.
+  2. Backend redeploy required (routes/documents.py changed - no new
+     migration, no new dependency, no new environment variable).

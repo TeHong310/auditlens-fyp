@@ -886,14 +886,37 @@ def get_po_list():
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+        # pending_review=1: OCR Review's PO tab only, a "still requiring
+        # OCR review" queue with the SAME meaning the Invoice tab already
+        # uses (finance-ocr-review.component.ts::loadDocuments() filters
+        # to status == 'ocr_done' client-side) — a PO's own record has no
+        # separate reviewable status, so it's derived from its parent
+        # invoice's. Opt-in via query param, defaulting OFF, because
+        # finance-home.component.ts and finance-upload.component.ts also
+        # call this SAME endpoint and need POs for invoices in ANY status
+        # (returned/under_review/approved too — e.g. Finance Home's
+        # "Missing PO" correction-analysis check specifically inspects
+        # RETURNED invoices) — unconditionally filtering here would have
+        # silently broken both of those unrelated pages.
+        pending_review_only = request.args.get('pending_review') == '1'
+
         if user['role'] == 'finance_executive':
-            cursor.execute(
-                '''SELECT po.* FROM purchase_orders po
-                   JOIN documents d ON po.document_id = d.document_id
-                   WHERE d.uploaded_by = %s
-                   ORDER BY po.uploaded_at DESC''',
-                (user['user_id'],)
-            )
+            if pending_review_only:
+                cursor.execute(
+                    '''SELECT po.* FROM purchase_orders po
+                       JOIN documents d ON po.document_id = d.document_id
+                       WHERE d.uploaded_by = %s AND d.status = 'ocr_done'
+                       ORDER BY po.uploaded_at DESC''',
+                    (user['user_id'],)
+                )
+            else:
+                cursor.execute(
+                    '''SELECT po.* FROM purchase_orders po
+                       JOIN documents d ON po.document_id = d.document_id
+                       WHERE d.uploaded_by = %s
+                       ORDER BY po.uploaded_at DESC''',
+                    (user['user_id'],)
+                )
         else:
             cursor.execute('SELECT * FROM purchase_orders ORDER BY uploaded_at DESC')
 
