@@ -683,6 +683,7 @@ export class AuditorRecordDetailComponent implements OnInit {
     if (action === 'resubmitted') return 'Record resubmitted for auditor review';
     if (action === 'approved') return 'Record approved';
     if (action === 'need_review') return 'Marked for further review';
+    if (action === 'closed') return 'Correction case closed';
     return action;
   }
 

@@ -1061,13 +1061,19 @@ def get_documents():
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+        # A withdrawn duplicate (Finance-confirmed, correction case
+        # closed — see helpers/duplicate_resolution.py) is excluded from
+        # this general list so it disappears from every active
+        # queue/dashboard count built on top of it (Finance Home, Finance
+        # Report, etc.) — the row itself is untouched and stays fully
+        # readable via GET /documents/<id> below.
         if user['role'] == 'finance_executive':
             cursor.execute(
                 '''SELECT d.*, ef.invoice_number, ef.vendor_name, ef.invoice_date,
                           ef.total_amount, ef.tax_amount, ef.ocr_confidence, ef.currency
                    FROM documents d
                    LEFT JOIN extracted_fields ef ON d.document_id = ef.document_id
-                   WHERE d.uploaded_by = %s
+                   WHERE d.uploaded_by = %s AND d.status != 'withdrawn_duplicate'
                    ORDER BY d.uploaded_at DESC''',
                 (user['user_id'],)
             )
@@ -1077,6 +1083,7 @@ def get_documents():
                           ef.total_amount, ef.tax_amount, ef.ocr_confidence, ef.currency
                    FROM documents d
                    LEFT JOIN extracted_fields ef ON d.document_id = ef.document_id
+                   WHERE d.status != 'withdrawn_duplicate'
                    ORDER BY d.uploaded_at DESC'''
             )
 

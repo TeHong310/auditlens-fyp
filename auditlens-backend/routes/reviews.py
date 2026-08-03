@@ -10,6 +10,7 @@ from helpers.send_back import (
     compute_activity_summary, is_overdue,
 )
 from helpers.time_format import serialize_row_datetimes, to_utc_iso
+from helpers.duplicate_resolution import get_suspected_original, WITHDRAWN_DUPLICATE_STATUS
 
 reviews_bp = Blueprint('reviews', __name__)
 
@@ -549,6 +550,137 @@ def resubmit_document(document_id):
 
 
 # ------------------------------------------------------------
+# GET DUPLICATE-FINDING CONTEXT — the "suspected original" invoice for
+# a document that was returned as a possible duplicate. Any
+# authenticated user (same permissive pattern as /history/<id> and
+# /send-back-cycles/<id> above) — read-only, Finance Correction Detail
+# uses it for "View Suspected Original".
+# GET /reviews/duplicate-suspect/<document_id>
+# ------------------------------------------------------------
+@reviews_bp.route('/duplicate-suspect/<int:document_id>', methods=['GET'])
+@jwt_required()
+def get_duplicate_suspect(document_id):
+    user_id = get_jwt_identity()
+    get_user_by_id(user_id)
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        suspected_original = get_suspected_original(cursor, document_id)
+        conn.close()
+
+        return jsonify({
+            'document_id':        document_id,
+            'suspected_original': suspected_original,
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
+# WITHDRAW THIS DUPLICATE — Finance confirms this returned invoice
+# really is a duplicate of another already-valid transaction and
+# withdraws it, WITHOUT sending it back to the auditor for another
+# look (unlike Not a Duplicate/resubmit, which goes back through the
+# normal audit cycle). Only valid for a cycle the auditor explicitly
+# returned with reason_category='possible_duplicate_invoice' - using
+# this for any other return reason is rejected, so the existing field-
+# correction/PO-GR-replacement/resubmit flow stays the ONLY path for
+# every other send-back reason (unchanged).
+#
+# Effects (none of them delete a row - see helpers/duplicate_
+# resolution.py's WITHDRAWN_DUPLICATE_STATUS docstring):
+#   - documents.status -> 'withdrawn_duplicate' (this document only;
+#     the suspected original is never touched, so it stays exactly the
+#     valid transaction it already was)
+#   - the open send_back_cycles row -> cycle_status='resolved',
+#     resolution='withdrawn_duplicate' (closes the correction case)
+#   - a review_records row (action='closed') + an audit_logs row,
+#     both carrying the acting Finance user's id and a real timestamp -
+#     the same two places every other decision in this app (approve/
+#     return/resubmit) already gets logged, so this shows up in Review
+#     History exactly like any other case-closing action.
+# POST /reviews/withdraw-duplicate/<document_id>
+# Body (optional): {"note": "..."}
+# Finance Executive only
+# ------------------------------------------------------------
+@reviews_bp.route('/withdraw-duplicate/<int:document_id>', methods=['POST'])
+@jwt_required()
+def withdraw_duplicate(document_id):
+    user_id = get_jwt_identity()
+    user    = get_user_by_id(user_id)
+
+    if user['role'] != 'finance_executive':
+        return jsonify({'error': 'Access denied. Finance Executive only.'}), 403
+
+    data = request.get_json() or {}
+    note = (data.get('note') or '').strip() or 'Finance confirmed this invoice is a duplicate submission and withdrew it.'
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        cursor.execute('SELECT status FROM documents WHERE document_id = %s', (document_id,))
+        doc = cursor.fetchone()
+        if not doc:
+            conn.close()
+            return jsonify({'error': 'Document not found'}), 404
+        if doc['status'] != 'returned':
+            conn.close()
+            return jsonify({'error': f'Document is not returned. Current status: {doc["status"]}'}), 400
+
+        cursor.execute(
+            '''SELECT cycle_id, return_reason_category FROM send_back_cycles
+               WHERE document_id = %s AND cycle_status = 'action_required'
+               ORDER BY cycle_number DESC LIMIT 1''',
+            (document_id,)
+        )
+        open_cycle = cursor.fetchone()
+        if not open_cycle or open_cycle['return_reason_category'] != 'possible_duplicate_invoice':
+            conn.close()
+            return jsonify({'error': 'This action is only available when the auditor returned this '
+                                      'document as a possible duplicate invoice.'}), 400
+
+        cursor.execute(
+            "UPDATE documents SET status = %s, updated_at = CURRENT_TIMESTAMP WHERE document_id = %s",
+            (WITHDRAWN_DUPLICATE_STATUS, document_id)
+        )
+
+        cursor.execute(
+            '''UPDATE send_back_cycles
+               SET finance_response = %s, finance_responded_by = %s, finance_responded_at = CURRENT_TIMESTAMP,
+                   cycle_status = 'resolved', resolution = %s, resolved_at = CURRENT_TIMESTAMP,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE cycle_id = %s''',
+            (note, user['user_id'], WITHDRAWN_DUPLICATE_STATUS, open_cycle['cycle_id'])
+        )
+
+        cursor.execute(
+            '''INSERT INTO review_records (document_id, reviewed_by, action, remarks)
+               VALUES (%s, %s, 'closed', %s) RETURNING review_id''',
+            (document_id, user['user_id'], note)
+        )
+        review_id = cursor.fetchone()['review_id']
+
+        conn.commit()
+        conn.close()
+
+        log_audit(user['user_id'], 'WITHDRAW_DUPLICATE', 'documents', document_id,
+                  f'Finance withdrew document {document_id} as a duplicate submission: {note}')
+
+        return jsonify({
+            'message':     'Duplicate withdrawn. This correction case is now closed.',
+            'document_id': document_id,
+            'review_id':   review_id,
+            'status':      WITHDRAWN_DUPLICATE_STATUS,
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ------------------------------------------------------------
 # GET REVIEW HISTORY
 # GET /reviews/history/<document_id>
 # ------------------------------------------------------------
@@ -917,7 +1049,7 @@ def finance_report():
             LEFT JOIN extracted_fields ef ON d.document_id = ef.document_id
             LEFT JOIN record_matches rm ON ef.extraction_id = rm.extraction_id
             LEFT JOIN review_records rr ON d.document_id = rr.document_id
-            WHERE d.uploaded_by = %s
+            WHERE d.uploaded_by = %s AND d.status != 'withdrawn_duplicate'
             ORDER BY d.uploaded_at DESC
         ''', (user['user_id'],))
 

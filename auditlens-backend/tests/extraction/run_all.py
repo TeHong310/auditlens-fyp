@@ -22,7 +22,8 @@ SUITES = ['test_invoice.py', 'test_po.py', 'test_gr.py', 'test_currency.py', 'te
           'test_phase4_integration.py', 'test_transaction_packages.py', 'test_transaction_auditor_integration.py',
           'test_anomaly_detector.py', 'test_anomaly_decision_mapping.py', 'test_audit_review_steps_timeline.py',
           'test_document_review_steps_migration.py']
-REVIEWS_SUITES = ['test_send_back_validation.py', 'test_send_back_routes.py', 'test_review_steps.py']
+REVIEWS_SUITES = ['test_send_back_validation.py', 'test_send_back_routes.py', 'test_review_steps.py',
+                   'test_withdraw_duplicate.py']
 CALENDAR_SUITES = ['test_calendar_events_validation.py', 'test_malaysia_calendar.py', 'test_calendar_routes.py']
 
 if __name__ == '__main__':

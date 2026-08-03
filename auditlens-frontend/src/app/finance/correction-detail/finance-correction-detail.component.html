@@ -85,6 +85,57 @@
           </ng-container>
         </div>
 
+        <!-- Duplicate Finding — shown only while the auditor's return
+             reason is "possible duplicate invoice" and the case is
+             still open. Field correction / PO-GR replacement below are
+             completely unaffected and stay available either way. -->
+        <div class="list-card duplicate-card" *ngIf="isDuplicateFinding">
+          <h2 class="section-title"><i class="ph-duotone ph-copy"></i> Duplicate Finding</h2>
+          <p class="section-subtitle">The auditor flagged this invoice as a possible duplicate submission.</p>
+
+          <div class="ar-loading" *ngIf="isLoadingSuspect">Looking up the suspected original…</div>
+
+          <ng-container *ngIf="!isLoadingSuspect">
+            <div class="suspect-box" *ngIf="suspectedOriginal">
+              <p class="ar-label">Suspected original</p>
+              <p class="ar-value">{{ suspectedOriginal.invoice_number || 'Unknown invoice' }} — {{ suspectedOriginal.vendor_name || 'Unknown vendor' }}</p>
+              <p class="suspect-meta">
+                {{ formatAmount(suspectedOriginal.total_amount, suspectedOriginal.currency) }} · {{ formatDate(suspectedOriginal.invoice_date) }}
+                · {{ suspectedOriginal.days_apart }} day{{ suspectedOriginal.days_apart === 1 ? '' : 's' }} apart
+              </p>
+              <button type="button" class="btn-open" (click)="viewSuspectedOriginal()">
+                <i class="ph-duotone ph-eye"></i> View Suspected Original
+              </button>
+            </div>
+            <p class="ar-loading" *ngIf="!suspectedOriginal">
+              No matching original invoice is available to display for this finding.
+            </p>
+          </ng-container>
+
+          <div class="withdraw-box">
+            <p class="ar-label">If this really is a duplicate</p>
+            <button type="button" class="btn-withdraw" (click)="toggleWithdrawConfirm()" *ngIf="!showWithdrawConfirm" [disabled]="isWithdrawing">
+              <i class="ph-duotone ph-x-circle"></i> Withdraw This Duplicate
+            </button>
+
+            <div class="withdraw-confirm" *ngIf="showWithdrawConfirm">
+              <p class="withdraw-warning">
+                <i class="ph-duotone ph-warning"></i>
+                This will withdraw this submission as a confirmed duplicate and close the correction case.
+                The original valid transaction is not affected. This cannot be undone.
+              </p>
+              <textarea class="field-textarea" rows="2" [(ngModel)]="withdrawNote"
+                placeholder="Optional note, e.g. &quot;Uploaded twice by mistake.&quot;"></textarea>
+              <div class="withdraw-confirm-actions">
+                <button type="button" class="btn-withdraw-confirm" (click)="withdrawDuplicate()" [disabled]="isWithdrawing">
+                  {{ isWithdrawing ? 'Withdrawing…' : 'Confirm Withdrawal' }}
+                </button>
+                <button type="button" class="btn-cancel-link" (click)="toggleWithdrawConfirm()" [disabled]="isWithdrawing">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
 
       <!-- Right: Finance Resolution -->
@@ -211,17 +262,24 @@
         </div>
 
         <div class="field-item finance-response-field">
-          <label class="field-label">Finance Response <span class="field-required">*</span></label>
+          <label class="field-label">
+            {{ isDuplicateFinding ? 'Explain why this is not a duplicate' : 'Finance Response' }}
+            <span class="field-required">*</span>
+          </label>
           <textarea class="field-textarea" rows="3" [(ngModel)]="financeResponse"
-            placeholder='Describe what was corrected, e.g. "Purchase Order and Goods Receipt have been uploaded as requested."'></textarea>
+            [placeholder]="isDuplicateFinding
+              ? 'Explain why this invoice is a distinct, legitimate transaction, e.g. \'Different delivery batch for the same recurring order.\''
+              : 'Describe what was corrected, e.g. \'Purchase Order and Goods Receipt have been uploaded as requested.\''"></textarea>
         </div>
 
         <div class="submit-section">
           <button class="btn-submit" (click)="resubmit()" [disabled]="isSubmitting || !canResubmit()">
-            {{ isSubmitting ? 'Submitting...' : 'Submit Correction for Review' }}
+            <ng-container *ngIf="isDuplicateFinding">{{ isSubmitting ? 'Submitting...' : 'Not a Duplicate — Explain and Resubmit' }}</ng-container>
+            <ng-container *ngIf="!isDuplicateFinding">{{ isSubmitting ? 'Submitting...' : 'Submit Correction for Review' }}</ng-container>
           </button>
           <p class="submit-note" *ngIf="!canResubmit()">
-            <i class="ph-duotone ph-warning"></i> Add a Finance Response before resubmitting.
+            <i class="ph-duotone ph-warning"></i>
+            {{ isDuplicateFinding ? 'Explain why this is not a duplicate before resubmitting.' : 'Add a Finance Response before resubmitting.' }}
           </p>
         </div>
       </div>

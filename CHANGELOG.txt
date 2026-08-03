@@ -18027,3 +18027,257 @@ Rollback instructions:
   reverting removes the sidebar item/route/page and the 2 new response
   fields on GET /auditor/transactions; every other page (which never
   read those 2 new fields) is unaffected either way.
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Investigated before writing any code: the auditor's existing
+  structured send-back form already has a 'possible_duplicate_invoice'
+  reason_category and a 'confirm_duplicate_submission' required_action
+  (helpers/send_back.py) - this feature is Finance's missing
+  counterpart to that existing auditor-side flow, not a new concept.
+  Separately, helpers/anomaly_detector.py's duplicate detector already
+  computes which OTHER invoice a suspicious one matches, but never
+  stored that match's document_id anywhere retrievable - only the
+  matched invoice NUMBER/date. Fixed that gap first (one added field)
+  so "View Suspected Original" could reuse the SAME cached detection
+  instead of re-running it.
+
+  Backend (auditlens-backend/):
+    - helpers/anomaly_detector.py: detect_duplicate_suspicion()'s
+      returned pattern now includes matched_document_id alongside the
+      existing matched_invoice_no/matched_date/days_apart/
+      amount_diff_pct - the one line needed so a later lookup can find
+      the suspected original's own document row, not just its invoice
+      number as text.
+    - New helpers/duplicate_resolution.py: WITHDRAWN_DUPLICATE_STATUS
+      constant + get_suspected_original(cursor, document_id), which
+      reads the most recent cached anomaly_type='duplicate' row for a
+      document and resolves matched_document_id into the original's
+      invoice_number/vendor_name/amount/date - zero new detection
+      logic, purely reading what's already stored.
+    - app.py: new _ensure_documents_withdrawn_duplicate_status()
+      migration (same DROP/ADD CONSTRAINT pattern as the existing
+      _ensure_review_records_need_review_action()) widening
+      documents_status_check to allow 'withdrawn_duplicate'. The exact
+      pre-existing allowed-value list was queried directly from the
+      live database (pg_get_constraintdef) before writing this, not
+      guessed - documents itself has no CREATE TABLE in this repo (it
+      predates every other _ensure_* migration), so getting this wrong
+      would have silently forbidden a status some other part of the
+      app already relies on.
+    - routes/reviews.py gained two endpoints, GET /reviews/duplicate-
+      suspect/<id> (returns the suspected original via the helper
+      above - "View Suspected Original") and POST /reviews/withdraw-
+      duplicate/<id> (Finance only; "Withdraw This Duplicate"). The
+      withdraw route: (1) requires the document be 'returned' AND its
+      open send_back_cycles row's return_reason_category be exactly
+      'possible_duplicate_invoice' - using this for any other send-back
+      reason is rejected with 400, so field correction/PO-GR
+      replacement/resubmit stays the ONLY path for every other reason,
+      unchanged; (2) sets documents.status='withdrawn_duplicate'; (3)
+      closes the cycle (cycle_status='resolved',
+      resolution='withdrawn_duplicate', finance_response/
+      finance_responded_by/finance_responded_at set exactly like the
+      existing resubmit path already does); (4) logs a review_records
+      row (action='closed' - already an allowed value in review_records
+      _action_check, unused until now) carrying the acting Finance
+      user's id, plus a log_audit() call - the same two places every
+      other decision in this app (approve/return/resubmit) gets
+      logged, so Review History shows this exactly like any other
+      case-closing action. Nothing is deleted anywhere - confirmed by
+      the new test suite below. "Not a Duplicate - Explain and
+      Resubmit" needed NO new backend code: it reuses the EXISTING
+      POST /reviews/resubmit/<id>, which already requires a non-empty
+      response via validate_finance_response_payload() before
+      accepting a resubmission - exactly the "must require an
+      explanation" rule the task asked for, already enforced.
+    - Excluding a withdrawn duplicate from "active queues, dashboard
+      counts and anomaly analysis": audited every backend query and
+      frontend computation that lists/counts documents (Explore-agent
+      assisted, cross-checked file:line by file:line before touching
+      anything) and classified each as either already-safe (explicit
+      allow-lists like `status IN ('under_review','resubmitted')`
+      automatically exclude any new status, no change needed) or
+      needing a fix (bare COUNT(*)/no status filter/deny-list). Fixed
+      the ones that needed it, at their ROOT/SOURCE so every downstream
+      consumer inherits the fix for free instead of patching a dozen
+      derived call sites: helpers/transaction_packages.py's
+      list_all_packages_with_documents() (filters a withdrawn invoice
+      out of a package's own invoice list for THIS function's callers
+      only - GET /auditor/transactions, i.e. Review Queue/Three-Way
+      Matching/Auditor Home - while the package's own detail view,
+      which calls the shared get_package_documents() directly, still
+      shows every linked document for full audit-trail visibility) and
+      list_standalone_invoices() (added a WHERE clause); routes/
+      documents.py's GET /documents/ (both role branches - the single
+      biggest lever, since Finance Home's every stat card/chart and
+      Finance Report's underlying data all derive from this one list,
+      so nothing in either page's own TypeScript needed to change);
+      routes/anomalies.py's GET /anomalies (added the documents join it
+      was missing entirely) and GET /anomalies/stats (added the status
+      condition to all 4 documents-joined queries plus both
+      anomaly_detection_runs queries); routes/reviews.py's GET
+      /reviews/finance-report. Deliberately did NOT touch
+      get_report_summary()'s action_counts/action_by_day or
+      _audit_trail_query (Report & Log's Approved/Sent Back
+      counts/Audit Trail) - those are historical EVENT logs of what the
+      auditor actually did, not current-state dashboards, and
+      retroactively hiding a past action because its outcome later
+      changed would contradict "preserve the complete audit trail", not
+      satisfy it. Also left routes/admin.py and the two currently-
+      frontend-unreferenced endpoints (/reviews/auditor-dashboard,
+      /reviews/finance-dashboard) alone - confirmed via grep that no
+      current UI calls either, so there was no user-visible gap to fix
+      there; noting this as a deliberate scope boundary, not an
+      oversight.
+
+  Frontend (auditlens-frontend/):
+    - finance-correction-detail.component.ts/html/css: a new "Duplicate
+      Finding" card appears ONLY when the open cycle's
+      return_reason_category is 'possible_duplicate_invoice' (a
+      isDuplicateFinding getter), positioned right after the existing
+      Auditor Request panel. It shows the suspected original (fetched
+      from the new endpoint) with a "View Suspected Original" button
+      (reuses the exact same authenticated-blob-fetch pattern
+      viewDocument()/viewPO()/viewGR() already use, so it's subject to
+      the SAME existing per-Finance-user file-access check GET
+      /documents/<id>/file already enforces - no new permission logic),
+      and a "Withdraw This Duplicate" button behind an inline confirm
+      step (a warning + optional note + Confirm/Cancel, not a native
+      browser confirm() popup) before calling the new withdraw
+      endpoint.
+    - The EXISTING field-correction inputs, PO/GR upload, and AI
+      Correction Assistant are completely untouched and stay visible
+      either way - satisfying "keep unchanged for non-duplicate cases"
+      literally, since nothing about them changed for ANY case. Only
+      the bottom Finance Response textarea's label/placeholder and the
+      submit button's label conditionally read "Explain why this is
+      not a duplicate" / "Not a Duplicate - Explain and Resubmit" when
+      isDuplicateFinding is true - the underlying financeResponse/
+      canResubmit()/resubmit() logic is 100% the same code path as
+      before, just relabeled, so the "explanation required before
+      resubmission" rule was never reimplemented, only its wording
+      made duplicate-specific.
+    - auditor-record-detail.component.ts's historyLabel() gained a
+      'closed' -> 'Correction case closed' mapping so Review History
+      (read by both this page and, indirectly, anyone auditing the
+      case) renders the new action sensibly instead of the raw word
+      "closed". (Caught and fixed a redundant "...by Finance by Zip
+      Fixture Finance" double-attribution during live testing - the
+      template already appends "by {{ reviewer_name }}" to every
+      label, so the label text itself must never name who did it.)
+    - Fixed a real bug caught during live testing, not by inspection:
+      loadCycle()'s success handler called this.cdr.detectChanges()
+      BEFORE the synchronous call to loadSuspectedOriginal() (which
+      sets isLoadingSuspect=true), triggering Angular's NG0100
+      ExpressionChangedAfterItHasBeenCheckedError in dev mode. Fixed by
+      reordering: mutate all state first, call detectChanges() once,
+      last.
+
+  Tests:
+    - New auditlens-backend/tests/reviews/test_withdraw_duplicate.py
+      (8 cases, real Flask test client + JWT, fake in-memory DB, same
+      pattern as test_send_back_routes.py): successful withdrawal sets
+      status/closes cycle/logs review_records with the correct
+      user+note AND leaves the suspected original's own document row
+      completely untouched; a note-less request still logs a non-empty
+      default remark; rejected (400) when the open cycle's reason isn't
+      'possible_duplicate_invoice' AND when the document isn't
+      'returned'; 403 for an auditor role; 404 for a nonexistent
+      document; GET /reviews/duplicate-suspect resolves a cached
+      anomaly's matched_document_id into the original's details, and
+      returns null (not an error) when no duplicate anomaly was ever
+      raised for that document. Registered in tests/extraction/run_all
+      .py's REVIEWS_SUITES.
+    - Fixed tests/extraction/test_anomaly_decision_mapping.py's
+      AnomalyStatsCursor mock, which pattern-matches exact SQL strings
+      - updated its 5 matched query strings (and _valid_anomalies()'s
+      own filtering) to the new WHERE d.status != 'withdrawn_duplicate'
+      shape, so it now exercises the ACTUAL exclusion behavior instead
+      of just no longer erroring on unrecognized SQL.
+
+Why:
+  The auditor's send-back workflow already had a "possible duplicate
+  invoice" reason Finance could receive, but no dedicated way to
+  resolve it - Finance was stuck using the generic field-correction/
+  resubmit flow for a case that isn't about correcting a field, it's
+  about confirming or disputing whether a submission is a genuine
+  duplicate. Withdrawing a confirmed duplicate needed to be a real,
+  auditable, non-destructive workflow transition (not a delete, not
+  silently dropped from history) precisely because this is a
+  compliance-facing audit tool - the whole point is that every decision
+  stays traceable to who made it and when, even the ones that end a
+  case.
+
+Build result:
+  Backend: all 34 suites in tests/extraction/run_all.py pass (33
+  pre-existing + the 1 new test_withdraw_duplicate.py), plus
+  `python -c "import app"` clean, confirming the new
+  documents_status_check migration runs without error against the real
+  local database. Frontend: `ng build --configuration development` and
+  `ng build --configuration production` both clean (the production
+  budget warnings are pre-existing, unrelated to this change).
+
+  Live verification against the real local dev stack (python app.py +
+  ng serve, real Postgres, real login as both
+  vision_fixture_auditor@x.com and zip_fixture_finance@x.com): used the
+  REAL auditor send-back API (not a hand-crafted DB row) to create a
+  genuine 'possible_duplicate_invoice' cycle on INV-NBI-2026-0017,
+  confirmed the Duplicate Finding card rendered with zero console
+  errors (after fixing the NG0100 bug above) and the existing field-
+  correction/PO-GR/AI-assistant panel unchanged. Clicked through
+  Withdraw This Duplicate end-to-end with page.expect_response():
+  200 OK, confirmed via direct DB query that documents.status became
+  'withdrawn_duplicate', the cycle closed with
+  resolution='withdrawn_duplicate' and the correct finance_response/
+  finance_responded_by, a review_records row was logged with
+  action='closed' and the correct reviewed_by, and the suspected
+  original document was completely unaffected. Confirmed via direct
+  API calls immediately after: GET /auditor/transactions no longer
+  includes the withdrawn document (Review Queue/Three-Way
+  Matching/Auditor Home), GET /documents/ (Finance's own list) and GET
+  /reviews/finance-report no longer include it, GET /anomalies
+  excludes its anomalies - while GET /documents/<id> and GET
+  /reviews/history/<id> still return it in full (status visible,
+  complete history intact). Reset the fixture and separately verified
+  Not a Duplicate - Explain and Resubmit: submit button correctly
+  disabled with an empty explanation, enabled once filled, POSTs to the
+  existing /reviews/resubmit/<id> (200 OK), document status becomes
+  'resubmitted' (back into the normal audit cycle, not withdrawn).
+  Verified on Auditor Record Detail that Review History shows the full
+  real sequence across both test runs - sent back, correction case
+  closed, sent back again, resubmitted - each with the correct actor
+  and timestamp. All test-generated review_records/send_back_cycles
+  rows deleted afterward and the fixture document's status restored;
+  both dev servers stopped by exact PID.
+
+AI usage confirmation:
+  Claude calls: 0. Gemini calls: 0.
+
+Deployment instructions:
+  1. Push to GitHub - Render should auto-deploy both the backend
+     (Docker web service) and the frontend static site.
+  2. Backend redeploy required (app.py, helpers/anomaly_detector.py,
+     new helpers/duplicate_resolution.py, routes/anomalies.py,
+     routes/documents.py, routes/reviews.py, helpers/
+     transaction_packages.py all changed).
+  3. On first boot after deploy, check the Render logs for
+     "documents.status_check widened for 'withdrawn_duplicate'" -
+     confirms the migration applied; a WARNING line there instead means
+     the constraint widening failed and Withdraw This Duplicate will
+     500 until it's fixed.
+  4. No new environment variables, no new dependencies, no manual data
+     migration - existing documents/send_back_cycles/review_records
+     rows are unaffected until a Finance user actually uses the new
+     Withdraw action.
+
+Rollback instructions:
+  Revert this one commit. No existing data is affected - reverting
+  removes the new endpoints, the new UI, the new status value's CHECK-
+  constraint entry (any row already set to 'withdrawn_duplicate' before
+  a rollback would then violate the reverted, narrower constraint on
+  its NEXT update, though SELECTs would still work fine - if a rollback
+  is needed after this has been used in production, correct any
+  'withdrawn_duplicate' rows' status first).

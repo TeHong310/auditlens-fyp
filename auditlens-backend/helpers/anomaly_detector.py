@@ -224,6 +224,7 @@ def detect_duplicate_suspicion(invoice_document_id, vendor_name, amount, invoice
         'type': 'duplicate',
         'severity': 'high',
         'pattern': {
+            'matched_document_id': match['document_id'],
             'matched_invoice_no': match['invoice_number'],
             'matched_date': match['invoice_date'].isoformat(),
             'days_apart': days_apart,

@@ -536,6 +536,16 @@ def list_all_packages_with_documents():
 
     for p in packages:
         docs = get_package_documents(p['id'])
+        # This function feeds the auditor's ACTIVE queue (GET /auditor/
+        # transactions -> Review Queue, Three-Way Matching, Auditor Home)
+        # only - a withdrawn duplicate invoice must not keep its package
+        # showing up there. Filtered here, not inside get_package_
+        # documents() itself, so the package's own detail view (GET
+        # /transaction-packages/<id>, which calls get_package_documents()
+        # directly) still shows every linked document, withdrawn or not -
+        # "preserve the complete audit trail" means the detail page must
+        # keep it visible, only the active queue must not.
+        docs['invoices'] = [inv for inv in docs['invoices'] if inv.get('status') != 'withdrawn_duplicate']
         p['documents'] = docs
         supplier = docs['invoices'][0].get('vendor_name') if docs['invoices'] else None
         if not supplier and docs['purchase_orders']:
@@ -563,6 +573,7 @@ def list_standalone_invoices():
                WHERE d.document_id NOT IN (
                    SELECT document_id FROM transaction_package_documents WHERE document_role = 'invoice'
                )
+               AND d.status != 'withdrawn_duplicate'
                ORDER BY d.uploaded_at DESC'''
         )
         return [dict(r) for r in cursor.fetchall()]

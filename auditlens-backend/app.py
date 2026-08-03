@@ -630,6 +630,38 @@ def _ensure_review_records_need_review_action():
         print(f'WARNING: could not widen review_records_action_check: {type(e).__name__}: {e}')
 
 
+def _ensure_documents_withdrawn_duplicate_status():
+    """documents.status has a CHECK constraint (documents_status_check)
+    limiting it to 'uploaded'/'ocr_processing'/'ocr_done'/'under_review'/
+    'returned'/'resubmitted'/'approved'/'completed' — predating the
+    Finance-side duplicate-resolution feature (routes/reviews.py::
+    withdraw_duplicate()), which sets 'withdrawn_duplicate'. Without
+    this, every Withdraw This Duplicate click fails with a Postgres
+    CheckViolation. Widens the constraint to also allow
+    'withdrawn_duplicate'; safe to run on every boot (DROP/ADD is
+    idempotent — dropping a constraint that doesn't exist is a no-op
+    under IF EXISTS, and re-adding the same definition is harmless).
+    The exact pre-existing value list was confirmed against the live
+    database (pg_get_constraintdef) before writing this, not guessed —
+    getting this wrong would silently forbid a status value some other
+    part of the app already relies on."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_status_check')
+        cursor.execute('''
+            ALTER TABLE documents ADD CONSTRAINT documents_status_check
+                CHECK (status IN ('uploaded', 'ocr_processing', 'ocr_done', 'under_review',
+                                   'returned', 'resubmitted', 'approved', 'completed',
+                                   'withdrawn_duplicate'))
+        ''')
+        conn.commit()
+        conn.close()
+        print("documents.status_check widened for 'withdrawn_duplicate'")
+    except Exception as e:
+        print(f'WARNING: could not widen documents_status_check: {type(e).__name__}: {e}')
+
+
 def _ensure_document_review_steps_table():
     """New table backing the Audit Review page's guided/sequential
     review checklist (Three-Way Matching -> Exception Review ->
@@ -939,6 +971,7 @@ _ensure_send_back_cycles_table()
 _ensure_calendar_tasks_table()
 _ensure_ai_assistant_cache_table()
 _ensure_review_records_need_review_action()
+_ensure_documents_withdrawn_duplicate_status()
 _ensure_document_review_steps_table()
 _ensure_document_relationships_table()
 _ensure_document_relationships_v2_columns()

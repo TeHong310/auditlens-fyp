@@ -112,35 +112,53 @@ class AnomalyStatsCursor:
         self._rows = None
 
     def _valid_anomalies(self):
-        doc_ids = set(self.db.get('documents', {}).keys())
-        return [a for a in self.db['anomalies'] if a['invoice_document_id'] in doc_ids]
+        """Excludes both an orphan anomaly (no matching documents row)
+        and one whose document has been withdrawn as a confirmed
+        duplicate (status='withdrawn_duplicate') — the fake-DB
+        equivalent of the real `JOIN documents d ... WHERE d.status !=
+        'withdrawn_duplicate'` every stats query now runs."""
+        docs = self.db.get('documents', {})
+        return [a for a in self.db['anomalies']
+                if a['invoice_document_id'] in docs
+                and docs[a['invoice_document_id']].get('status') != 'withdrawn_duplicate']
+
+    def _active_doc_ids(self):
+        return {doc_id for doc_id, d in self.db.get('documents', {}).items()
+                if d.get('status') != 'withdrawn_duplicate'}
 
     def execute(self, sql, params=None):
         s = ' '.join(sql.split())
 
-        if s == 'SELECT COUNT(*) AS cnt FROM anomalies a JOIN documents d ON a.invoice_document_id = d.document_id':
+        if s == ("SELECT COUNT(*) AS cnt FROM anomalies a JOIN documents d "
+                  "ON a.invoice_document_id = d.document_id WHERE d.status != 'withdrawn_duplicate'"):
             self._last = {'cnt': len(self._valid_anomalies())}
-        elif s == ('SELECT a.severity, COUNT(*) AS cnt FROM anomalies a '
-                    'JOIN documents d ON a.invoice_document_id = d.document_id GROUP BY a.severity'):
+        elif s == ("SELECT a.severity, COUNT(*) AS cnt FROM anomalies a "
+                    "JOIN documents d ON a.invoice_document_id = d.document_id "
+                    "WHERE d.status != 'withdrawn_duplicate' GROUP BY a.severity"):
             self._rows = _group_counts(self._valid_anomalies(), 'severity')
-        elif s == ('SELECT a.anomaly_type, COUNT(*) AS cnt FROM anomalies a '
-                    'JOIN documents d ON a.invoice_document_id = d.document_id GROUP BY a.anomaly_type'):
+        elif s == ("SELECT a.anomaly_type, COUNT(*) AS cnt FROM anomalies a "
+                    "JOIN documents d ON a.invoice_document_id = d.document_id "
+                    "WHERE d.status != 'withdrawn_duplicate' GROUP BY a.anomaly_type"):
             self._rows = _group_counts(self._valid_anomalies(), 'anomaly_type')
-        elif s == ('SELECT a.status, COUNT(*) AS cnt FROM anomalies a '
-                    'JOIN documents d ON a.invoice_document_id = d.document_id GROUP BY a.status'):
+        elif s == ("SELECT a.status, COUNT(*) AS cnt FROM anomalies a "
+                    "JOIN documents d ON a.invoice_document_id = d.document_id "
+                    "WHERE d.status != 'withdrawn_duplicate' GROUP BY a.status"):
             self._rows = _group_counts(self._valid_anomalies(), 'status')
-        elif s == ('SELECT COUNT(DISTINCT invoice_document_id) AS cnt, MAX(run_at) AS last_run '
-                    'FROM anomaly_detection_runs'):
+        elif s == ("SELECT COUNT(DISTINCT adr.invoice_document_id) AS cnt, MAX(adr.run_at) AS last_run "
+                    "FROM anomaly_detection_runs adr JOIN documents d ON adr.invoice_document_id = d.document_id "
+                    "WHERE d.status != 'withdrawn_duplicate'"):
             if self.db.get('anomaly_detection_runs_raises'):
                 raise RuntimeError('simulated anomaly_detection_runs failure (e.g. missing/broken table)')
-            runs = self.db['anomaly_detection_runs']
+            active_ids = self._active_doc_ids()
+            runs = [r for r in self.db['anomaly_detection_runs'] if r['invoice_document_id'] in active_ids]
             doc_ids = {r['invoice_document_id'] for r in runs}
             self._last = {
                 'cnt': len(doc_ids),
                 'last_run': max((r['run_at'] for r in runs), default=None),
             }
-        elif s == ('SELECT COUNT(DISTINCT a.invoice_document_id) AS cnt FROM anomalies a '
-                    'JOIN documents d ON a.invoice_document_id = d.document_id'):
+        elif s == ("SELECT COUNT(DISTINCT a.invoice_document_id) AS cnt FROM anomalies a "
+                    "JOIN documents d ON a.invoice_document_id = d.document_id "
+                    "WHERE d.status != 'withdrawn_duplicate'"):
             self._last = {'cnt': len({a['invoice_document_id'] for a in self._valid_anomalies()})}
         else:
             raise AssertionError(f'AnomalyStatsCursor: unhandled SQL: {s}')

@@ -61,6 +61,23 @@ export class FinanceCorrectionDetailComponent implements OnInit {
   };
   financeResponse: string = '';
 
+  // ── Duplicate-finding resolution (shown only when the auditor
+  // returned this invoice with reason_category = 'possible_duplicate_
+  // invoice' and the correction case is still open) — View Suspected
+  // Original, Withdraw This Duplicate, and Not a Duplicate / Explain
+  // and Resubmit. The third action reuses the EXISTING financeResponse
+  // + resubmit() flow below (same endpoint, same "response required"
+  // validation already enforced server-side) — only its label/
+  // placeholder change when a duplicate finding is active; field
+  // correction and PO/GR replacement stay exactly as they are for
+  // every send-back reason, duplicate or not. ──
+  suspectedOriginal: any = null;
+  isLoadingSuspect: boolean = false;
+  suspectError: string = '';
+  showWithdrawConfirm: boolean = false;
+  isWithdrawing: boolean = false;
+  withdrawNote: string = '';
+
   // ── AI Correction Assistant — contextual help for THIS case only,
   // called ONLY when Finance clicks a button below (never on page
   // load). Backed by POST /ai-assistant/<id>/finance/*. Not a general
@@ -144,9 +161,92 @@ export class FinanceCorrectionDetailComponent implements OnInit {
       next: (res) => {
         const cycles = res.cycles || [];
         this.latestCycle = cycles.length ? cycles[cycles.length - 1] : null;
+        // isLoadingSuspect must be set (inside loadSuspectedOriginal(),
+        // if applicable) BEFORE the one detectChanges() call below, not
+        // after — flipping it post-check triggers NG0100
+        // (ExpressionChangedAfterItHasBeenCheckedError) in dev mode.
+        if (this.isDuplicateFinding) this.loadSuspectedOriginal();
         this.cdr.detectChanges();
       },
       error: () => { this.latestCycle = null; }
+    });
+  }
+
+  // True only while there's an OPEN correction case (still awaiting a
+  // Finance decision) that the auditor returned specifically as a
+  // possible duplicate — once Finance withdraws or resubmits, the cycle
+  // is no longer 'action_required' and these actions stop showing,
+  // same as every other send-back reason's resolution UI.
+  get isDuplicateFinding(): boolean {
+    return this.latestCycle?.return_reason_category === 'possible_duplicate_invoice'
+      && this.latestCycle?.cycle_status === 'action_required';
+  }
+
+  // Reuses the SAME cached anomaly-engine finding (helpers/anomaly_
+  // detector.py's duplicate detector) that prompted the auditor to
+  // flag this in the first place — no new detection logic.
+  loadSuspectedOriginal() {
+    if (!this.documentId) return;
+    this.isLoadingSuspect = true;
+    this.suspectError = '';
+    this.http.get<any>(`${this.apiUrl}/reviews/duplicate-suspect/${this.documentId}`, {
+      headers: this.getHeaders()
+    }).subscribe({
+      next: (res) => {
+        this.isLoadingSuspect = false;
+        this.suspectedOriginal = res.suspected_original || null;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.isLoadingSuspect = false;
+        this.suspectedOriginal = null;
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  // "View Suspected Original" — opens the original invoice's own file,
+  // the same authenticated-blob-fetch pattern viewDocument()/viewPO()/
+  // viewGR() below already use. Subject to the SAME ownership check
+  // GET /documents/<id>/file already enforces for every Finance user
+  // (only the uploader can view a document) — a permission error simply
+  // surfaces as the existing file-open error message.
+  viewSuspectedOriginal() {
+    if (!this.suspectedOriginal?.document_id) return;
+    this.openBlob(`${this.apiUrl}/documents/${this.suspectedOriginal.document_id}/file`);
+  }
+
+  toggleWithdrawConfirm() {
+    this.showWithdrawConfirm = !this.showWithdrawConfirm;
+  }
+
+  // "Withdraw This Duplicate" — marks THIS document withdrawn_duplicate
+  // and closes the correction case server-side (routes/reviews.py::
+  // withdraw_duplicate). Never touches the suspected original, never
+  // deletes anything — see that route's own docstring for the full
+  // effect list.
+  withdrawDuplicate() {
+    if (!this.documentId || this.isWithdrawing) return;
+    this.isWithdrawing = true;
+    this.errorMessage = '';
+
+    this.http.post<any>(
+      `${this.apiUrl}/reviews/withdraw-duplicate/${this.documentId}`,
+      { note: this.withdrawNote.trim() },
+      { headers: this.getHeaders() }
+    ).subscribe({
+      next: () => {
+        this.isWithdrawing = false;
+        this.showWithdrawConfirm = false;
+        this.successMessage = 'Duplicate withdrawn. This correction case is now closed.';
+        this.cdr.detectChanges();
+        setTimeout(() => this.router.navigate(['/finance/corrections']), 1500);
+      },
+      error: (err) => {
+        this.isWithdrawing = false;
+        this.errorMessage = err.error?.error || 'Failed to withdraw this duplicate.';
+        this.cdr.detectChanges();
+      }
     });
   }
 

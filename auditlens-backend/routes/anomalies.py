@@ -36,7 +36,11 @@ def get_anomalies():
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        where = []
+        # A withdrawn duplicate's anomalies are excluded from this list
+        # (task: "exclude the withdrawn duplicate from ... anomaly
+        # analysis") — always applied, not a user-selectable filter, so
+        # it isn't part of `where`/user-controlled params below.
+        where = ["d.status != 'withdrawn_duplicate'"]
         params = []
         if severity_filter != 'all' and severity_filter in VALID_SEVERITIES:
             where.append('a.severity = %s')
@@ -48,7 +52,7 @@ def get_anomalies():
             where.append('a.status = %s')
             params.append(status_filter)
 
-        where_clause = ('WHERE ' + ' AND '.join(where)) if where else ''
+        where_clause = 'WHERE ' + ' AND '.join(where)
 
         cursor.execute(
             f'''SELECT a.anomaly_id, a.invoice_document_id,
@@ -58,6 +62,7 @@ def get_anomalies():
                        a.ai_explanation, a.ai_recommendation, a.status,
                        a.created_at
                 FROM anomalies a
+                JOIN documents d ON a.invoice_document_id = d.document_id
                 LEFT JOIN extracted_fields ef ON a.invoice_document_id = ef.document_id
                 {where_clause}
                 ORDER BY a.created_at DESC
@@ -233,15 +238,22 @@ def get_anomaly_stats():
         # and naturally excludes an "orphan" anomaly row (one whose
         # invoice_document_id no longer matches a real document) from
         # every total, instead of it silently inflating a count.
+        # d.status != 'withdrawn_duplicate' additionally excludes a
+        # Finance-confirmed duplicate's anomalies from every count below
+        # (task: "exclude the withdrawn duplicate from ... anomaly
+        # analysis") — the anomaly row itself is untouched, just no
+        # longer counted here.
         cursor.execute(
             '''SELECT COUNT(*) AS cnt FROM anomalies a
-               JOIN documents d ON a.invoice_document_id = d.document_id'''
+               JOIN documents d ON a.invoice_document_id = d.document_id
+               WHERE d.status != 'withdrawn_duplicate' '''
         )
         total = cursor.fetchone()['cnt']
 
         cursor.execute(
             '''SELECT a.severity, COUNT(*) AS cnt FROM anomalies a
                JOIN documents d ON a.invoice_document_id = d.document_id
+               WHERE d.status != 'withdrawn_duplicate'
                GROUP BY a.severity'''
         )
         by_severity = {row['severity']: row['cnt'] for row in cursor.fetchall()}
@@ -249,6 +261,7 @@ def get_anomaly_stats():
         cursor.execute(
             '''SELECT a.anomaly_type, COUNT(*) AS cnt FROM anomalies a
                JOIN documents d ON a.invoice_document_id = d.document_id
+               WHERE d.status != 'withdrawn_duplicate'
                GROUP BY a.anomaly_type'''
         )
         by_type = {row['anomaly_type']: row['cnt'] for row in cursor.fetchall()}
@@ -262,6 +275,7 @@ def get_anomaly_stats():
         cursor.execute(
             '''SELECT a.status, COUNT(*) AS cnt FROM anomalies a
                JOIN documents d ON a.invoice_document_id = d.document_id
+               WHERE d.status != 'withdrawn_duplicate'
                GROUP BY a.status'''
         )
         by_status = {row['status']: row['cnt'] for row in cursor.fetchall()}
@@ -283,8 +297,10 @@ def get_anomaly_stats():
         last_run = None
         try:
             cursor.execute(
-                'SELECT COUNT(DISTINCT invoice_document_id) AS cnt, MAX(run_at) AS last_run '
-                'FROM anomaly_detection_runs'
+                '''SELECT COUNT(DISTINCT adr.invoice_document_id) AS cnt, MAX(adr.run_at) AS last_run
+                   FROM anomaly_detection_runs adr
+                   JOIN documents d ON adr.invoice_document_id = d.document_id
+                   WHERE d.status != 'withdrawn_duplicate' '''
             )
             row = cursor.fetchone()
             transactions_analysed = row['cnt'] or 0
@@ -302,7 +318,8 @@ def get_anomaly_stats():
         if transactions_analysed == 0:
             cursor.execute(
                 '''SELECT COUNT(DISTINCT a.invoice_document_id) AS cnt FROM anomalies a
-                   JOIN documents d ON a.invoice_document_id = d.document_id'''
+                   JOIN documents d ON a.invoice_document_id = d.document_id
+                   WHERE d.status != 'withdrawn_duplicate' '''
             )
             transactions_analysed = cursor.fetchone()['cnt']
 
