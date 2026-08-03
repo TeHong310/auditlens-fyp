@@ -21,60 +21,60 @@
     </div>
   </div>
 
-  <!-- Stats Cards -->
+  <!-- KPI Cards -->
   <div class="stats-row">
-    <div class="stat-card" style="--card-color:var(--accent);">
+    <div class="stat-card" [style.--card-color]="colorBrand">
       <div class="stat-icon-wrap">
-        <i class="ph-duotone ph-file-text" style="font-size:20px;"></i>
+        <i class="ph-duotone ph-package" style="font-size:20px;"></i>
       </div>
       <div class="stat-info">
-        <p class="stat-label">Total Documents</p>
-        <p class="stat-value" style="color:var(--accent)">{{ totalDocuments }}</p>
+        <p class="stat-label">Transaction Packages</p>
+        <p class="stat-value" [style.color]="colorBrand">{{ totalPackages }}</p>
         <p class="stat-sub">All time</p>
       </div>
     </div>
 
-    <div class="stat-card" style="--card-color:var(--success);">
+    <div class="stat-card" [style.--card-color]="colorApproved">
       <div class="stat-icon-wrap">
         <i class="ph-duotone ph-check-circle" style="font-size:20px;"></i>
       </div>
       <div class="stat-info">
         <p class="stat-label">Approved</p>
-        <p class="stat-value" style="color:var(--success)">{{ totalApproved }}</p>
+        <p class="stat-value" [style.color]="colorApproved">{{ totalApproved }}</p>
         <p class="stat-sub">Verified by Auditor</p>
       </div>
     </div>
 
-    <div class="stat-card" style="--card-color:var(--danger);">
+    <div class="stat-card" [style.--card-color]="colorReturned">
       <div class="stat-icon-wrap">
-        <i class="ph-duotone ph-x-circle" style="font-size:20px;"></i>
+        <i class="ph-duotone ph-arrow-u-up-left" style="font-size:20px;"></i>
       </div>
       <div class="stat-info">
-        <p class="stat-label">Returned</p>
-        <p class="stat-value" style="color:var(--danger)">{{ totalReturned }}</p>
+        <p class="stat-label">Returned for Correction</p>
+        <p class="stat-value" [style.color]="colorReturned">{{ totalReturned }}</p>
         <p class="stat-sub">Needs correction</p>
       </div>
     </div>
 
-    <div class="stat-card" style="--card-color:var(--warning);">
+    <div class="stat-card" [style.--card-color]="colorReview">
       <div class="stat-icon-wrap">
         <i class="ph-duotone ph-list-bullets" style="font-size:20px;"></i>
       </div>
       <div class="stat-info">
-        <p class="stat-label">Under Review</p>
-        <p class="stat-value" style="color:var(--warning)">{{ totalUnderReview }}</p>
+        <p class="stat-label">Under Auditor Review</p>
+        <p class="stat-value" [style.color]="colorReview">{{ totalUnderReview }}</p>
         <p class="stat-sub">Pending auditor</p>
       </div>
     </div>
 
-    <div class="stat-card" style="--card-color:var(--accent-soft);">
+    <div class="stat-card" [style.--card-color]="colorOcr">
       <div class="stat-icon-wrap">
-        <i class="ph-duotone ph-trend-up" style="font-size:20px;"></i>
+        <i class="ph-duotone ph-text-aa" style="font-size:20px;"></i>
       </div>
       <div class="stat-info">
-        <p class="stat-label">Avg Match Score</p>
-        <p class="stat-value" style="color:var(--accent-soft)">{{ avgMatchScore || '-' }}{{ avgMatchScore ? '%' : '' }}</p>
-        <p class="stat-sub">OCR accuracy</p>
+        <p class="stat-label">Average OCR Confidence</p>
+        <p class="stat-value" [style.color]="colorOcr">{{ avgOcrConfidence || '-' }}{{ avgOcrConfidence ? '%' : '' }}</p>
+        <p class="stat-sub">Extraction accuracy</p>
       </div>
     </div>
   </div>
@@ -82,28 +82,41 @@
   <!-- Charts Row -->
   <div class="charts-row">
 
-    <!-- Donut Chart -->
+    <!-- A. Transaction Status Distribution -->
     <div class="chart-card">
       <div class="chart-header">
         <div>
-          <h2 class="section-title">Document Status</h2>
+          <h2 class="section-title">Transaction Status Distribution</h2>
           <p class="section-subtitle">Approval breakdown</p>
         </div>
       </div>
       <div class="chart-body donut-body">
         <canvas #donutChart></canvas>
         <div class="donut-center">
-          <p class="donut-total">{{ totalDocuments }}</p>
-          <p class="donut-label">Total</p>
+          <p class="donut-total">{{ totalPackages }}</p>
+          <p class="donut-label">Packages</p>
         </div>
       </div>
     </div>
 
-    <!-- Vendor Chart -->
+    <!-- B. Processing Trend -->
     <div class="chart-card">
       <div class="chart-header">
         <div>
-          <h2 class="section-title">Documents by Vendor</h2>
+          <h2 class="section-title">Processing Trend</h2>
+          <p class="section-subtitle">Last 14 days</p>
+        </div>
+      </div>
+      <div class="chart-body">
+        <canvas #trendChart></canvas>
+      </div>
+    </div>
+
+    <!-- C. Top Vendors by Transaction Volume -->
+    <div class="chart-card">
+      <div class="chart-header">
+        <div>
+          <h2 class="section-title">Top Vendors by Transaction Volume</h2>
           <p class="section-subtitle">Top 5 vendors</p>
         </div>
       </div>
@@ -112,34 +125,16 @@
       </div>
     </div>
 
-    <!-- Match Score Chart -->
-    <div class="chart-card">
-      <div class="chart-header">
-        <div>
-          <h2 class="section-title">Match Score</h2>
-          <p class="section-subtitle">OCR vs Auditor comparison</p>
-        </div>
-        <div class="avg-badge" *ngIf="avgMatchScore">Avg: {{ avgMatchScore }}%</div>
-        <div class="avg-badge" *ngIf="!avgMatchScore" style="background:#F3F4F6; color:#9CA3AF">Pending</div>
-      </div>
-      <div class="chart-body">
-        <canvas #matchChart></canvas>
-      </div>
-      <p *ngIf="avgMatchScore === 0" style="text-align:center; color:#9CA3AF; font-size:12px; margin-top:8px;">
-        Match scores will appear after Auditor review
-      </p>
-    </div>
-
   </div>
 
-  <!-- Documents Table -->
+  <!-- Transaction Package Report -->
   <div class="table-card">
     <div class="table-header">
       <div>
-        <h2 class="section-title">All Documents</h2>
+        <h2 class="section-title">Transaction Package Report</h2>
         <p class="section-subtitle">
           Showing {{ (currentPage - 1) * pageSize + 1 }}–{{ Math.min(currentPage * pageSize, filteredDocuments.length) }}
-          of {{ filteredDocuments.length }} documents
+          of {{ filteredDocuments.length }} packages
         </p>
       </div>
     </div>
@@ -148,42 +143,44 @@
       <table class="data-table">
         <thead>
           <tr>
-            <th>File Name</th>
-            <th>Invoice No</th>
+            <th>Invoice / Package</th>
+            <th>Related Documents</th>
             <th>Vendor</th>
             <th>Amount</th>
             <th>Upload Date</th>
-            <th>Status</th>
-            <th>Match Score</th>
-            <th>Auditor Comment</th>
+            <th>Match Status</th>
+            <th>Audit Status</th>
+            <th>Latest Remark</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
           <tr *ngIf="isLoading">
-            <td colspan="8" class="loading-row">Loading...</td>
+            <td colspan="9" class="loading-row">Loading...</td>
           </tr>
           <tr *ngIf="!isLoading && filteredDocuments.length === 0">
-            <td colspan="8" class="empty-row">No documents found</td>
+            <td colspan="9" class="empty-row">No transaction packages found</td>
           </tr>
           <tr *ngFor="let doc of paginatedDocuments">
-            <td class="doc-name">{{ doc.file_name }}</td>
-            <td>{{ doc.invoice_number || '-' }}</td>
+            <td class="doc-name">{{ doc.invoice_number || doc.file_name }}</td>
+            <td class="related-docs-cell">{{ getRelatedDocuments(doc) }}</td>
             <td class="vendor-name">{{ doc.vendor_name || '-' }}</td>
             <td>{{ doc.total_amount ? (doc.currency || '') + ' ' + doc.total_amount : '-' }}</td>
             <td>{{ formatDate(doc.uploaded_at) }}</td>
+            <td>
+              <span class="badge" [ngClass]="getMatchStatusClass(doc)">
+                {{ getMatchStatusLabel(doc) }}
+              </span>
+            </td>
             <td>
               <span class="badge" [ngClass]="getStatusClass(doc.status)">
                 {{ getStatusLabel(doc.status) }}
               </span>
             </td>
-            <td>
-              <span class="badge" *ngIf="doc.match_score != null"
-                    [ngClass]="getMatchClass(doc.match_score)">
-                {{ doc.match_score }}%
-              </span>
-              <span *ngIf="doc.match_score == null" style="color:#9CA3AF; font-size:12px;">-</span>
-            </td>
             <td class="comment-cell">{{ doc.comments || '-' }}</td>
+            <td>
+              <button class="btn-view" (click)="viewDocument(doc)">View</button>
+            </td>
           </tr>
         </tbody>
       </table>

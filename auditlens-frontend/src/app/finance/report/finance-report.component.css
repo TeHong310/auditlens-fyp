@@ -149,16 +149,6 @@
 .donut-total { font-size: 20px; font-weight: 700; color: var(--text-primary); }
 .donut-label { font-size: 11px; color: var(--text-muted); }
 
-.avg-badge {
-  background: var(--accent-bg);
-  color: var(--accent-soft);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: 20px;
-  white-space: nowrap;
-}
-
 /* Table */
 .table-card {
   background: var(--bg-card);
@@ -234,13 +224,22 @@
   font-size: 12px;
 }
 
+.related-docs-cell {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
 .loading-row, .empty-row {
   text-align: center;
   padding: 20px;
   color: var(--text-muted);
 }
 
-/* Badges */
+/* Badges — semantic status colours (see finance-report.component.ts's
+   COLOR_* constants, the single source of truth these mirror). */
 .badge {
   display: inline-block;
   padding: 3px 10px;
@@ -249,11 +248,24 @@
   font-weight: 600;
 }
 
-.badge-processed { background: var(--success-bg); color: var(--success); }
-.badge-review    { background: var(--warning-bg); color: var(--warning); }
-.badge-matched   { background: var(--success-bg); color: var(--success); }
-.badge-returned  { background: var(--danger-bg); color: var(--danger); }
-.badge-pending   { background: var(--bg-hover); color: var(--text-secondary); }
+.badge-approved { background: color-mix(in srgb, #55D6A9 18%, transparent); color: #55D6A9; }
+.badge-returned { background: color-mix(in srgb, #FF667A 18%, transparent); color: #FF667A; }
+.badge-review   { background: color-mix(in srgb, #FFB84D 18%, transparent); color: #FFB84D; }
+.badge-pending  { background: var(--bg-hover); color: var(--text-secondary); }
+
+.btn-view {
+  padding: 5px 14px;
+  background: transparent;
+  color: var(--accent-soft);
+  border: 1px solid var(--accent-soft);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .2s ease;
+}
+
+.btn-view:hover { background: var(--accent-soft); color: var(--text-primary); }
 
 .pagination {
   display: flex;
@@ -290,4 +302,25 @@
 .page-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* Responsive — KPI cards and charts step down from 5/3 columns to 2/1
+   as the viewport narrows, instead of overflowing or squeezing
+   unreadably; the header wraps its search bar/actions onto their own
+   row below the title on small screens. */
+@media (max-width: 1180px) {
+  .charts-row { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 900px) {
+  .stats-row { grid-template-columns: repeat(2, 1fr); }
+  .charts-row { grid-template-columns: 1fr; }
+  .header { flex-wrap: wrap; gap: 12px; }
+  .header-right { flex-wrap: wrap; }
+}
+
+@media (max-width: 560px) {
+  .stats-row { grid-template-columns: 1fr; }
+  .search-bar { width: 100%; }
+  .header-right { width: 100%; }
 }

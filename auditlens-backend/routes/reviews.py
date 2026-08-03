@@ -1026,6 +1026,14 @@ def finance_report():
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+        # purchase_order_number/goods_receipt_number: the SAME document_id-
+        # keyed linkage routes/auditor.py::build_comparison() already uses
+        # for Three-Way Matching (purchase_orders/goods_receipts rows
+        # carry a document_id FK back to the invoice, latest row wins if
+        # more than one was ever uploaded) - reused here directly via a
+        # LATERAL join instead of calling build_comparison() per row
+        # (which would also compute the full match result this report
+        # doesn't need). No new matching logic, no new endpoint.
         cursor.execute('''
             SELECT
                 d.document_id,
@@ -1044,11 +1052,23 @@ def finance_report():
                 rm.overall_status,
                 rr.action,
                 rr.remarks AS comments,
-                rr.reviewed_at
+                rr.reviewed_at,
+                po.po_number AS purchase_order_number,
+                gr.gr_number AS goods_receipt_number
             FROM documents d
             LEFT JOIN extracted_fields ef ON d.document_id = ef.document_id
             LEFT JOIN record_matches rm ON ef.extraction_id = rm.extraction_id
             LEFT JOIN review_records rr ON d.document_id = rr.document_id
+            LEFT JOIN LATERAL (
+                SELECT po_number FROM purchase_orders
+                WHERE document_id = d.document_id
+                ORDER BY uploaded_at DESC LIMIT 1
+            ) po ON true
+            LEFT JOIN LATERAL (
+                SELECT gr_number FROM goods_receipts
+                WHERE document_id = d.document_id
+                ORDER BY uploaded_at DESC LIMIT 1
+            ) gr ON true
             WHERE d.uploaded_by = %s AND d.status != 'withdrawn_duplicate'
             ORDER BY d.uploaded_at DESC
         ''', (user['user_id'],))

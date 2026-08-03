@@ -7,8 +7,24 @@ import { FormsModule } from '@angular/forms';
 import { environment } from '../../../environments/environment';
 import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
 import { FinanceUserMenuComponent } from '../shared/finance-user-menu.component';
+import { toMalaysiaDateKey } from '../../shared/datetime.util';
 
 Chart.register(...registerables);
+
+// Semantic status colours — single source of truth for this page's KPI
+// accents / chart series / table badges / legends. Deliberately exact
+// literals (not the app's global --accent/--success/--warning/--danger
+// theme tokens, which are close but not identical) per this redesign's
+// colour spec.
+const COLOR_BRAND    = '#7C5CFC'; // Transaction Packages / Uploaded
+const COLOR_APPROVED = '#55D6A9'; // Approved / Full Match
+const COLOR_RETURNED = '#FF667A'; // Returned / Mismatch / Missing Documents
+const COLOR_REVIEW   = '#FFB84D'; // Under Review / Review Required
+const COLOR_OCR       = '#4DA3FF'; // Average OCR Confidence
+const COLOR_PENDING  = '#8B95A7'; // Pending
+// Top Vendors — blue shades only, never red/green/orange (those are
+// reserved for status meaning above).
+const VENDOR_SHADES = ['#2E6DA4', '#3E8ED0', '#4DA3FF', '#6FB6FF', '#9CCBFF', '#8B95A7'];
 
 @Component({
   selector: 'app-finance-report',
@@ -20,23 +36,37 @@ Chart.register(...registerables);
 export class FinanceReportComponent implements OnInit, AfterViewInit {
   @ViewChild('donutChart') donutChartRef!: ElementRef;
   @ViewChild('vendorChart') vendorChartRef!: ElementRef;
-  @ViewChild('matchChart') matchChartRef!: ElementRef;
+  @ViewChild('trendChart') trendChartRef!: ElementRef;
 
+  // Deduped: one row per document_id (see dedupeByDocument below).
   documents: any[] = [];
+  // As returned by the API, unmodified — GET /reviews/finance-report
+  // LEFT JOINs review_records, so a document reviewed more than once
+  // (sent back, then later approved) comes back as multiple rows.
+  // Needed only for the Processing Trend's Approved/Returned event
+  // counts, where each row genuinely represents one distinct review
+  // action on its own date.
+  private rawDocuments: any[] = [];
   isLoading: boolean = false;
   chartReady: boolean = false;
   searchText: string = '';
 
-  // Stats
-  totalDocuments: number = 0;
+  // KPIs
+  totalPackages: number = 0;
   totalApproved: number = 0;
   totalReturned: number = 0;
   totalUnderReview: number = 0;
-  avgMatchScore: number = 0;
+  avgOcrConfidence: number = 0;
+
+  readonly colorBrand = COLOR_BRAND;
+  readonly colorApproved = COLOR_APPROVED;
+  readonly colorReturned = COLOR_RETURNED;
+  readonly colorReview = COLOR_REVIEW;
+  readonly colorOcr = COLOR_OCR;
 
   private donutChartInstance: any = null;
   private vendorChartInstance: any = null;
-  private matchChartInstance: any = null;
+  private trendChartInstance: any = null;
 
   private apiUrl = environment.apiUrl;
 
@@ -65,17 +95,25 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
       headers: this.getHeaders()
     }).subscribe({
       next: (res) => {
-        this.documents = res.documents;
+        this.rawDocuments = res.documents;
+        this.documents = this.dedupeByDocument(res.documents);
 
-        this.totalDocuments = res.documents.length;
-        this.totalApproved = res.documents.filter((d: any) => d.status === 'approved').length;
-        this.totalReturned = res.documents.filter((d: any) => d.status === 'returned').length;
-        this.totalUnderReview = res.documents.filter((d: any) => d.status === 'under_review').length;
+        // "Transaction Packages" = count of invoice-level records this
+        // endpoint already returns. Its query selects FROM documents
+        // only (POs/GRs live in their own tables and are never joined
+        // in as extra rows here — see purchase_order_number/
+        // goods_receipt_number below, which are single columns, not
+        // extra rows) — so this was never inflated by counting a PO or
+        // GR as a separate "package" in the first place.
+        this.totalPackages = this.documents.length;
+        this.totalApproved = this.documents.filter((d: any) => d.status === 'approved').length;
+        this.totalReturned = this.documents.filter((d: any) => d.status === 'returned').length;
+        this.totalUnderReview = this.documents.filter((d: any) => d.status === 'under_review').length;
 
-        const withScore = res.documents.filter((d: any) => d.match_score != null);
-        if (withScore.length > 0) {
-          const sum = withScore.reduce((acc: number, d: any) => acc + parseFloat(d.match_score), 0);
-          this.avgMatchScore = Math.round(sum / withScore.length);
+        const withOcr = this.documents.filter((d: any) => d.ocr_confidence != null);
+        if (withOcr.length > 0) {
+          const sum = withOcr.reduce((acc: number, d: any) => acc + parseFloat(d.ocr_confidence), 0);
+          this.avgOcrConfidence = Math.round(sum / withOcr.length);
         }
 
         this.isLoading = false;
@@ -85,6 +123,20 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
       },
       error: () => { this.isLoading = false; }
     });
+  }
+
+  // Keeps the row with the most recent reviewed_at (its Latest Remark)
+  // for each document_id — left un-deduped, KPI counts and the table
+  // would double/triple-count a document reviewed more than once.
+  private dedupeByDocument(docs: any[]): any[] {
+    const byId = new Map<number, any>();
+    for (const doc of docs) {
+      const existing = byId.get(doc.document_id);
+      if (!existing || (doc.reviewed_at && (!existing.reviewed_at || doc.reviewed_at > existing.reviewed_at))) {
+        byId.set(doc.document_id, doc);
+      }
+    }
+    return Array.from(byId.values());
   }
 
   get filteredDocuments() {
@@ -99,14 +151,15 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
   renderAllCharts() {
     this.renderDonutChart();
     this.renderVendorChart();
-    this.renderMatchChart();
+    this.renderTrendChart();
   }
 
+  // A. Transaction Status Distribution
   renderDonutChart() {
     if (!this.donutChartRef) return;
     if (this.donutChartInstance) this.donutChartInstance.destroy();
 
-    const pending = this.totalDocuments - this.totalApproved - this.totalReturned - this.totalUnderReview;
+    const pending = this.totalPackages - this.totalApproved - this.totalReturned - this.totalUnderReview;
 
     const ctx = this.donutChartRef.nativeElement.getContext('2d');
     this.donutChartInstance = new Chart(ctx, {
@@ -115,7 +168,7 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
         labels: ['Approved', 'Returned', 'Under Review', 'Pending'],
         datasets: [{
           data: [this.totalApproved, this.totalReturned, this.totalUnderReview, pending],
-          backgroundColor: ['#10B981', '#EF4444', '#F59E0B', '#4A90D9'],
+          backgroundColor: [COLOR_APPROVED, COLOR_RETURNED, COLOR_REVIEW, COLOR_PENDING],
           borderWidth: 0,
           hoverOffset: 6
         }]
@@ -134,23 +187,22 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
     });
   }
 
+  // C. Top Vendors by Transaction Volume — counts deduped documents
+  // (one per invoice/package), never the underlying PO/GR supporting
+  // files.
   renderVendorChart() {
     if (!this.vendorChartRef) return;
     if (this.vendorChartInstance) this.vendorChartInstance.destroy();
 
-    // Group by vendor
     const vendorCounts: { [key: string]: number } = {};
     this.documents.forEach(doc => {
       const vendor = doc.vendor_name
-        ? doc.vendor_name.substring(0, 20)
+        ? doc.vendor_name.substring(0, 24)
         : 'Unknown';
       vendorCounts[vendor] = (vendorCounts[vendor] || 0) + 1;
     });
 
-    // Sort by count, take top 5, rest = Others
-    const sorted = Object.entries(vendorCounts)
-      .sort((a, b) => b[1] - a[1]);
-
+    const sorted = Object.entries(vendorCounts).sort((a, b) => b[1] - a[1]);
     const top5 = sorted.slice(0, 5);
     const others = sorted.slice(5);
     const othersTotal = others.reduce((sum, [, count]) => sum + count, 0);
@@ -169,12 +221,9 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
       data: {
         labels,
         datasets: [{
-          label: 'Documents',
+          label: 'Packages',
           data,
-          backgroundColor: [
-            '#2E6DA4', '#357ABD', '#4A90D9',
-            '#5BA3E0', '#78B8F0', '#9CA3AF'
-          ],
+          backgroundColor: VENDOR_SHADES,
           borderRadius: 6,
           borderSkipped: false,
         }]
@@ -190,7 +239,7 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
           x: {
             beginAtZero: true,
             ticks: { stepSize: 1 },
-            grid: { color: '#F3F4F6' }
+            grid: { color: 'rgba(255,255,255,0.06)' }
           },
           y: { grid: { display: false } }
         }
@@ -198,61 +247,97 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
     });
   }
 
-  renderMatchChart() {
-    if (!this.matchChartRef) return;
-    if (this.matchChartInstance) this.matchChartInstance.destroy();
+  // B. Processing Trend — last 14 Malaysia calendar days. "Uploaded"
+  // counts each document once (deduped documents, by uploaded_at);
+  // "Approved"/"Returned" count actual review EVENTS from the raw,
+  // un-deduped rows — a document sent back then later approved
+  // genuinely has both events, on their own separate days. Reuses the
+  // existing uploaded_at/reviewed_at timestamps and the app's shared
+  // Malaysia-date-key grouping (src/app/shared/datetime.util.ts, the
+  // same utility Record Detail/Report pages elsewhere already use for
+  // this exact purpose) — no new date-bucketing logic.
+  renderTrendChart() {
+    if (!this.trendChartRef) return;
+    if (this.trendChartInstance) this.trendChartInstance.destroy();
 
-    const withScore = this.documents
-      .filter(d => d.match_score != null)
-      .slice(0, 10);
+    const days: string[] = [];
+    const today = new Date();
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const key = toMalaysiaDateKey(d);
+      if (key) days.push(key);
+    }
 
-    const labels = withScore.map(d =>
-      d.invoice_number ? d.invoice_number.substring(0, 15) : d.file_name.substring(0, 15)
-    );
-    const data = withScore.map(d => parseFloat(d.match_score));
+    const uploaded: { [key: string]: number } = {};
+    this.documents.forEach(doc => {
+      const key = toMalaysiaDateKey(doc.uploaded_at);
+      if (key) uploaded[key] = (uploaded[key] || 0) + 1;
+    });
 
-    const colors = data.map(score =>
-      score >= 80 ? '#10B981' : score >= 50 ? '#F59E0B' : '#EF4444'
-    );
+    const approved: { [key: string]: number } = {};
+    const returned: { [key: string]: number } = {};
+    this.rawDocuments.forEach(doc => {
+      if (!doc.reviewed_at) return;
+      const key = toMalaysiaDateKey(doc.reviewed_at);
+      if (!key) return;
+      if (doc.action === 'approved') approved[key] = (approved[key] || 0) + 1;
+      if (doc.action === 'returned') returned[key] = (returned[key] || 0) + 1;
+    });
 
-    const ctx = this.matchChartRef.nativeElement.getContext('2d');
-    this.matchChartInstance = new Chart(ctx, {
-      type: 'bar',
+    const labels = days.map(key => {
+      const [, m, d] = key.split('-');
+      return `${d}/${m}`;
+    });
+
+    const ctx = this.trendChartRef.nativeElement.getContext('2d');
+    this.trendChartInstance = new Chart(ctx, {
+      type: 'line',
       data: {
         labels,
-        datasets: [{
-          label: 'Match Score %',
-          data,
-          backgroundColor: colors,
-          borderRadius: 6,
-          borderSkipped: false,
-        }]
+        datasets: [
+          {
+            label: 'Uploaded',
+            data: days.map(key => uploaded[key] || 0),
+            borderColor: COLOR_BRAND, backgroundColor: COLOR_BRAND,
+            tension: 0.3, pointRadius: 2, borderWidth: 2,
+          },
+          {
+            label: 'Approved',
+            data: days.map(key => approved[key] || 0),
+            borderColor: COLOR_APPROVED, backgroundColor: COLOR_APPROVED,
+            tension: 0.3, pointRadius: 2, borderWidth: 2,
+          },
+          {
+            label: 'Returned',
+            data: days.map(key => returned[key] || 0),
+            borderColor: COLOR_RETURNED, backgroundColor: COLOR_RETURNED,
+            tension: 0.3, pointRadius: 2, borderWidth: 2,
+          },
+        ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { display: false }
+          legend: { position: 'bottom' as const, labels: { boxWidth: 10, padding: 10, font: { size: 11 } } }
         },
         scales: {
-          y: {
-            beginAtZero: true,
-            max: 100,
-            ticks: { stepSize: 20 },
-            grid: { color: '#F3F4F6' }
-          },
-          x: { grid: { display: false } }
+          y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 }, grid: { color: 'rgba(255,255,255,0.06)' } },
+          x: { grid: { display: false }, ticks: { font: { size: 9 } } }
         }
       }
     });
   }
 
+  // Audit Status — collapses every in-process document.status value
+  // (ocr_processing, ocr_done, resubmitted, etc.) into the 4 values
+  // this redesign specifies.
   getStatusClass(status: string): string {
     switch (status) {
-      case 'approved': return 'badge-matched';
+      case 'approved': return 'badge-approved';
       case 'returned': return 'badge-returned';
       case 'under_review': return 'badge-review';
-      case 'ocr_done': return 'badge-processed';
       default: return 'badge-pending';
     }
   }
@@ -262,16 +347,36 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
       case 'approved': return 'Approved';
       case 'returned': return 'Returned';
       case 'under_review': return 'Under Review';
-      case 'ocr_done': return 'OCR Done';
-      default: return status;
+      default: return 'Pending';
     }
   }
 
-  getMatchClass(score: number): string {
-    if (score == null) return 'badge-pending';
-    if (score >= 80) return 'badge-matched';
-    if (score >= 50) return 'badge-review';
+  // Match Status — reads the existing matching engine's own stored
+  // overall_status (routes/matching.py: 'full_match'/'partial_match'/
+  // 'mismatch'), never a new score or formula. No record_matches row
+  // at all (overall_status null) means matching never ran, i.e. a
+  // supporting document is missing.
+  getMatchStatusLabel(doc: any): string {
+    if (doc.overall_status === 'full_match') return 'Full Match';
+    if (doc.overall_status === 'partial_match') return 'Review Required';
+    if (doc.overall_status === 'mismatch') return 'Mismatch';
+    return 'Missing Documents';
+  }
+
+  getMatchStatusClass(doc: any): string {
+    if (doc.overall_status === 'full_match') return 'badge-approved';
+    if (doc.overall_status === 'partial_match') return 'badge-review';
     return 'badge-returned';
+  }
+
+  // Related Documents — purchase_order_number/goods_receipt_number are
+  // the actual linked PO/GR numbers (backend now joins them the same
+  // way routes/auditor.py::build_comparison() already does, by
+  // document_id, latest row wins) — never a placeholder or guess.
+  getRelatedDocuments(doc: any): string {
+    const po = doc.purchase_order_number ? `PO: ${doc.purchase_order_number}` : 'PO: Not Uploaded';
+    const gr = doc.goods_receipt_number ? `GR: ${doc.goods_receipt_number}` : 'GR: Not Uploaded';
+    return `${po} · ${gr}`;
   }
 
   formatDate(dateStr: string): string {
@@ -280,10 +385,24 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
       day: '2-digit', month: 'short', year: 'numeric'
     });
   }
+
+  // View action — reuses the existing Finance single-document detail
+  // page (finance/corrections/detail?document_id=X), which already
+  // loads original invoice info + correction history + PO/GR status
+  // for ANY document regardless of status (see finance-correction-
+  // detail.component.ts's own loadAll()) — not exclusive to returned/
+  // correction-flow documents, so it works as a single "View" target
+  // for every row here without needing a transaction_package_id (this
+  // report has none, and adding one would mean another backend change
+  // beyond the PO/GR numbers already added).
+  viewDocument(doc: any) {
+    this.router.navigate(['/finance/corrections/detail'], { queryParams: { document_id: doc.document_id } });
+  }
+
   // Pagination
   currentPage: number = 1;
   pageSize: number = 5;
-  Math = Math; 
+  Math = Math;
 
   get paginatedDocuments() {
     const start = (this.currentPage - 1) * this.pageSize;
@@ -306,14 +425,15 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
   }
 
   exportReport() {
-    const headers = ['File Name', 'Invoice No', 'Vendor', 'Amount', 'Status', 'Match Score', 'Comments'];
+    const headers = ['Invoice No', 'Vendor', 'Amount', 'Upload Date', 'Related Documents', 'Match Status', 'Audit Status', 'Latest Remark'];
     const rows = this.documents.map(d => [
-      d.file_name,
       d.invoice_number || '-',
       d.vendor_name || '-',
-      d.total_amount || '-',
+      d.total_amount ? (d.currency || '') + ' ' + d.total_amount : '-',
+      this.formatDate(d.uploaded_at),
+      this.getRelatedDocuments(d),
+      this.getMatchStatusLabel(d),
       this.getStatusLabel(d.status),
-      d.match_score != null ? d.match_score + '%' : '-',
       d.comments || '-'
     ]);
 

@@ -18507,3 +18507,116 @@ Setup/config needed:
      (Docker web service) and the frontend static site.
   2. Backend redeploy required (routes/documents.py changed only - no
      new migration, no new dependency, no new environment variable).
+
+----------------------------------------------------------------------
+
+Date: 2026-08-03
+What was changed:
+  Backend (auditlens-backend/routes/reviews.py only - explicitly
+  authorized by the user mid-task after confirming the existing GET
+  /reviews/finance-report response had no PO/GR linkage at all):
+    - finance_report(): added two LATERAL joins reusing the exact same
+      document_id-keyed linkage routes/auditor.py::build_comparison()
+      already relies on for Three-Way Matching (purchase_orders/
+      goods_receipts carry a document_id FK back to the invoice, latest
+      row wins if more than one was ever uploaded) - returns
+      purchase_order_number/goods_receipt_number per row. No new
+      matching logic, no new endpoint, no call to build_comparison()
+      itself (would also compute a full match result this report
+      doesn't need).
+  Frontend (auditlens-frontend/.../finance/report/ only):
+    - KPI cards: Total Documents and Avg Match Score removed; now
+      Transaction Packages / Approved / Returned for Correction / Under
+      Auditor Review / Average OCR Confidence. "Transaction Packages"
+      is the same underlying count as the old "Total Documents" (GET
+      /reviews/finance-report selects FROM documents only - POs/GRs are
+      never separate rows in this response, only the two new joined
+      columns above - so this was never inflated by counting a PO/GR as
+      a separate "package"), just relabelled and, critically, now
+      DEDUPED by document_id first (dedupeByDocument()) - the endpoint
+      LEFT JOINs review_records, so a document reviewed more than once
+      (sent back, then later approved) previously came back as multiple
+      rows and silently double-counted every KPI and duplicated table
+      rows for that document. This was a pre-existing bug, not
+      introduced by this redesign, but directly relevant to correct KPI
+      counting so it's fixed here.
+    - Match Score chart and all match_score fields removed. Report
+      table's Match Score column replaced with Match Status (Full
+      Match/Review Required/Mismatch/Missing Documents), read straight
+      from record_matches.overall_status (routes/matching.py's existing
+      'full_match'/'partial_match'/'mismatch' enum) - no new scoring
+      formula.
+    - Exactly 3 charts: Transaction Status Distribution (donut,
+      Approved/Returned/Under Review/Pending, centre "<count>
+      Packages"), Processing Trend (NEW - replaces Match Score; last 14
+      Malaysia-calendar days, Uploaded/Approved/Returned, reusing the
+      existing uploaded_at/reviewed_at timestamps and the shared
+      toMalaysiaDateKey() from src/app/shared/datetime.util.ts -
+      "Uploaded" counts each deduped document once, "Approved"/
+      "Returned" count actual review EVENTS from the raw un-deduped
+      rows since a document sent back then later approved genuinely has
+      both events on separate days), Top Vendors by Transaction Volume
+      (existing vendor chart, recolored to blue shades only, now counts
+      deduped documents/packages, never PO/GR supporting files).
+    - Semantic colours (#7C5CFC brand/packages/uploaded, #55D6A9
+      approved/full match, #FF667A returned/mismatch/missing documents,
+      #FFB84D under review/review required, #4DA3FF avg OCR confidence,
+      #8B95A7 pending) applied consistently to KPI accents, chart
+      series, table badges and legends - deliberately exact literals,
+      not the app's global --success/--warning/--danger/--accent theme
+      tokens (close but not identical to the requested values).
+    - Table renamed "All Documents" -> "Transaction Package Report";
+      columns now Invoice/Package, Related Documents (the new PO/GR
+      numbers - "Not Uploaded" only when genuinely absent), Vendor,
+      Amount, Upload Date, Match Status, Audit Status, Latest Remark,
+      Action. File Name and Match Score columns removed. Audit Status
+      collapses every in-process document.status value into
+      Approved/Returned/Under Review/Pending as specified. Search,
+      pagination and Export CSV (columns updated to match the new
+      table) all still work.
+    - Action column: a "View" button reusing the EXISTING Finance
+      single-document detail page (finance/corrections/detail?
+      document_id=X) - confirmed by reading finance-correction-
+      detail.component.ts that this page already loads original
+      invoice info + correction history + PO/GR status for ANY
+      document regardless of status, not just returned/correction-flow
+      ones, so it works as one universal "View" target. Deviation from
+      what was picked: the original "route by status" idea (returned ->
+      corrections/detail, others -> transactions/detail) turned out to
+      be infeasible without another backend change - finance/
+      transactions/detail needs a transaction_packages.id, which this
+      report has no way to know per row, and adding it would be a
+      second backend extension beyond the PO/GR numbers already
+      authorized. Used the single-target version instead, disclosed
+      here rather than silently built.
+    - Responsive layout: KPI cards step 5 -> 2 -> 1 columns and charts
+      3 -> 2 -> 1 as the viewport narrows (previously no responsive
+      rules existed at all); header wraps its search bar/actions below
+      the title on small screens. Dark theme (var(--bg-card)/
+      var(--text-*)/etc.) unchanged throughout.
+
+Why:
+  The Finance Report page was showing metrics that didn't match how the
+  app actually works now (Match Score against an OCR-vs-Auditor
+  comparison that was usually empty, "Total Documents" implying every
+  upload counts separately) and had no way to see actual PO/GR linkage
+  or a time-based processing trend. This redesign aligns the dashboard
+  with the real transaction-package-centric workflow, using only data
+  the backend already computes (plus the two new joined columns
+  explicitly authorized mid-task).
+
+Verified:
+  python -c "import app" - clean import, the reviews.py query change
+  registers without error. npx ng build --configuration production -
+  clean compile; only the same pre-existing bundle-budget warnings on
+  two unrelated files this task never touched. Did not run backend
+  tests or Playwright, per this task's own scope. Confirmed via git
+  diff --stat that only routes/reviews.py and the finance-report
+  component's 3 files changed - upload logic, matching logic, review-
+  step/decision routes, and every other page are untouched.
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy both the backend
+     (Docker web service) and the frontend static site.
+  2. Backend redeploy required (routes/reviews.py changed - no new
+     migration, no new dependency, no new environment variable).
