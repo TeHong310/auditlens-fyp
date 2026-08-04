@@ -357,6 +357,22 @@
   margin-top: 4px;
 }
 
+.li-amount-compare {
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.li-amount-compare .li-amount-result-match {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.li-amount-compare .li-amount-result-mismatch {
+  color: var(--warning);
+  font-weight: 600;
+}
+
 /* Source Documents */
 .source-docs-section {
   margin-top: 22px;

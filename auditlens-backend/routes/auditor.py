@@ -281,8 +281,18 @@ def _match_line_items(invoice_items, po_items, gr_items):
         if len(price_values) >= 2:
             unit_price_match = all(abs(v - price_values[0]) < 0.01 for v in price_values[1:])
 
+        # A document's 'amount' is only trusted as a real line total when
+        # that SAME document also has a 'unit_price' — amount is always
+        # quantity x unit_price, so a document with no unit_price has
+        # nothing to back an amount up with. This matters because a GR
+        # normally carries neither (see comment above), but production
+        # data has shown a GR's 'amount' column populated with a stray
+        # non-price number (observed: GR amount == GR quantity, with
+        # unit_price correctly NULL) while Invoice and PO genuinely
+        # matched — that stray value must not be allowed to corrupt an
+        # otherwise-correct Invoice-vs-PO comparison.
         amt_values = [it['amount'] for it in (inv_item, po_item, gr_item)
-                      if it and it.get('amount') is not None]
+                      if it and it.get('amount') is not None and it.get('unit_price') is not None]
         amount_match = None
         if len(amt_values) >= 2:
             amount_match = all(abs(v - amt_values[0]) < 0.01 for v in amt_values[1:])

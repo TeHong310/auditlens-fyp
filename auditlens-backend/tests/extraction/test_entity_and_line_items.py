@@ -173,6 +173,34 @@ def run_case_line_item_price_genuine_mismatch_still_detected():
     check('no hard mismatch (quantity still matches)', hard_mismatch is False, hard_mismatch)
 
 
+def run_case_nicepack_gr_amount_polluted_by_quantity():
+    """Real production bug (NICEPACK, invoice NP2606-0613 / PO 3006490):
+    Invoice and PO genuinely match (3000 x 0.63 = 1890.00 on both), but
+    the UI showed "Line amount differs". Root cause found in stored
+    document_line_items: GR's 'amount' column held 3000.0 (== GR's own
+    quantity, an extraction artifact) while GR's 'unit_price' was
+    correctly NULL. The old code only excluded a value via
+    `is not None`, so GR's bogus 3000.0 got compared against Invoice/PO's
+    1890.0 and produced a false mismatch. Fix: an amount is only trusted
+    when the same document also has a unit_price."""
+    print('Case: NICEPACK real data — GR amount polluted with its own quantity, unit_price NULL')
+    invoice_items = [{'item_code': '7550011', 'description': 'PLAIN NYLON VACUUM BAG 205 X 250 MM', 'quantity': 3000.0, 'unit_price': 0.63, 'amount': 1890.0}]
+    po_items = [{'item_code': '7550011', 'description': 'Plain Nylon Vacumm Bag 205 X 250mm', 'quantity': 3000.0, 'unit_price': 0.63, 'amount': 1890.0}]
+    gr_items = [{'item_code': '7550-1', 'description': 'Plain Nylon Vacumm Bag 205 X 250mm', 'quantity': 3000.0, 'unit_price': None, 'amount': 3000.0}]
+
+    rows, hard_mismatch, soft_mismatch = _match_line_items(invoice_items, po_items, gr_items)
+    check('exactly 1 matched row (sole-line-item fallback pairs across item_code mismatch)', len(rows) == 1, rows)
+    if rows:
+        row = rows[0]
+        check('quantity_match == True', row['quantity_match'] is True, row)
+        check('unit_price_match == True (GR unit_price is None, excluded, Invoice/PO both 0.63)', row['unit_price_match'] is True, row)
+        check('amount_match == True (GR bogus amount excluded, Invoice/PO both 1890.00)', row['amount_match'] is True, row)
+        check('invoice_amount == 1890.0', row['invoice_amount'] == 1890.0, row)
+        check('po_amount == 1890.0', row['po_amount'] == 1890.0, row)
+        check('gr_amount == 3000.0 (still exposed raw for display, just not compared)', row['gr_amount'] == 3000.0, row)
+    check('no soft mismatch (GR bogus amount no longer corrupts the result)', soft_mismatch is False, soft_mismatch)
+
+
 if __name__ == '__main__':
     run_case_test1_vendor_ocr_typo_match()
     run_case_vendor_three_way_all_same_supplier()
@@ -181,6 +209,7 @@ if __name__ == '__main__':
     run_case_test3_multiple_line_items()
     run_case_line_item_price_comparison_numeric_tolerance()
     run_case_line_item_price_genuine_mismatch_still_detected()
+    run_case_nicepack_gr_amount_polluted_by_quantity()
 
     print()
     if FAILURES:

@@ -222,6 +222,11 @@
                 <div class="li-code" *ngIf="li.item_code">{{ li.item_code }}</div>
                 <div class="li-amount-note" *ngIf="li.unit_price_match === false"><i class="ph-duotone ph-currency-circle-dollar"></i> Unit price differs</div>
                 <div class="li-amount-note" *ngIf="li.amount_match === false"><i class="ph-duotone ph-currency-circle-dollar"></i> Line amount differs</div>
+                <div class="li-amount-compare" *ngIf="comparison.po && li.invoice_amount != null && li.po_amount != null">
+                  Invoice Line Amount: {{ formatAmount(li.invoice_amount, comparison.invoice.currency) }} &middot;
+                  PO Line Amount: {{ formatAmount(li.po_amount, comparison.po.currency) }} &middot;
+                  Result: <span [ngClass]="li.amount_match === true ? 'li-amount-result-match' : 'li-amount-result-mismatch'">{{ li.amount_match === true ? 'Match' : 'Mismatch' }}</span>
+                </div>
               </td>
               <td class="cell-value cell-quantity">
                 <span class="not-uploaded-label li-missing-label" *ngIf="li.missing_on_invoice">Missing on Invoice</span>
