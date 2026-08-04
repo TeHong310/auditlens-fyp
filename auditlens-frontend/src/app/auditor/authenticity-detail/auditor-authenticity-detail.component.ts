@@ -496,12 +496,13 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return `Differs from extracted vendor "${supplier.extracted_vendor_name}" — worth a second look`;
   }
 
-  // v11: whether a party's EFFECTIVE evidence — AI detection merged with
-  // any saved correction/addition/deletion, the SAME precedence partyRows
-  // (below) already applies for the on-image label — counts as present.
-  // Backs the Invoice-only Identity Consistency / Document Evidence
-  // category rollups just below, so a saved correction can change these
-  // categories too, not just the individual row's own status text.
+  // v11/v12: whether a party's EFFECTIVE evidence — AI detection merged
+  // with any saved correction/addition/deletion, the SAME precedence
+  // partyRows (below) already applies for the on-image label — counts
+  // as present. Backs the Invoice/GR Identity Consistency / Document
+  // Evidence category rollups just below, so a saved correction can
+  // change these categories too, not just the individual row's own
+  // status text.
   private partyEffectivelyPresent(key: string): boolean {
     const row = this.partyRows.find(r => r.key === key);
     if (!row) return false;
@@ -515,13 +516,24 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     // Buyer parties (partyRows), replacing the legacy AI-only
     // supplier_identity check for this document type — a correction to
     // either party must be able to change this category, not just the
-    // on-image label (PO/GR are untouched, below).
+    // on-image label (PO is untouched, below).
     if (this.documentType === 'invoice') {
       if (this.vendorMatchStatus() === 'no') return 'INCONSISTENT';
       const supplier = this.partyEffectivelyPresent('supplier_name');
       const buyer = this.partyEffectivelyPresent('buyer_name');
       if (supplier && buyer) return 'CONSISTENT';
       if (supplier || buyer) return 'UNCERTAIN';
+      return 'NOT CHECKED';
+    }
+    // GR: the 3 "who" parties (Receiver/Buyer, Supplier, Supplier
+    // Address) — the 2 processing stamps belong to Document Evidence
+    // below instead, same identity-vs-evidence split as Invoice.
+    if (this.documentType === 'gr') {
+      if (this.vendorMatchStatus() === 'no') return 'INCONSISTENT';
+      const present = ['buyer_name', 'supplier_name', 'supplier_address']
+        .filter(key => this.partyEffectivelyPresent(key)).length;
+      if (present === 3) return 'CONSISTENT';
+      if (present > 0) return 'UNCERTAIN';
       return 'NOT CHECKED';
     }
     if (!this.supplierIdentity) return 'NOT CHECKED';
@@ -573,10 +585,20 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   get documentEvidenceStatus(): CategoryStatus {
     // Invoice: driven by the Buyer Received Stamp party (partyRows),
     // replacing the legacy company_logo-only check — see identityStatus
-    // above for why (PO/GR are untouched, below).
+    // above for why (PO is untouched, below).
     if (this.documentType === 'invoice') {
       if (!this.hasNewResult) return 'NOT CHECKED';
       return this.partyEffectivelyPresent('buyer_received_stamp') ? 'PRESENT' : 'LIMITED';
+    }
+    // GR: the 2 processing stamps (QC Passed, Key-In Store) — see
+    // identityStatus above for the party/evidence split.
+    if (this.documentType === 'gr') {
+      if (!this.hasNewResult) return 'NOT CHECKED';
+      const qc = this.partyEffectivelyPresent('qc_passed_stamp');
+      const keyIn = this.partyEffectivelyPresent('key_in_store_stamp');
+      if (qc && keyIn) return 'PRESENT';
+      if (qc || keyIn) return 'PARTIAL';
+      return 'LIMITED';
     }
     const rows = this.documentEvidenceRows;
     const required = rows.filter(r => r.status !== 'na');

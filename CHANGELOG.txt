@@ -19311,3 +19311,89 @@ Setup/config needed:
      (Docker web service) and the frontend static site.
   2. Backend + frontend redeploy required - no new migration, no new
      dependency, no new environment variable.
+
+------------------------------------------------------------
+2026-08-04
+
+What changed:
+  fix: sync gr evidence with authenticity result
+
+  routes/authenticity.py:
+    - New _compute_effective_gr_authentication(row, corrections): for
+      GR, merges the latest AI detections with saved auditor
+      corrections/additions/deletions for the CURRENT GR evidence model
+      (Receiver/Buyer, Supplier, Supplier Address, QC Passed Stamp,
+      Key-In Store Stamp - the same 5 required keys the Authenticity
+      Detail page's Receiving Parties panel and helpers/
+      evidence_corrections.py's VALID_EVIDENCE_TYPES_BY_DOC_TYPE already
+      use; Handwritten Processing Notes stays optional, never part of
+      the required count). A correction always overrides the AI's own
+      read for that evidence type, same precedence as the Invoice fix.
+      supplier_name/supplier_address/buyer_name reuse the existing
+      ai_visual_result signals; qc_passed_stamp/key_in_store_stamp have
+      no such signal (helpers/vision_evidence_boxes.py never reports
+      them there) so a new _ai_box_exists() checks for a real
+      Google-Vision-sourced box in the row's `boxes` column instead -
+      the server-side equivalent of the Detail page's own aiBoxFor()
+      gate. Uses the same stricter PASS bar (80, vs 70 for Invoice/PO)
+      helpers/auth_rules.py already set for GR.
+    - _with_authentication_score(row, corrections=None) gained a GR
+      branch alongside the existing Invoice one. PO is unchanged
+      (still compute_authentication()) - not part of this fix's scope.
+      GET /authenticity, GET /authenticity/<id>, and POST
+      /authenticity/<id>/recheck already fetch and pass corrections for
+      every document_type (built generically in the prior Invoice fix),
+      so no route-handler changes were needed - GR automatically flows
+      through the new merge everywhere Invoice already did (Workspace
+      status/summary/risk, Detail's raw fields, KPI cards and filters,
+      and refreshes immediately after Re-check since recheck reuses the
+      same _with_authentication_score() call).
+
+  auditor-authenticity-detail.component.ts:
+    - identityStatus / documentEvidenceStatus gained a GR branch,
+      mirroring Invoice's: Identity Consistency from the 3 "who" parties
+      (Receiver/Buyer, Supplier, Supplier Address via partyRows'
+      AI+correction merge), Document Evidence from the 2 processing
+      stamps (QC Passed, Key-In Store). PO keeps its original
+      supplier_identity/company_logo-based fallback. overallStatus /
+      summaryExplanation already derive from these two getters, so GR
+      benefits with no further change.
+
+  tests/extraction/test_authenticity_scoring.py:
+    - 6 new cases, including an exact reproduction of the reported bug
+      (GR PD6012320: legacy has_company_name=False must not affect the
+      effective GR result) and the spec's own expected outcome (all 5
+      required items present -> PASS, risk LOW).
+
+Why:
+  Reported bug: GR PD6012320 showed all 5 current GR evidence items as
+  detected/auditor-confirmed, yet the Workspace still showed "Failed -
+  1/5 signals detected - Missing required: Company Name" and Detail
+  showed "Identity Consistency: NOT CHECKED" / "Document Evidence: NOT
+  CHECKED" - the exact same root cause as the earlier Invoice fix
+  (helpers/auth_rules.py's legacy company_name/company_logo/
+  company_chop/signature rule set has no connection to the v10
+  evidence-correction vocabulary or to auditor corrections at all),
+  just not yet applied to GR.
+
+Verified:
+  tests/extraction/test_authenticity_scoring.py ("the relevant GR
+  authenticity test", per this task's own scope) - all pre-existing
+  cases (including the earlier Invoice/PO cases) still pass unchanged,
+  plus the 6 new GR cases. npx ng build --configuration production -
+  clean compile; only the same pre-existing bundle-budget warnings on
+  files this task never touched. python -c "import app" - clean import
+  (not a test run). Did not run the full backend suite or Playwright,
+  per this task's explicit instruction. git diff --stat confirms only
+  routes/authenticity.py, the one test file, and the Authenticity
+  Detail component's .ts changed - no Invoice or PO logic touched, no
+  HTML change needed (identityStatus/documentEvidenceStatus already
+  bind generically), no Workspace component file touched (the list
+  endpoint's corrections-merge plumbing was already document-type-
+  generic from the Invoice fix).
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy both the backend
+     (Docker web service) and the frontend static site.
+  2. Backend + frontend redeploy required - no new migration, no new
+     dependency, no new environment variable.

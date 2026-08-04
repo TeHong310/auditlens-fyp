@@ -394,6 +394,127 @@ def run_case_with_authentication_score_po_unaffected():
           any(d['name'] == 'Company Name' for d in result['signal_details']), result['signal_details'])
 
 
+# ── v12: _compute_effective_gr_authentication / GR via _with_authentication_score ──
+# Reported bug: GR PD6012320 had all 5 current GR evidence items detected
+# or auditor-confirmed (Receiver/Buyer, Supplier, Supplier Address, QC
+# Passed Stamp, Key-In Store Stamp), yet the Workspace kept showing
+# "Failed - 1/5 signals detected - Missing required: Company Name" (the
+# LEGACY company_name/company_logo/company_chop/signature rule set) and
+# Detail showed "Identity Consistency: NOT CHECKED" / "Document Evidence:
+# NOT CHECKED". Same root cause and same fix shape as Invoice above.
+
+def _gr_row(ai_visual_result=None, boxes=None, legacy_has_company_name=False):
+    return {
+        'document_id': None,
+        'document_type': 'gr',
+        'ai_visual_result': ai_visual_result,
+        'boxes': boxes or [],
+        'has_company_name': legacy_has_company_name,
+        'has_company_logo': False,
+        'has_company_chop': False,
+        'has_signature': False,
+        'document_number': None,
+    }
+
+
+def _gv_box(evidence_type, confidence=0.8):
+    """A minimal Google-Vision-sourced box entry, as
+    helpers/vision_evidence_boxes.py's _build_box_entry() returns it —
+    only the fields _ai_box_exists() actually reads."""
+    return {'type': evidence_type, 'coordinate_source': 'google_vision', 'confidence': confidence}
+
+
+def run_case_effective_gr_all_evidence_present_matches_pd6012320():
+    print('Case: PD6012320 - all 5 required GR evidence items present -> PASS, 100, risk LOW (per spec)')
+    visual = {
+        'supplier_identity': {'supplier_name_detected': True, 'address_detected': True},
+        'buyer_identity': {'status': 'detected'},
+    }
+    boxes = [_gv_box('qc_passed_stamp'), _gv_box('key_in_store_stamp')]
+    row = _gr_row(visual, boxes)
+    result = ra._compute_effective_gr_authentication(row, [])
+    check('score is 100', result['authentication_score'] == 100, result)
+    check('status PASS', result['authentication_status'] == 'PASS', result)
+    check('summary reports 5/5', '5/5 signals detected' in result['authentication_summary'], result)
+    check('no missing-required clause', 'Missing required' not in result['authentication_summary'], result)
+
+    full_result = ra._with_authentication_score(row, [])
+    check('risk_level LOW (matches spec: Status Passed -> Risk Low)', full_result['risk_level'] == 'LOW', full_result)
+
+
+def run_case_effective_gr_stamp_correction_overrides_ai_miss():
+    print('Case: AI finds no QC Passed Stamp box, but an auditor correction for it exists -> counted as detected')
+    visual = {
+        'supplier_identity': {'supplier_name_detected': True, 'address_detected': True},
+        'buyer_identity': {'status': 'detected'},
+    }
+    boxes = [_gv_box('key_in_store_stamp')]  # qc_passed_stamp AI box missing
+    row = _gr_row(visual, boxes)
+    corrections = [_correction('qc_passed_stamp', 'auditor_added')]
+    result = ra._compute_effective_gr_authentication(row, corrections)
+    check('score is 100 (correction fills the AI gap)', result['authentication_score'] == 100, result)
+    check('status PASS', result['authentication_status'] == 'PASS', result)
+
+
+def run_case_effective_gr_deleted_correction_overrides_ai_hit():
+    print('Case: AI detected Supplier, but the auditor explicitly deleted it -> not detected')
+    visual = {
+        'supplier_identity': {'supplier_name_detected': True, 'address_detected': True},
+        'buyer_identity': {'status': 'detected'},
+    }
+    boxes = [_gv_box('qc_passed_stamp'), _gv_box('key_in_store_stamp')]
+    row = _gr_row(visual, boxes)
+    corrections = [_correction('supplier_name', 'auditor_deleted')]
+    result = ra._compute_effective_gr_authentication(row, corrections)
+    check('score is 80 (4/5)', result['authentication_score'] == 80, result)
+    check('missing required names Supplier', 'Supplier' in result['authentication_summary'], result)
+    check('missing-required clause present (the deletion is a real, reported gap)',
+          'Missing required' in result['authentication_summary'], result)
+
+
+def run_case_effective_gr_ignores_legacy_company_name_signal():
+    print('Case: legacy has_company_name=False must NOT affect the effective GR result at all (reported bug)')
+    visual = {
+        'supplier_identity': {'supplier_name_detected': True, 'address_detected': True},
+        'buyer_identity': {'status': 'detected'},
+    }
+    boxes = [_gv_box('qc_passed_stamp'), _gv_box('key_in_store_stamp')]
+    row = _gr_row(visual, boxes, legacy_has_company_name=False)
+    result = ra._compute_effective_gr_authentication(row, [])
+    check('status PASS despite legacy has_company_name being False',
+          result['authentication_status'] == 'PASS', result)
+    check('summary never mentions "Company Name" (that field is not part of the current GR model)',
+          'Company Name' not in result['authentication_summary'], result)
+
+
+def run_case_gr_stamp_box_ignores_non_vision_coordinate_source():
+    print('Case: a stamp box with a non-google_vision coordinate_source must not count as AI-detected')
+    row = _gr_row(ai_visual_result={}, boxes=[{'type': 'qc_passed_stamp', 'coordinate_source': 'claude', 'confidence': 0.9}])
+    check('_ai_box_exists is False for a non-google_vision box',
+          ra._ai_box_exists(row, 'qc_passed_stamp') is False, row['boxes'])
+
+
+def run_case_with_authentication_score_gr_uses_effective_merge():
+    print('Case: _with_authentication_score(gr) merges corrections, not the legacy AUTH_RULES path')
+    visual = {
+        'supplier_identity': {'supplier_name_detected': False, 'address_detected': True},
+        'buyer_identity': {'status': 'detected'},
+    }
+    boxes = [_gv_box('qc_passed_stamp'), _gv_box('key_in_store_stamp')]
+    row = _gr_row(visual, boxes, legacy_has_company_name=False)
+    corrections = [_correction('supplier_name', 'auditor_corrected')]
+    result = ra._with_authentication_score(row, corrections)
+    check('status PASS once the correction fills the AI-missed supplier_name',
+          result['authentication_status'] == 'PASS', result)
+    check('risk_level derived from the effective status (LOW)', result['risk_level'] == 'LOW', result)
+    check('signal_details cover the 5 current GR evidence keys, not the legacy 5',
+          len(result.get('signal_details') or []) == 5, result.get('signal_details'))
+    check('signal_details name the current GR evidence labels',
+          {d['name'] for d in result['signal_details']} == {
+              'Receiver / Buyer', 'Supplier', 'Supplier Address', 'QC Passed Stamp', 'Key-In Store Stamp'},
+          result['signal_details'])
+
+
 if __name__ == '__main__':
     run_case_score_high_approves()
     run_case_score_medium_reviews()
@@ -413,6 +534,12 @@ if __name__ == '__main__':
     run_case_effective_invoice_ignores_legacy_company_name_signal()
     run_case_with_authentication_score_invoice_uses_effective_merge()
     run_case_with_authentication_score_po_unaffected()
+    run_case_effective_gr_all_evidence_present_matches_pd6012320()
+    run_case_effective_gr_stamp_correction_overrides_ai_miss()
+    run_case_effective_gr_deleted_correction_overrides_ai_hit()
+    run_case_effective_gr_ignores_legacy_company_name_signal()
+    run_case_gr_stamp_box_ignores_non_vision_coordinate_source()
+    run_case_with_authentication_score_gr_uses_effective_merge()
 
     print()
     if FAILURES:

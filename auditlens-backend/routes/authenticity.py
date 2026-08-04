@@ -142,6 +142,122 @@ def _compute_effective_invoice_authentication(row, corrections):
     }
 
 
+# v12: the CURRENT Goods Receipt evidence model (helpers/
+# evidence_corrections.py's VALID_EVIDENCE_TYPES_BY_DOC_TYPE['gr'], also
+# the Authenticity Detail page's Receiving Parties panel) — Receiver/
+# Buyer, Supplier, Supplier Address, QC Passed Stamp, Key-In Store
+# Stamp. handwritten_notes is deliberately excluded here: it's optional
+# (helpers/vision_evidence_boxes.py has no automatic detector for it at
+# all — see that module's own docstring), never part of the required
+# count. Same mismatch as Invoice's: helpers/auth_rules.py's legacy
+# company_name/company_logo/company_chop/signature rule set has no
+# concept of these keys or of auditor corrections at all.
+_GR_EFFECTIVE_EVIDENCE = [
+    ('buyer_name', 'Receiver / Buyer'),
+    ('supplier_name', 'Supplier'),
+    ('supplier_address', 'Supplier Address'),
+    ('qc_passed_stamp', 'QC Passed Stamp'),
+    ('key_in_store_stamp', 'Key-In Store Stamp'),
+]
+
+# helpers/auth_rules.py sets a stricter PASS bar for GR than Invoice/PO
+# (_PASS_THRESHOLDS['gr']=80 vs 70 — "e.g. raise the bar above the base
+# 80 (e.g. Goods Receipt)") — kept here so the effective GR result's
+# verdict band matches that same established intent.
+_GR_FAIL_THRESHOLD = 50
+_GR_PASS_THRESHOLD = 80
+
+
+def _ai_box_exists(row, evidence_type):
+    """Whether a real Google-Vision-derived box exists in this row's
+    `boxes` for evidence_type — the server-side equivalent of the
+    Authenticity Detail page's aiBoxFor() gate (type + coordinate_source
+    + a reasonable confidence floor, without the polygon/dimension
+    checks that gate is ALSO used for, which are purely about safe
+    rendering, not detection). Used for GR evidence types with no
+    independent Claude/Gemini semantic signal to fall back on —
+    qc_passed_stamp/key_in_store_stamp are only ever located via Google
+    Vision keyword clustering (helpers/vision_evidence_boxes.py), never
+    reported inside ai_visual_result itself."""
+    for box in (row.get('boxes') or []):
+        if (box.get('type') == evidence_type and box.get('coordinate_source') == 'google_vision'
+                and (box.get('confidence') or 0) >= 0.5):
+            return True
+    return False
+
+
+def _ai_detected_gr_evidence(row, evidence_type):
+    """The AI's own (uncorrected) read for one of the 5 current GR
+    evidence keys. supplier_name/supplier_address/buyer_name reuse the
+    same ai_visual_result sub-objects independentSignalFor() reads
+    client-side (populated for every document type, not just Invoice —
+    see helpers/authenticity_check.py's _normalize_visual_result());
+    the two stamp types have no such signal and fall back to real box
+    presence via _ai_box_exists()."""
+    if evidence_type == 'supplier_name':
+        visual = row.get('ai_visual_result') or {}
+        return bool((visual.get('supplier_identity') or {}).get('supplier_name_detected'))
+    if evidence_type == 'supplier_address':
+        visual = row.get('ai_visual_result') or {}
+        return bool((visual.get('supplier_identity') or {}).get('address_detected'))
+    if evidence_type == 'buyer_name':
+        visual = row.get('ai_visual_result') or {}
+        return (visual.get('buyer_identity') or {}).get('status') == 'detected'
+    if evidence_type in ('qc_passed_stamp', 'key_in_store_stamp'):
+        return _ai_box_exists(row, evidence_type)
+    return False
+
+
+def _compute_effective_gr_authentication(row, corrections):
+    """Merges the latest AI detections with saved auditor corrections/
+    additions/deletions into ONE effective Passed/Review Required/Failed
+    result for a Goods Receipt, using the CURRENT GR evidence model
+    (_GR_EFFECTIVE_EVIDENCE) instead of the legacy signal set. Same
+    "correction always wins" precedence as Invoice's
+    _compute_effective_invoice_authentication() —
+    'auditor_corrected'/'auditor_added' -> detected, 'auditor_deleted'
+    -> not detected, no correction -> fall back to the AI's own read."""
+    corrections_by_type = {c['evidence_type']: c for c in corrections}
+
+    signal_details = []
+    detected_count = 0
+    missing_required = []
+    for evidence_type, label in _GR_EFFECTIVE_EVIDENCE:
+        correction = corrections_by_type.get(evidence_type)
+        if correction is not None:
+            detected = correction['source'] != 'auditor_deleted'
+        else:
+            detected = _ai_detected_gr_evidence(row, evidence_type)
+
+        if detected:
+            detected_count += 1
+        else:
+            missing_required.append(label)
+        signal_details.append({
+            'name': label, 'category': 'required', 'detected': detected,
+            'score': 20 if detected else 0,
+        })
+
+    total = len(_GR_EFFECTIVE_EVIDENCE)
+    score = round((detected_count / total) * 100) if total else 0
+    if score < _GR_FAIL_THRESHOLD:
+        status = 'FAIL'
+    elif score >= _GR_PASS_THRESHOLD:
+        status = 'PASS'
+    else:
+        status = 'REVIEW'
+    summary = f'Goods Receipt authentication: {detected_count}/{total} signals detected ({score}/100) — {status}.'
+    if missing_required:
+        summary += f' Missing required: {", ".join(missing_required)}.'
+
+    return {
+        'authentication_score':   score,
+        'authentication_status':  status,
+        'authentication_summary': summary,
+        'signal_details':         signal_details,
+    }
+
+
 def _with_authentication_score(row, corrections=None):
     """
     Enriches an authenticity_checks row (already fetched via
@@ -154,14 +270,20 @@ def _with_authentication_score(row, corrections=None):
     exactly as-is for the existing frontend, which reads those directly.
 
     corrections: this document_id+document_type's evidence_corrections
-    (get_corrections_for()'s shape), or None. For an Invoice, these are
+    (get_corrections_for()'s shape), or None. For Invoice/GR, these are
     merged into the effective evidence result — see
-    _compute_effective_invoice_authentication(). PO/GR are unaffected
-    (unchanged compute_authentication() call below) — not part of this
-    fix's scope.
+    _compute_effective_invoice_authentication() /
+    _compute_effective_gr_authentication(). PO is unaffected (unchanged
+    compute_authentication() call below) — not part of this fix's scope.
     """
     if row.get('document_type') == 'invoice':
         effective = _compute_effective_invoice_authentication(row, corrections or [])
+        row.update(effective)
+        row['risk_level'] = _STATUS_TO_RISK_LEVEL[effective['authentication_status']]
+        return _finish_authentication_score(row)
+
+    if row.get('document_type') == 'gr':
+        effective = _compute_effective_gr_authentication(row, corrections or [])
         row.update(effective)
         row['risk_level'] = _STATUS_TO_RISK_LEVEL[effective['authentication_status']]
         return _finish_authentication_score(row)
