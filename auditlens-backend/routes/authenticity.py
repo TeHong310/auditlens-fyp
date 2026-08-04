@@ -11,7 +11,7 @@ from helpers.authenticity_check import (
 from helpers.auth_rules import compute_authentication
 from helpers.transaction_packages import get_transaction_context_for_document
 from helpers.evidence_corrections import (
-    get_corrections_for, apply_evidence_changes, EvidenceValidationError
+    get_corrections_for, get_all_corrections_grouped, apply_evidence_changes, EvidenceValidationError
 )
 from helpers.audit_log import log_audit
 from routes.auditor import _build_comparison, _vendor_match_all
@@ -48,7 +48,100 @@ def _transaction_context_for_row(row):
     return get_transaction_context_for_document(lookup_id, role)
 
 
-def _with_authentication_score(row):
+# v11: the CURRENT Invoice evidence model (helpers/evidence_corrections.
+# py's VALID_EVIDENCE_TYPES_BY_DOC_TYPE['invoice'], also the Authenticity
+# Detail page's Invoice Parties panel) — supplier_name, buyer_name,
+# buyer_received_stamp. Distinct from, and never reconciled with,
+# helpers/auth_rules.py's older company_name/company_logo/company_chop/
+# signature rule set, which has no concept of these keys or of auditor
+# corrections at all. That mismatch is exactly why correcting "Invoice
+# Issuer / Supplier" (supplier_name) could never clear a "Missing
+# required: Company Name" (company_name) warning — they are unrelated
+# fields. PO/GR keep using compute_authentication() below unchanged.
+_INVOICE_EFFECTIVE_EVIDENCE = [
+    ('supplier_name', 'Invoice Issuer / Supplier'),
+    ('buyer_name', 'Buyer'),
+    ('buyer_received_stamp', 'Buyer Received Stamp'),
+]
+
+# Same PASS/REVIEW/FAIL bands helpers/auth_rules.py already uses for
+# Invoice (_FAIL_THRESHOLD=50, _PASS_THRESHOLDS['invoice']=70) — kept in
+# sync manually so the verdict bands read the same regardless of which
+# evidence model produced the underlying score.
+_INVOICE_FAIL_THRESHOLD = 50
+_INVOICE_PASS_THRESHOLD = 70
+_STATUS_TO_RISK_LEVEL = {'PASS': 'LOW', 'REVIEW': 'MEDIUM', 'FAIL': 'HIGH'}
+
+
+def _ai_detected_invoice_evidence(visual, evidence_type):
+    """The AI's own (uncorrected) read for one of the 3 current Invoice
+    evidence keys — the same sub-objects the Authenticity Detail page's
+    independentSignalFor() already reads client-side, so server and
+    client agree on what "AI detected" means for these keys."""
+    if not visual:
+        return False
+    if evidence_type == 'supplier_name':
+        return bool((visual.get('supplier_identity') or {}).get('supplier_name_detected'))
+    if evidence_type == 'buyer_name':
+        return (visual.get('buyer_identity') or {}).get('status') == 'detected'
+    if evidence_type == 'buyer_received_stamp':
+        return bool((visual.get('document_visual_evidence') or {}).get('stamp', {}).get('detected'))
+    return False
+
+
+def _compute_effective_invoice_authentication(row, corrections):
+    """Merges the latest AI detections with saved auditor corrections/
+    additions/deletions into ONE effective Passed/Review Required/Failed
+    result for an Invoice. A correction always overrides the AI's own
+    read for that evidence type ('auditor_corrected'/'auditor_added' ->
+    detected, 'auditor_deleted' -> not detected) — same precedence
+    already documented in helpers/evidence_corrections.py for the
+    displayed region, now also driving the score, so a re-check after a
+    correction actually changes the verdict instead of only the
+    on-image label."""
+    visual = row.get('ai_visual_result') or {}
+    corrections_by_type = {c['evidence_type']: c for c in corrections}
+
+    signal_details = []
+    detected_count = 0
+    missing_required = []
+    for evidence_type, label in _INVOICE_EFFECTIVE_EVIDENCE:
+        correction = corrections_by_type.get(evidence_type)
+        if correction is not None:
+            detected = correction['source'] != 'auditor_deleted'
+        else:
+            detected = _ai_detected_invoice_evidence(visual, evidence_type)
+
+        if detected:
+            detected_count += 1
+        else:
+            missing_required.append(label)
+        signal_details.append({
+            'name': label, 'category': 'required', 'detected': detected,
+            'score': 30 if detected else 0,
+        })
+
+    total = len(_INVOICE_EFFECTIVE_EVIDENCE)
+    score = round((detected_count / total) * 100) if total else 0
+    if score < _INVOICE_FAIL_THRESHOLD:
+        status = 'FAIL'
+    elif score >= _INVOICE_PASS_THRESHOLD:
+        status = 'PASS'
+    else:
+        status = 'REVIEW'
+    summary = f'Invoice authentication: {detected_count}/{total} signals detected ({score}/100) — {status}.'
+    if missing_required:
+        summary += f' Missing required: {", ".join(missing_required)}.'
+
+    return {
+        'authentication_score':   score,
+        'authentication_status':  status,
+        'authentication_summary': summary,
+        'signal_details':         signal_details,
+    }
+
+
+def _with_authentication_score(row, corrections=None):
     """
     Enriches an authenticity_checks row (already fetched via
     _SELECT_WITH_JOINS, which includes document_number from the joined
@@ -58,7 +151,20 @@ def _with_authentication_score(row):
     query and no new DB column. Mutates and returns `row` so every
     existing field (authenticity_status, has_company_chop, etc.) stays
     exactly as-is for the existing frontend, which reads those directly.
+
+    corrections: this document_id+document_type's evidence_corrections
+    (get_corrections_for()'s shape), or None. For an Invoice, these are
+    merged into the effective evidence result — see
+    _compute_effective_invoice_authentication(). PO/GR are unaffected
+    (unchanged compute_authentication() call below) — not part of this
+    fix's scope.
     """
+    if row.get('document_type') == 'invoice':
+        effective = _compute_effective_invoice_authentication(row, corrections or [])
+        row.update(effective)
+        row['risk_level'] = _STATUS_TO_RISK_LEVEL[effective['authentication_status']]
+        return _finish_authentication_score(row)
+
     detected_signals = {
         'company_name': bool(row.get('has_company_name')),
         'company_logo': bool(row.get('has_company_logo')),
@@ -67,6 +173,10 @@ def _with_authentication_score(row):
         'doc_number':   bool(row.get('document_number')),
     }
     row.update(compute_authentication(row.get('document_type'), detected_signals))
+    return _finish_authentication_score(row)
+
+
+def _finish_authentication_score(row):
     # Flask's default JSON encoder formats a raw datetime via HTTP's GMT-
     # labeled RFC 1123 format WITHOUT actually converting a naive (no
     # tzinfo) value to UTC first — it just relabels the DB session's
@@ -515,7 +625,16 @@ def get_authenticity_check(document_id):
         # fix for "only Invoice shows up on the Authenticity page".
         _ensure_sibling_checks(document_id, document_type)
 
-        result = _with_authentication_score(row)
+        # v10: auditor corrections/additions/deletions for this exact
+        # document_id + document_type — a SEPARATE table from `boxes`
+        # (AI-only), so this always reflects the latest saved edits
+        # regardless of how many times the AI side has been re-checked.
+        # Fetched once, up front, so the SAME list both feeds the
+        # effective authentication merge below (v11) and is returned as
+        # result['evidence_corrections'] — no duplicate query.
+        corrections = get_corrections_for(document_id, document_type)
+
+        result = _with_authentication_score(row, corrections)
         # Computed AFTER sibling checks, on a fresh cursor, so it reflects
         # any sibling rows just created above — see
         # _cross_document_authenticity_for's docstring for why this is
@@ -528,11 +647,7 @@ def get_authenticity_check(document_id):
         result['workflow_consistency'] = _workflow_consistency_for(cursor, document_id)
         conn.close()
 
-        # v10: auditor corrections/additions/deletions for this exact
-        # document_id + document_type — a SEPARATE table from `boxes`
-        # (AI-only), so this always reflects the latest saved edits
-        # regardless of how many times the AI side has been re-checked.
-        result['evidence_corrections'] = get_corrections_for(document_id, document_type)
+        result['evidence_corrections'] = corrections
 
         return jsonify(result), 200
 
@@ -634,7 +749,18 @@ def get_authenticity_checks():
         rows = cursor.fetchall()
         conn.close()
 
-        return jsonify([_with_authentication_score(row) for row in rows]), 200
+        # v11: merge each row's evidence corrections into its effective
+        # authentication result (Invoice only — see
+        # _compute_effective_invoice_authentication) so the Workspace
+        # card's status pill/summary/risk agree with the Authenticity
+        # Detail page and actually change once a correction is saved,
+        # instead of staying on the stale AI-only verdict. One batched
+        # query for every row instead of an N+1 per-row lookup.
+        corrections_map = get_all_corrections_grouped()
+        return jsonify([
+            _with_authentication_score(row, corrections_map.get((row['document_id'], row['document_type']), []))
+            for row in rows
+        ]), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -692,16 +818,24 @@ def recheck_authenticity(document_id):
             (check_id,)
         )
         row = cursor.fetchone()
-        result = _with_authentication_score(row)
-        result['cross_document_authenticity'] = _cross_document_authenticity_for(cursor, document_id)
-        result['workflow_consistency'] = _workflow_consistency_for(cursor, document_id)
-        conn.close()
 
         # v10: a recheck REPLACES authenticity_checks.boxes (fresh AI
         # regions) but NEVER touches authenticity_evidence_corrections —
         # saved auditor corrections are returned here completely
-        # unaffected by the recheck that just ran.
-        result['evidence_corrections'] = get_corrections_for(document_id, document_type)
+        # unaffected by the recheck that just ran. v11: this SAME list
+        # is now also merged into the effective authentication result
+        # below (Invoice only), so a correction saved before this
+        # re-check can actually flip the verdict once the fresh AI read
+        # is merged with it — not just leave the stale AI-only verdict
+        # standing next to an unrelated "corrected" label.
+        corrections = get_corrections_for(document_id, document_type)
+
+        result = _with_authentication_score(row, corrections)
+        result['cross_document_authenticity'] = _cross_document_authenticity_for(cursor, document_id)
+        result['workflow_consistency'] = _workflow_consistency_for(cursor, document_id)
+        conn.close()
+
+        result['evidence_corrections'] = corrections
 
         return jsonify(result), 200
 

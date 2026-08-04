@@ -266,6 +266,134 @@ def run_case_workflow_consistency_not_applicable():
     check('None when date_order_valid itself is None', result_none_date is None, result_none_date)
 
 
+# ── v11: _compute_effective_invoice_authentication / _with_authentication_score ──
+# Reported bug: after an auditor corrects/adds Invoice evidence and clicks
+# Re-check Analysis, the Workspace card kept showing "Failed — 1/5 signals
+# detected — Missing required: Company Name" — driven by the LEGACY
+# has_company_name/has_company_logo/has_company_chop/has_signature signals
+# (helpers/auth_rules.py), which have no connection at all to the CURRENT
+# Invoice evidence model (supplier_name/buyer_name/buyer_received_stamp) a
+# correction is actually saved against. These cases prove the new merge
+# uses only the current evidence model and that a correction changes the
+# verdict, regardless of what the unrelated legacy signals say.
+
+def _invoice_row(ai_visual_result, legacy_has_company_name=False):
+    """A minimal authenticity_checks row shape, as fetched via
+    _SELECT_WITH_JOINS — legacy_has_company_name defaults to False
+    (deliberately) so every case below proves the effective invoice
+    result never depends on it."""
+    return {
+        # document_id=None (not a real row) — _with_authentication_score's
+        # transaction_context lookup reads row['document_id'] directly for
+        # 'invoice', so this must be present (even if None) to avoid a
+        # KeyError; None short-circuits _transaction_context_for_row before
+        # any DB call is made.
+        'document_id': None,
+        'document_type': 'invoice',
+        'ai_visual_result': ai_visual_result,
+        'has_company_name': legacy_has_company_name,
+        'has_company_logo': False,
+        'has_company_chop': False,
+        'has_signature': False,
+        'document_number': None,
+    }
+
+
+def _correction(evidence_type, source):
+    return {'evidence_type': evidence_type, 'source': source}
+
+
+def run_case_effective_invoice_all_ai_detected_no_corrections():
+    print('Case: AI detects all 3 current Invoice evidence types, no corrections -> PASS, 3/3')
+    visual = {
+        'supplier_identity': {'supplier_name_detected': True},
+        'buyer_identity': {'status': 'detected'},
+        'document_visual_evidence': {'stamp': {'detected': True}},
+    }
+    row = _invoice_row(visual)
+    result = ra._compute_effective_invoice_authentication(row, [])
+    check('score is 100', result['authentication_score'] == 100, result)
+    check('status PASS', result['authentication_status'] == 'PASS', result)
+    check('summary reports 3/3', '3/3 signals detected' in result['authentication_summary'], result)
+    check('no missing-required clause', 'Missing required' not in result['authentication_summary'], result)
+
+
+def run_case_effective_invoice_correction_overrides_ai_miss():
+    print('Case: AI misses Buyer Received Stamp, but an auditor correction for it exists -> counted as detected')
+    visual = {
+        'supplier_identity': {'supplier_name_detected': True},
+        'buyer_identity': {'status': 'detected'},
+        'document_visual_evidence': {'stamp': {'detected': False}},
+    }
+    row = _invoice_row(visual)
+    corrections = [_correction('buyer_received_stamp', 'auditor_added')]
+    result = ra._compute_effective_invoice_authentication(row, corrections)
+    check('score is 100 (correction fills the AI gap)', result['authentication_score'] == 100, result)
+    check('status PASS', result['authentication_status'] == 'PASS', result)
+    check('no missing-required clause', 'Missing required' not in result['authentication_summary'], result)
+
+
+def run_case_effective_invoice_deleted_correction_overrides_ai_hit():
+    print('Case: AI detected Invoice Issuer / Supplier, but the auditor explicitly deleted it -> not detected')
+    visual = {
+        'supplier_identity': {'supplier_name_detected': True},
+        'buyer_identity': {'status': 'detected'},
+        'document_visual_evidence': {'stamp': {'detected': True}},
+    }
+    row = _invoice_row(visual)
+    corrections = [_correction('supplier_name', 'auditor_deleted')]
+    result = ra._compute_effective_invoice_authentication(row, corrections)
+    check('score is 67 (2/3)', result['authentication_score'] == 67, result)
+    check('missing required names Invoice Issuer / Supplier',
+          'Invoice Issuer / Supplier' in result['authentication_summary'], result)
+
+
+def run_case_effective_invoice_ignores_legacy_company_name_signal():
+    print('Case: legacy has_company_name=False must NOT affect the effective result at all (reported bug)')
+    visual = {
+        'supplier_identity': {'supplier_name_detected': True},
+        'buyer_identity': {'status': 'detected'},
+        'document_visual_evidence': {'stamp': {'detected': True}},
+    }
+    row = _invoice_row(visual, legacy_has_company_name=False)
+    result = ra._compute_effective_invoice_authentication(row, [])
+    check('status PASS despite legacy has_company_name being False',
+          result['authentication_status'] == 'PASS', result)
+    check('summary never mentions "Company Name" (that field is not part of the current model)',
+          'Company Name' not in result['authentication_summary'], result)
+
+
+def run_case_with_authentication_score_invoice_uses_effective_merge():
+    print('Case: _with_authentication_score(invoice) merges corrections, not the legacy AUTH_RULES path')
+    visual = {
+        'supplier_identity': {'supplier_name_detected': False},
+        'buyer_identity': {'status': 'detected'},
+        'document_visual_evidence': {'stamp': {'detected': True}},
+    }
+    row = _invoice_row(visual, legacy_has_company_name=False)
+    corrections = [_correction('supplier_name', 'auditor_corrected')]
+    result = ra._with_authentication_score(row, corrections)
+    check('status PASS once the correction fills the AI-missed supplier_name',
+          result['authentication_status'] == 'PASS', result)
+    check('risk_level derived from the effective status (LOW)', result['risk_level'] == 'LOW', result)
+    check('signal_details present', len(result.get('signal_details') or []) == 3, result.get('signal_details'))
+
+
+def run_case_with_authentication_score_po_unaffected():
+    print('Case: PO document_type still uses the unchanged legacy compute_authentication() path')
+    row = {
+        'document_type': 'po', 'ai_visual_result': None,
+        'has_company_name': True, 'has_company_logo': False,
+        'has_company_chop': False, 'has_signature': False,
+        'document_number': 'PO-123',
+    }
+    result = ra._with_authentication_score(row, corrections=[_correction('supplier_name', 'auditor_added')])
+    check('PO authentication_status unaffected by an evidence correction (out of this fix\'s scope)',
+          result['authentication_status'] in ('PASS', 'REVIEW', 'FAIL'), result)
+    check('signal_details reflect the legacy company_name/doc_number/company_logo rule set, not the invoice model',
+          any(d['name'] == 'Company Name' for d in result['signal_details']), result['signal_details'])
+
+
 if __name__ == '__main__':
     run_case_score_high_approves()
     run_case_score_medium_reviews()
@@ -279,6 +407,12 @@ if __name__ == '__main__':
     run_case_workflow_consistency_valid_order()
     run_case_workflow_consistency_invalid_order()
     run_case_workflow_consistency_not_applicable()
+    run_case_effective_invoice_all_ai_detected_no_corrections()
+    run_case_effective_invoice_correction_overrides_ai_miss()
+    run_case_effective_invoice_deleted_correction_overrides_ai_hit()
+    run_case_effective_invoice_ignores_legacy_company_name_signal()
+    run_case_with_authentication_score_invoice_uses_effective_merge()
+    run_case_with_authentication_score_po_unaffected()
 
     print()
     if FAILURES:

@@ -15,6 +15,12 @@ module always returns exactly what's stored (including
 source='auditor_deleted' rows with null coordinates) — the frontend
 merges a document's `boxes` (AI) with `evidence_corrections` (this
 table) itself, correction winning when present.
+
+routes/authenticity.py's _compute_effective_invoice_authentication()
+applies the SAME "correction wins" precedence server-side, for scoring
+rather than display — a saved correction/addition/deletion also
+overrides the AI's own detected/not-detected read for that evidence
+type when computing Invoice's Passed/Review Required/Failed status.
 """
 
 import psycopg2.extras
@@ -127,6 +133,36 @@ def get_corrections_for(document_id, document_type):
         entry['corrected_at'] = entry['corrected_at'].isoformat() if entry['corrected_at'] else None
         out.append(entry)
     return out
+
+
+def get_all_corrections_grouped():
+    """Every saved correction across every document, grouped by
+    (document_id, document_type) — one query instead of the N+1 that
+    calling get_corrections_for() per row would need. Used by
+    GET /authenticity (the Workspace list) to merge corrections into
+    each row's effective authentication result. Per-entry shape is
+    identical to get_corrections_for()'s (document_id/document_type are
+    the dict KEY, not repeated in each entry)."""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cursor.execute('''
+        SELECT document_id, document_type, correction_id, evidence_type, page, x, y, width, height,
+               source, original_ai_box, corrected_by, corrected_at
+        FROM authenticity_evidence_corrections
+        ORDER BY evidence_type
+    ''')
+    rows = cursor.fetchall()
+    conn.close()
+
+    grouped = {}
+    for row in rows:
+        entry = dict(row)
+        key = (entry.pop('document_id'), entry.pop('document_type'))
+        for coord in ('x', 'y', 'width', 'height'):
+            entry[coord] = float(entry[coord]) if entry[coord] is not None else None
+        entry['corrected_at'] = entry['corrected_at'].isoformat() if entry['corrected_at'] else None
+        grouped.setdefault(key, []).append(entry)
+    return grouped
 
 
 def apply_evidence_changes(document_id, document_type, changes, user_id):

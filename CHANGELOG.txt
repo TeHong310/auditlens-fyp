@@ -19159,3 +19159,96 @@ Setup/config needed:
   2. Backend + frontend redeploy required (routes/auditor.py and the
      matching-details component changed - no new migration, no new
      dependency, no new environment variable).
+
+------------------------------------------------------------
+2026-08-04
+
+What changed:
+  fix: sync auditor evidence with authenticity result
+
+  routes/authenticity.py:
+    - New _compute_effective_invoice_authentication(row, corrections):
+      for Invoice only, merges the latest AI detections with saved
+      auditor corrections/additions/deletions for the CURRENT Invoice
+      evidence model (supplier_name / buyer_name / buyer_received_stamp
+      - the same 3 keys the Authenticity Detail page's Invoice Parties
+      panel and helpers/evidence_corrections.py's
+      VALID_EVIDENCE_TYPES_BY_DOC_TYPE already use). A correction always
+      overrides the AI's own read for that evidence type
+      (auditor_corrected/auditor_added -> detected, auditor_deleted ->
+      not detected). Recomputes authentication_score/status/summary/
+      signal_details and, from that same effective status, risk_level.
+    - _with_authentication_score(row, corrections=None) now branches on
+      document_type: Invoice uses the new effective-evidence merge
+      above; PO/GR are completely unchanged (still
+      helpers/auth_rules.py's compute_authentication(), not reported
+      broken, out of scope for this fix).
+    - GET /authenticity (Workspace list), GET /authenticity/<id>
+      (Detail), and POST /authenticity/<id>/recheck now all fetch this
+      document's evidence_corrections and pass them into
+      _with_authentication_score, so all three consumers - Workspace
+      status pill/summary/risk, Detail's raw fields, KPI cards and
+      filters (which already key off authentication_status) - read the
+      SAME merged result. The list endpoint uses one batched query
+      (helpers/evidence_corrections.py's new
+      get_all_corrections_grouped()) instead of an N+1 per row.
+
+  helpers/evidence_corrections.py:
+    - New get_all_corrections_grouped() - every saved correction across
+      every document, grouped by (document_id, document_type), for the
+      Workspace list's batched merge. Docstring updated to note the
+      merge now also happens server-side for scoring, not just in the
+      frontend for the displayed region.
+
+  auditor-authenticity-detail.component.ts:
+    - identityStatus / documentEvidenceStatus now branch on Invoice:
+      driven by partyRows' already-correct AI+correction merge
+      (supplier_name + buyer_name for Identity Consistency,
+      buyer_received_stamp for Document Evidence) instead of the legacy
+      AI-only supplier_identity / company_logo checks. overallStatus and
+      summaryExplanation already derive from these two getters, so they
+      benefit with no further change. PO/GR branches are byte-identical
+      to before.
+
+  tests/extraction/test_authenticity_scoring.py:
+    - 6 new cases proving: the effective Invoice result ignores the
+      legacy has_company_name signal entirely (the exact reported bug -
+      correcting "Invoice Issuer / Supplier" could never have cleared a
+      "Missing required: Company Name" warning, since they're unrelated
+      fields); a correction fills an AI-missed evidence type and flips
+      PASS; an auditor_deleted correction overrides an AI hit; PO stays
+      on the unchanged legacy path.
+
+Why:
+  Reported bug: after an auditor corrects/adds Invoice evidence and
+  clicks Re-check Analysis, the Workspace card kept showing "Failed -
+  1/5 signals detected - Missing required: Company Name" - the exact
+  message format from helpers/auth_rules.py's legacy
+  company_name/company_logo/company_chop/signature rule set, which has
+  no connection at all to the v10 evidence-correction vocabulary
+  (supplier_name/buyer_name/buyer_received_stamp) the correction was
+  actually saved against, and never even looks at
+  authenticity_evidence_corrections. The Workspace list endpoint also
+  never fetched corrections in the first place. Root cause confirmed by
+  the bug's own wording: correcting "Invoice Issuer / Supplier"
+  (supplier_name) can never clear "Missing required: Company Name"
+  (company_name) - they are different fields entirely.
+
+Verified:
+  tests/extraction/test_authenticity_scoring.py ("the relevant
+  authenticity check", per this task's own scope) - all pre-existing
+  cases still pass unchanged, plus the 6 new cases above. npx ng build
+  --configuration production - clean compile; only the same
+  pre-existing bundle-budget warnings on files this task never touched.
+  python -c "import app" - clean import. Did not run the full backend
+  suite or Playwright, per this task's explicit instruction. git diff
+  --stat confirms only routes/authenticity.py,
+  helpers/evidence_corrections.py, the Authenticity Detail component's
+  .ts, and the one test file changed - no OCR/matching code, no
+  Workspace component file, no PO/GR behavior touched.
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy both the backend
+     (Docker web service) and the frontend static site.
+  2. Backend + frontend redeploy required - no new migration, no new
+     dependency, no new environment variable.

@@ -495,8 +495,35 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return `Differs from extracted vendor "${supplier.extracted_vendor_name}" — worth a second look`;
   }
 
+  // v11: whether a party's EFFECTIVE evidence — AI detection merged with
+  // any saved correction/addition/deletion, the SAME precedence partyRows
+  // (below) already applies for the on-image label — counts as present.
+  // Backs the Invoice-only Identity Consistency / Document Evidence
+  // category rollups just below, so a saved correction can change these
+  // categories too, not just the individual row's own status text.
+  private partyEffectivelyPresent(key: string): boolean {
+    const row = this.partyRows.find(r => r.key === key);
+    if (!row) return false;
+    return row.status === 'AI_DETECTED' || row.status === 'AUDITOR_CORRECTED' ||
+           row.status === 'AUDITOR_ADDED' || row.status === 'AUDITOR_CONFIRMED';
+  }
+
   get identityStatus(): IdentityStatus {
-    if (!this.hasNewResult || !this.supplierIdentity) return 'NOT CHECKED';
+    if (!this.hasNewResult) return 'NOT CHECKED';
+    // Invoice: driven by the CURRENT evidence model's Issuer/Supplier and
+    // Buyer parties (partyRows), replacing the legacy AI-only
+    // supplier_identity check for this document type — a correction to
+    // either party must be able to change this category, not just the
+    // on-image label (PO/GR are untouched, below).
+    if (this.documentType === 'invoice') {
+      if (this.vendorMatchStatus() === 'no') return 'INCONSISTENT';
+      const supplier = this.partyEffectivelyPresent('supplier_name');
+      const buyer = this.partyEffectivelyPresent('buyer_name');
+      if (supplier && buyer) return 'CONSISTENT';
+      if (supplier || buyer) return 'UNCERTAIN';
+      return 'NOT CHECKED';
+    }
+    if (!this.supplierIdentity) return 'NOT CHECKED';
     if (this.vendorMatchStatus() === 'no') return 'INCONSISTENT';
     if (this.supplierIdentity.status === 'verified') return 'CONSISTENT';
     if (this.supplierIdentity.status === 'uncertain') return 'UNCERTAIN';
@@ -543,6 +570,13 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   }
 
   get documentEvidenceStatus(): CategoryStatus {
+    // Invoice: driven by the Buyer Received Stamp party (partyRows),
+    // replacing the legacy company_logo-only check — see identityStatus
+    // above for why (PO/GR are untouched, below).
+    if (this.documentType === 'invoice') {
+      if (!this.hasNewResult) return 'NOT CHECKED';
+      return this.partyEffectivelyPresent('buyer_received_stamp') ? 'PRESENT' : 'LIMITED';
+    }
     const rows = this.documentEvidenceRows;
     const required = rows.filter(r => r.status !== 'na');
     if (!required.length) return 'NOT CHECKED';
