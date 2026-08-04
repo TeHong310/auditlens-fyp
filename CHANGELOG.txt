@@ -19252,3 +19252,62 @@ Setup/config needed:
      (Docker web service) and the frontend static site.
   2. Backend + frontend redeploy required - no new migration, no new
      dependency, no new environment variable.
+
+------------------------------------------------------------
+2026-08-04
+
+What changed:
+  fix: display authenticity checked time in Malaysia timezone
+
+  routes/authenticity.py:
+    - _finish_authentication_score() now serializes
+      authenticity_checks.created_at via helpers/time_format.py's
+      to_utc_iso() (appends 'Z') instead of a bare .isoformat() call, so
+      the frontend can tell this value is UTC instead of guessing.
+
+  auditor-authenticity-detail.component.ts/.html:
+    - The "Checked" technical-metadata timestamp now goes through the
+      shared formatMalaysiaDateTime() utility (via a new formatDateTime()
+      wrapper, matching the same pattern already used by auditor-record-
+      detail.component.ts/auditor-anomalies.component.ts) instead of
+      Angular's built-in `date:'medium'` pipe, which used the browser's
+      own local timezone with no explicit Asia/Kuala_Lumpur conversion.
+      This is the SAME created_at field shown both for the initial check
+      and after Re-check Analysis (it's refreshed to NOW() on every AI
+      run), so both are covered by this one fix.
+    - isCorrectionConfirmed() now explicitly coerces both compared
+      timestamps (created_at, evidence_corrections[].corrected_at) to be
+      parsed as UTC (appending 'Z' if missing) before comparing, instead
+      of relying on both happening to lack a timezone marker in the same
+      way. Necessary companion fix: once created_at gained an explicit
+      'Z' but corrected_at didn't, the two would have been parsed under
+      different timezone assumptions, which could flip this comparison's
+      result for a correction and a re-check that happen close together
+      in time — the exact "Auditor Corrected -> Auditor Confirmed"
+      transition fixed in the previous change on this page.
+    - check.document_date (Invoice/PO/GR business date, shown at the top
+      of the page) is untouched — still its own `| date:'mediumDate'`
+      pipe, since it carries no time-of-day to convert.
+
+Why:
+  "Checked" was showing raw UTC digits unconverted (04 Aug 2026, 12:33
+  pm instead of the correct 04 Aug 2026, 08:33 pm Malaysia time) —
+  authenticity_checks.created_at was serialized as a bare, timezone-less
+  ISO string, and the template used Angular's date pipe with no explicit
+  timeZone, so display correctness depended entirely on the viewer's own
+  machine already being set to Malaysia time.
+
+Verified:
+  npx ng build --configuration production - clean compile; only the
+  same pre-existing bundle-budget warnings on files this task never
+  touched. python -c "import app" - clean import (not a test run). Did
+  not run backend tests or Playwright, per this task's explicit
+  instruction. git diff --stat confirms only routes/authenticity.py and
+  the Authenticity Detail component's .ts/.html changed - no other
+  page, no document business date, no unrelated timestamp field.
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy both the backend
+     (Docker web service) and the frontend static site.
+  2. Backend + frontend redeploy required - no new migration, no new
+     dependency, no new environment variable.

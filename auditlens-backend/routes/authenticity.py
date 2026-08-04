@@ -14,6 +14,7 @@ from helpers.evidence_corrections import (
     get_corrections_for, get_all_corrections_grouped, apply_evidence_changes, EvidenceValidationError
 )
 from helpers.audit_log import log_audit
+from helpers.time_format import to_utc_iso
 from routes.auditor import _build_comparison, _vendor_match_all
 
 authenticity_bp = Blueprint('authenticity', __name__)
@@ -181,13 +182,17 @@ def _finish_authentication_score(row):
     # labeled RFC 1123 format WITHOUT actually converting a naive (no
     # tzinfo) value to UTC first — it just relabels the DB session's
     # local wall-clock digits as "GMT", which is wrong by the session's
-    # UTC offset. evidence_corrections.py already sidesteps this by
-    # explicitly calling .isoformat() on corrected_at; do the same here
-    # so created_at is comparable (both naive, same convention) against
-    # evidence_corrections[].corrected_at on the frontend — this is what
-    # the pending-vs-confirmed evidence status is computed from.
+    # UTC offset. to_utc_iso() (helpers/time_format.py — the one shared
+    # place every other naive timestamp column in this app is marked
+    # unambiguous) explicitly appends 'Z', so the frontend's shared
+    # formatMalaysiaDateTime() can convert it to Asia/Kuala_Lumpur
+    # correctly instead of the browser guessing at local time. The
+    # Authenticity Detail page's isCorrectionConfirmed() explicitly
+    # treats evidence_corrections[].corrected_at as UTC too (coercing a
+    # missing 'Z' before comparing), so this stays comparable regardless
+    # of that field's own serialization.
     if row.get('created_at') is not None:
-        row['created_at'] = row['created_at'].isoformat()
+        row['created_at'] = to_utc_iso(row['created_at'])
     # Enterprise V3 Phase 7 (FIX 2): both GET /authenticity (list) and
     # GET /authenticity/<id> (detail) already call this function on
     # every row, so this is the one shared place to add transaction_

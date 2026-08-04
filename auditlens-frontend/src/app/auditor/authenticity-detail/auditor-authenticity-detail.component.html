@@ -291,7 +291,7 @@
               <p class="subsection-label">Technical Metadata</p>
               <p class="meta-row"><i class="ph-duotone" [ngClass]="uploadSourceIcon(check.upload_source)"></i> Upload Source: {{ uploadSourceLabel(check.upload_source) }}</p>
               <p class="meta-row" *ngIf="check.ai_engine_used"><i class="ph-duotone ph-robot"></i> AI Engine: {{ check.ai_engine_used }}</p>
-              <p class="meta-row" *ngIf="check.created_at"><i class="ph-duotone ph-clock"></i> Checked: {{ check.created_at | date:'medium' }}</p>
+              <p class="meta-row" *ngIf="check.created_at"><i class="ph-duotone ph-clock"></i> Checked: {{ formatDateTime(check.created_at) }}</p>
             </div>
           </div>
 

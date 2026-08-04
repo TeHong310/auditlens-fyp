@@ -5,6 +5,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 import { getAuthenticityEvidenceRows, EvidenceRow, RowStatus } from '../shared/authenticity-evidence.util';
+import { formatMalaysiaDateTime } from '../../shared/datetime.util';
 
 type SignalKey = 'has_company_chop' | 'has_company_logo' | 'has_company_name' | 'has_signature';
 
@@ -673,9 +674,32 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   // untouched (recheck never writes to the corrections table) — treat
   // it as confirmed. This needs no new backend column: both timestamps
   // already flow through the existing API response.
+  //
+  // Both values are real UTC instants (routes/authenticity.py's
+  // created_at, evidence_corrections.py's corrected_at) but aren't
+  // guaranteed to both already carry an explicit 'Z' — asUtcDate() below
+  // appends one when missing so `Date` never falls back to parsing a
+  // bare string as the browser's own local time (see shared/datetime.
+  // util.ts's own note on why that's wrong), keeping this comparison
+  // correct regardless of the viewer's timezone.
+  private asUtcDate(iso: string): Date {
+    return new Date(/[Zz]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z');
+  }
+
   private isCorrectionConfirmed(correction: EvidenceCorrection): boolean {
     if (!this.check?.created_at || !correction.corrected_at) return false;
-    return new Date(this.check.created_at).getTime() > new Date(correction.corrected_at).getTime();
+    return this.asUtcDate(this.check.created_at).getTime() > this.asUtcDate(correction.corrected_at).getTime();
+  }
+
+  // The one shared way AuditLens converts a backend UTC timestamp for
+  // display — explicit Asia/Kuala_Lumpur conversion, never the browser's
+  // own local timezone guess. Used for the "Checked" technical-metadata
+  // timestamp (authenticity_checks.created_at, also refreshed on every
+  // Re-check Analysis — see the comment above isCorrectionConfirmed) —
+  // never document business dates (Invoice/PO/GR date), which keep their
+  // own unrelated `| date:'mediumDate'` pipe untouched.
+  formatDateTime(dateStr: string): string {
+    return formatMalaysiaDateTime(dateStr);
   }
 
   // One row per party/stamp this document_type can carry, numbered by
