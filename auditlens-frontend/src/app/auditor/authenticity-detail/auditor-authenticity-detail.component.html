@@ -8,7 +8,20 @@
     <div class="header-row">
       <button class="btn-back" *ngIf="!cameFromAuditReview" (click)="goBack()">← Back to Authenticity</button>
       <h1 class="page-title"><i class="ph-duotone ph-shield-check"></i> Authenticity Detail</h1>
-      <button class="btn-back" *ngIf="cameFromAuditReview" (click)="goBack()">← Back to Audit Review</button>
+      <div class="header-right-actions" *ngIf="cameFromAuditReview">
+        <div class="doc-switcher" *ngIf="check">
+          <button *ngFor="let b of docSwitcherButtons"
+                  class="switcher-btn"
+                  [ngClass]="{ 'switcher-btn-current': b.isCurrent }"
+                  [disabled]="b.isCurrent || !b.uploaded"
+                  [title]="b.uploaded ? '' : (b.label + ' not uploaded for this transaction')"
+                  (click)="switchDocument(b.type)">
+            <span class="switcher-btn-label">{{ b.label }}</span>
+            <span class="switcher-btn-status" [ngClass]="b.statusClass">{{ b.statusLabel }}</span>
+          </button>
+        </div>
+        <button class="btn-back" (click)="goBack()">← Back to Audit Review</button>
+      </div>
     </div>
   </div>
 

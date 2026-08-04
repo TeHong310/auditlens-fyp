@@ -19397,3 +19397,66 @@ Setup/config needed:
      (Docker web service) and the frontend static site.
   2. Backend + frontend redeploy required - no new migration, no new
      dependency, no new environment variable.
+
+------------------------------------------------------------
+2026-08-04
+
+What changed:
+  feat: add transaction document switcher to authenticity detail
+
+  auditor-authenticity-detail.component.ts/.html/.css:
+    - New [Invoice] [PO] [GR] switcher at the top-right, immediately
+      before "Back to Audit Review" — only shown when the page was
+      reached from a specific case (?ref=audit-review).
+    - Sibling checks (Invoice/PO/GR sharing this transaction's
+      document_id) are loaded via the existing GET /authenticity list
+      endpoint, filtered client-side the same way the Authenticity
+      Workspace's own case-scoped mode already filters by
+      caseDocumentId - no new backend route.
+    - Each button shows Passed/Review Required/Failed (from
+      authentication_status, the same field the Workspace card already
+      reads) or "Not Uploaded" (disabled) when that document type
+      doesn't exist for this transaction. The current document's button
+      is highlighted and disabled.
+    - Clicking another document navigates to
+      /auditor/authenticity/:documentId?document_type=X&ref=audit-review
+      - the SAME path param (documentId is shared across Invoice/PO/GR
+        on this table) with only document_type/ref changing, reusing
+      the exact navigation shape auditor-authenticity.component.ts's
+      viewDocument() already uses.
+    - ngOnInit now reacts to combineLatest([paramMap, queryParamMap])
+      instead of paramMap alone - a same-transaction switch keeps the
+      route's path param identical and only changes query params, which
+      paramMap alone would not reliably re-fire for since Angular reuses
+      this component instance rather than recreating it.
+    - If evidence edit mode has unsaved staged changes, switching asks
+      (via a confirm prompt) whether to save them first; saveEdits() now
+      accepts an optional onSuccess callback so the switch navigates
+      only after a save actually completes, not fired blindly alongside
+      an in-flight request.
+    - Does not call any review-step/"Mark as Reviewed" endpoint - the
+      auditor still uses that existing action from Audit Review
+      themselves after checking whichever documents they need.
+
+Why:
+  Auditors reviewing one transaction's Invoice/PO/GR authenticity had to
+  return to the Workspace list and re-search for each sibling document
+  instead of moving directly between them while staying in the same
+  case's review flow.
+
+Verified:
+  npx ng build --configuration production - clean compile; only the
+  same pre-existing bundle-budget warnings (this component's own
+  warning grew slightly with the new CSS, still just a warning, not an
+  error). Did not run backend tests or Playwright, per this task's
+  explicit instruction (this is a frontend-only change - no backend
+  file was touched). git diff --stat confirms only the Authenticity
+  Detail component's .ts/.html/.css changed - no backend scoring,
+  database, review-step logic, sidebar navigation, or new component
+  files.
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy the frontend static
+     site.
+  2. Frontend redeploy required - no new migration, no new dependency,
+     no new environment variable, no backend redeploy needed.

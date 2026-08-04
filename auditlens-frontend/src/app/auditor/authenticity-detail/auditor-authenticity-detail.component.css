@@ -38,6 +38,60 @@
 
 .btn-back:hover { text-decoration: underline; }
 
+/* ── Document switcher (Invoice / PO / GR of the same transaction) ── */
+.header-right-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.doc-switcher {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.switcher-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 66px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-hover);
+  background: var(--bg-hover);
+  cursor: pointer;
+}
+
+.switcher-btn:hover:not(:disabled) { background: var(--bg-active); }
+.switcher-btn:disabled { cursor: not-allowed; opacity: 0.6; }
+
+.switcher-btn-current {
+  border-color: var(--accent-soft);
+  background: var(--accent-bg);
+  cursor: default;
+}
+
+.switcher-btn-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.switcher-btn-status {
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.switcher-status-pass    { color: var(--success); }
+.switcher-status-review  { color: var(--warning); }
+.switcher-status-fail    { color: var(--danger); }
+.switcher-status-missing { color: var(--text-secondary); }
+
 .page-title {
   font-size: 20px;
   font-weight: 700;

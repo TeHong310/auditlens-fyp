@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { ActivatedRoute, Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { combineLatest } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { getAuthenticityEvidenceRows, EvidenceRow, RowStatus } from '../shared/authenticity-evidence.util';
 import { formatMalaysiaDateTime } from '../../shared/datetime.util';
@@ -243,6 +244,15 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   // Authenticity list. Absent for normal sidebar-driven access.
   cameFromAuditReview = false;
 
+  // Document switcher (only shown when cameFromAuditReview) — every
+  // authenticity_checks row sharing this documentId across Invoice/PO/
+  // GR, exactly the same document_id-based grouping the Authenticity
+  // Workspace list already uses for its case-scoped mode (see
+  // auditor-authenticity.component.ts's loadChecks()/caseDocumentId
+  // filter) — reused here via the same GET /authenticity endpoint
+  // rather than a new backend route.
+  siblingChecks: any[] = [];
+
   check: any = null;
   isLoading = false;
   errorMessage = '';
@@ -314,14 +324,36 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit() {
-    this.route.paramMap.subscribe(params => {
+    // Switching between an Invoice/PO/GR of the SAME transaction (the
+    // new document switcher below) keeps documentId (the route's path
+    // param) identical and only changes document_type/ref (query
+    // params) — subscribing to paramMap alone would miss that
+    // navigation entirely, since Angular reuses this component instance
+    // rather than recreating it. combineLatest reacts to either changing.
+    combineLatest([this.route.paramMap, this.route.queryParamMap]).subscribe(([params, queryParams]) => {
       const id = params.get('documentId');
       if (id) {
         this.documentId = parseInt(id, 10);
-        this.documentType = this.route.snapshot.queryParamMap.get('document_type') || 'invoice';
-        this.cameFromAuditReview = this.route.snapshot.queryParamMap.get('ref') === 'audit-review';
+        this.documentType = queryParams.get('document_type') || 'invoice';
+        this.cameFromAuditReview = queryParams.get('ref') === 'audit-review';
         this.load();
+        if (this.cameFromAuditReview) this.loadSiblingChecks();
       }
+    });
+  }
+
+  // Every authenticity_checks row sharing this transaction's document_id
+  // — reuses the existing GET /authenticity list endpoint (no new
+  // backend route), filtered client-side exactly like the Authenticity
+  // Workspace's own case-scoped mode already does.
+  private loadSiblingChecks() {
+    if (!this.documentId) return;
+    this.http.get<any[]>(`${this.apiUrl}/authenticity`, { headers: this.getHeaders() }).subscribe({
+      next: (res) => {
+        this.siblingChecks = (res || []).filter(c => c.document_id === this.documentId);
+        this.cdr.detectChanges();
+      },
+      error: () => { /* switcher badges just stay unavailable; not fatal to the page */ }
     });
   }
 
@@ -340,6 +372,70 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     } else {
       this.router.navigate(['/auditor/authenticity']);
     }
+  }
+
+  // ── Document switcher (Invoice / PO / GR of the same transaction) ──
+  // Deliberately does NOT touch review-step/"Mark as Reviewed" logic at
+  // all — the auditor returns to Audit Review and uses that existing
+  // action themselves once they've checked whichever documents they need.
+
+  private static readonly SWITCHER_TYPES: { type: 'invoice' | 'po' | 'gr'; label: string }[] = [
+    { type: 'invoice', label: 'Invoice' },
+    { type: 'po', label: 'PO' },
+    { type: 'gr', label: 'GR' },
+  ];
+
+  get docSwitcherButtons(): { type: 'invoice' | 'po' | 'gr'; label: string; uploaded: boolean; isCurrent: boolean; statusLabel: string; statusClass: string }[] {
+    return AuditorAuthenticityDetailComponent.SWITCHER_TYPES.map(({ type, label }) => {
+      const isCurrent = type === this.documentType;
+      // The current document's own row is always taken from `check`
+      // (kept fresh by recheck()), never the sibling snapshot fetched
+      // once on load — everything else comes from siblingChecks.
+      const sibling = isCurrent ? this.check : this.siblingChecks.find(c => c.document_type === type);
+      const uploaded = !!sibling;
+      return {
+        type, label, uploaded, isCurrent,
+        statusLabel: uploaded ? this.switcherStatusLabel(sibling.authentication_status) : 'Not Uploaded',
+        statusClass: uploaded ? this.switcherStatusClass(sibling.authentication_status) : 'switcher-status-missing',
+      };
+    });
+  }
+
+  private switcherStatusLabel(status: string): string {
+    if (status === 'PASS') return 'Passed';
+    if (status === 'FAIL') return 'Failed';
+    if (status === 'REVIEW') return 'Review Required';
+    return 'Unknown';
+  }
+
+  private switcherStatusClass(status: string): string {
+    if (status === 'PASS') return 'switcher-status-pass';
+    if (status === 'FAIL') return 'switcher-status-fail';
+    return 'switcher-status-review';
+  }
+
+  switchDocument(type: 'invoice' | 'po' | 'gr') {
+    if (type === this.documentType) return;
+    const btn = this.docSwitcherButtons.find(b => b.type === type);
+    if (!btn || !btn.uploaded) return;
+
+    if (this.editMode && this.hasStagedEdits) {
+      const wantsSave = window.confirm(
+        'You have unsaved evidence location changes on this document. Click OK to save them before switching, or Cancel to discard them and switch anyway.'
+      );
+      if (wantsSave) {
+        this.saveEdits(() => this.navigateToDocument(type));
+        return;
+      }
+      this.cancelEdits();
+    }
+    this.navigateToDocument(type);
+  }
+
+  private navigateToDocument(type: 'invoice' | 'po' | 'gr') {
+    const queryParams: any = { document_type: type };
+    if (this.cameFromAuditReview) queryParams.ref = 'audit-review';
+    this.router.navigate(['/auditor/authenticity', this.documentId], { queryParams });
   }
 
   // ── Load cached check (never triggers Gemini — reads DB only) ──
@@ -1072,7 +1168,11 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
     return { nw: { x: x1, y: y1 }, ne: { x: x2, y: y1 }, sw: { x: x1, y: y2 }, se: { x: x2, y: y2 } };
   }
 
-  saveEdits() {
+  // onSuccess: optional, called after a successful save — used by the
+  // document switcher (switchDocument()) to navigate only once the save
+  // has actually completed, instead of firing the navigation blindly
+  // alongside an in-flight request.
+  saveEdits(onSuccess?: () => void) {
     if (!this.documentId || this.isSavingEdits || !this.hasStagedEdits) return;
     this.isSavingEdits = true;
     this.errorMessage = '';
@@ -1095,6 +1195,7 @@ export class AuditorAuthenticityDetailComponent implements OnInit, OnDestroy {
         this.isSavingEdits = false;
         this.cancelEdits();
         this.cdr.detectChanges();
+        if (onSuccess) onSuccess();
       },
       error: (err) => {
         this.isSavingEdits = false;
