@@ -120,12 +120,67 @@ def run_case_test3_multiple_line_items():
               row)
 
 
+def run_case_line_item_price_comparison_numeric_tolerance():
+    """Reported bug: a real transaction whose Invoice/PO unit_price and
+    line amount genuinely match (3000 x 0.63 = 1890.00 on both sides,
+    GR carries no price at all for this line) was showing "Amount/unit
+    price differs" in the UI. unit_price_match/amount_match must be
+    compared numerically (float tolerance), never as formatted strings
+    — 0.6300 and 0.63000 are the same number, just stored with
+    different precision. GR's missing unit_price/amount must never be
+    treated as a mismatch (result stays None/"not compared", not
+    False)."""
+    print('Case: Invoice unit_price 0.6300 vs PO unit_price 0.63000 -> numerically equal, not a mismatch')
+    invoice_items = [{'item_code': '7550011', 'description': 'ITEM 7550011', 'quantity': 3000, 'unit_price': 0.6300, 'amount': 1890.00}]
+    po_items = [{'item_code': '7550011', 'description': 'ITEM 7550011', 'quantity': 3000, 'unit_price': 0.63000, 'amount': 1890.00}]
+    gr_items = [{'item_code': '7550011', 'description': 'ITEM 7550011', 'quantity': 3000, 'unit_price': None, 'amount': None}]
+
+    rows, hard_mismatch, soft_mismatch = _match_line_items(invoice_items, po_items, gr_items)
+    check('exactly 1 matched row', len(rows) == 1, rows)
+    if rows:
+        row = rows[0]
+        check('quantity_match == True', row['quantity_match'] is True, row)
+        check('unit_price_match == True (0.6300 == 0.63000 numerically)', row['unit_price_match'] is True, row)
+        check('amount_match == True (1890.00 == 1890.00)', row['amount_match'] is True, row)
+        check('invoice_unit_price/po_unit_price exposed for display',
+              row['invoice_unit_price'] == 0.63 and row['po_unit_price'] == 0.63, row)
+        check('invoice_amount/po_amount exposed for display',
+              row['invoice_amount'] == 1890.0 and row['po_amount'] == 1890.0, row)
+        # GR carries no price/amount at all for this line — must never
+        # be treated as a mismatch (None = "not compared"/N/A).
+        check('gr_unit_price is None (GR carries no price)', row['gr_unit_price'] is None, row)
+        check('gr_amount is None (GR carries no amount)', row['gr_amount'] is None, row)
+    check('no hard mismatch (quantity matches on all 3, no missing item)', hard_mismatch is False, hard_mismatch)
+    check('no soft mismatch (price and amount both genuinely match)', soft_mismatch is False, soft_mismatch)
+
+
+def run_case_line_item_price_genuine_mismatch_still_detected():
+    """Sanity check: fixing the false positive above must not make the
+    comparison blind to a REAL discrepancy — unit price and line amount
+    are independent signals, so a genuine difference in one must be
+    flagged even when the other genuinely matches."""
+    print('Case: a genuine unit price difference is still correctly flagged, independently of line amount')
+    invoice_items = [{'item_code': 'X1', 'description': 'ITEM X1', 'quantity': 100, 'unit_price': 1.00, 'amount': 100.00}]
+    po_items = [{'item_code': 'X1', 'description': 'ITEM X1', 'quantity': 100, 'unit_price': 1.50, 'amount': 100.00}]
+
+    rows, hard_mismatch, soft_mismatch = _match_line_items(invoice_items, po_items, None)
+    check('exactly 1 matched row', len(rows) == 1, rows)
+    if rows:
+        row = rows[0]
+        check('unit_price_match == False (1.00 != 1.50, a real difference)', row['unit_price_match'] is False, row)
+        check('amount_match == True (100.00 == 100.00, genuinely unaffected)', row['amount_match'] is True, row)
+    check('soft mismatch raised (unit price genuinely differs)', soft_mismatch is True, soft_mismatch)
+    check('no hard mismatch (quantity still matches)', hard_mismatch is False, hard_mismatch)
+
+
 if __name__ == '__main__':
     run_case_test1_vendor_ocr_typo_match()
     run_case_vendor_three_way_all_same_supplier()
     run_case_vendor_genuinely_different_companies()
     run_case_test2_three_way_part_number_match()
     run_case_test3_multiple_line_items()
+    run_case_line_item_price_comparison_numeric_tolerance()
+    run_case_line_item_price_genuine_mismatch_still_detected()
 
     print()
     if FAILURES:

@@ -19000,3 +19000,95 @@ Verified:
 Setup/config needed:
   1. Push to GitHub - Render should auto-deploy the frontend static
      site (no backend change, so a backend redeploy isn't required).
+
+----------------------------------------------------------------------
+
+Date: 2026-08-04
+What was changed:
+  Backend (auditlens-backend/routes/auditor.py::_match_line_items(),
+  the one shared line-item matcher both the legacy and V2/enterprise
+  comparison paths already call - no separate implementation to fix
+  twice):
+    - Investigation: the reported transaction (item_code 7550011)
+      doesn't exist in the local dev DB, so worked from the exact
+      values given. Checked routes/documents.py's _sanitize_line_items(
+      )/_save_line_items() (the extraction-to-DB mapping) and confirmed
+      unit_price and amount are NOT swapped there - item['unit_price']
+      maps to the unit_price column, item['amount'] to the amount
+      column, correctly ordered. Requirement 5 satisfied by
+      verification, no code change needed at that layer.
+    - Root cause: unit_price was never compared at all - only amount
+      (Line Amount) was, and only ONE conflated boolean drove the
+      frontend's single "Amount/unit price differs" note, which could
+      never distinguish a real price problem from a real amount
+      problem. Added a SEPARATE unit_price_match, computed with the
+      exact same float-with-tolerance comparison amount_match already
+      used (abs(a - b) < 0.01) - so 0.6300 and 0.63000 (the same value,
+      different stored precision) are correctly treated as equal, never
+      compared as formatted strings. A document that carries no price
+      at all for a line (a GR normally has neither unit_price nor
+      amount) is simply excluded from that comparison's value list, the
+      same way a missing quantity already was - the result stays None
+      ("not compared") rather than ever being scored as a mismatch.
+    - Also now exposes the raw per-side invoice_unit_price/po_unit_
+      price/gr_unit_price and invoice_amount/po_amount/gr_amount
+      (mirroring the existing invoice_quantity/po_quantity/gr_quantity
+      fields), so the frontend can show the actual compared numbers,
+      not just a pass/fail icon.
+    - unit_price_match is a SOFT signal (has_soft_mismatch), same
+      severity tier amount_match already was - unchanged escalation
+      behaviour, just one more independent contributor to it.
+  Frontend (auditlens-frontend/.../auditor/matching-details/):
+    - The single "Amount/unit price differs" note (driven only by
+      amount_match, so it could show even when the ACTUAL problem was a
+      price difference or vice versa) replaced with two separate notes:
+      "Unit price differs" (li.unit_price_match === false) and "Line
+      amount differs" (li.amount_match === false) - each renders only
+      when THAT specific comparison is an explicit false, never for
+      None ("not compared"/N/A, e.g. GR's missing price), satisfying
+      "show separate results" and "do not compare missing GR price/
+      amount" together.
+    - lineItemRowClass() now also flags unit_price_match === false
+      (previously only amount_match). Kept the EXISTING partial-
+      allocation exemption on amount_match only (a partially-allocated
+      invoice legitimately totals less than the PO's full line, by
+      design) - deliberately NOT applied to unit_price_match, since the
+      per-unit rate should match regardless of how much quantity was
+      allocated; a genuine per-unit price difference is still always
+      worth flagging.
+    - Description fuzzy matching (_find_line_item_match, the sole-line-
+      item fallback) is untouched - confirmed by reading the full
+      _match_line_items() body before editing, only the amount/
+      unit_price block was touched.
+
+Why:
+  Reported bug: a real transaction (Invoice/PO both item_code 7550011,
+  qty 3000, unit_price 0.63 stored at different precision, line total
+  1890.00 on both sides, GR carrying no price data at all) showed
+  "Amount/unit price differs" despite the numbers genuinely matching -
+  traced to unit_price never being compared as its own signal, only
+  folded (incompletely) into a single ambiguous note.
+
+Verified:
+  tests/extraction/test_entity_and_line_items.py ("the relevant
+  matching check" - the existing test file for this exact function) -
+  all 5 pre-existing cases still pass unchanged (no regression), plus 2
+  new cases added: the exact reported scenario (0.6300 vs 0.63000,
+  1890.00 vs 1890.00, GR with no price at all) now correctly produces
+  unit_price_match=True, amount_match=True, no soft mismatch; and a
+  genuine unit-price-only difference (1.00 vs 1.50, amount still
+  matching) is still correctly caught independently, proving the fix
+  didn't make the comparison blind to a real discrepancy. python -c
+  "import app" - clean import. npx ng build --configuration production
+  - clean compile; only the same pre-existing bundle-budget warnings on
+  two unrelated files this task never touched. Did not run the full
+  backend suite or Playwright, per this task's own scope. git diff
+  --stat confirms only routes/auditor.py, its test file, and the 2
+  matching-details component files changed - no unrelated matching
+  rule, no extraction/OCR code, no other page touched.
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy both the backend
+     (Docker web service) and the frontend static site.
+  2. Backend redeploy required (routes/auditor.py changed - no new
+     migration, no new dependency, no new environment variable).

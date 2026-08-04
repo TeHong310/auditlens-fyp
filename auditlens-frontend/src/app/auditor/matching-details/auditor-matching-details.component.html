@@ -220,7 +220,8 @@
               <td class="field-name">
                 <div class="li-desc">{{ li.description || '-' }}</div>
                 <div class="li-code" *ngIf="li.item_code">{{ li.item_code }}</div>
-                <div class="li-amount-note" *ngIf="li.amount_match === false"><i class="ph-duotone ph-currency-circle-dollar"></i> Amount/unit price differs</div>
+                <div class="li-amount-note" *ngIf="li.unit_price_match === false"><i class="ph-duotone ph-currency-circle-dollar"></i> Unit price differs</div>
+                <div class="li-amount-note" *ngIf="li.amount_match === false"><i class="ph-duotone ph-currency-circle-dollar"></i> Line amount differs</div>
               </td>
               <td class="cell-value cell-quantity">
                 <span class="not-uploaded-label li-missing-label" *ngIf="li.missing_on_invoice">Missing on Invoice</span>

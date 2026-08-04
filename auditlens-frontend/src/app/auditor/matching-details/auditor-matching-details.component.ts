@@ -248,7 +248,15 @@ export class AuditorMatchingDetailsComponent implements OnInit, OnDestroy {
     const hardIssue = this.lineItemSideHasIssue(li, 'po') || this.lineItemSideHasIssue(li, 'gr')
       || li.missing_on_invoice;
     if (hardIssue) return ['row-mismatch', 'row-quantity-alert'];
-    if (li.amount_match === false && !this.isPartialAllocationLineItem(li)) return ['row-mismatch'];
+    // Line Amount keeps the existing partial-allocation exemption (a
+    // partially-allocated invoice legitimately has a smaller total than
+    // the PO's full line, by design — not a real mismatch). Unit Price
+    // is NOT exempted: the per-unit rate should match regardless of how
+    // much quantity was allocated, so a genuine difference there is
+    // always worth flagging.
+    const amountIssue = li.amount_match === false && !this.isPartialAllocationLineItem(li);
+    const priceIssue = li.unit_price_match === false;
+    if (amountIssue || priceIssue) return ['row-mismatch'];
     return [];
   }
 

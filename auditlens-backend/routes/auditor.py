@@ -202,16 +202,25 @@ def _match_line_items(invoice_items, po_items, gr_items):
       rows: one dict per distinct matched item, in invoice-then-PO-only-
         then-GR-only order: {'description', 'item_code', 'invoice_
         quantity', 'po_quantity', 'gr_quantity', 'quantity_match',
+        'invoice_unit_price', 'po_unit_price', 'gr_unit_price',
+        'unit_price_match', 'invoice_amount', 'po_amount', 'gr_amount',
         'amount_match', 'missing_on_po', 'missing_on_gr',
-        'missing_on_invoice'}
+        'missing_on_invoice'}. unit_price_match and amount_match (Line
+        Amount) are two SEPARATE numeric comparisons — a document with
+        no price/amount at all for this line (a GR normally carries
+        neither) is simply excluded from that comparison rather than
+        counted as a mismatch, so a match result is None ("not
+        compared") whenever fewer than 2 documents actually price this
+        line, never a false positive or negative.
       has_hard_mismatch: True if any item has a quantity mismatch or a
         missing-item finding (on ANY of the three documents, including
         an item present on PO/GR but missing from the invoice) — a HARD
         failure (escalates overall_status to FAIL), same severity as
         the existing vendor/amount/quantity checks.
-      has_soft_mismatch: True if any item has an amount mismatch (with
-        no hard issue on that same item) — a SOFT signal (REVIEW), same
-        severity as the existing po_reference/item checks.
+      has_soft_mismatch: True if any item has a unit price or amount
+        mismatch (with no hard issue on that same item) — a SOFT signal
+        (REVIEW), same severity as the existing po_reference/item
+        checks.
     """
     po_present = po_items is not None and len(po_items) > 0
     gr_present = gr_items is not None and len(gr_items) > 0
@@ -253,6 +262,25 @@ def _match_line_items(invoice_items, po_items, gr_items):
         if len(qty_values) >= 2:
             quantity_match = all(abs(v - qty_values[0]) < 0.01 for v in qty_values[1:])
 
+        # Unit Price and Line Amount are compared as two SEPARATE
+        # numeric signals (previously only Line Amount — 'amount' below
+        # — was ever compared; Unit Price wasn't checked at all). Both
+        # use the SAME float-with-tolerance comparison already used for
+        # quantity/amount above, so e.g. 0.6300 and 0.63000 (same value,
+        # different stored precision) are correctly treated as equal —
+        # never a brittle string/formatted-text comparison. A document
+        # that simply doesn't carry a price at all for this line (a GR
+        # normally has no unit_price/amount — see this function's own
+        # docstring) is excluded from the values list entirely, the
+        # same way a missing quantity already is: fewer than 2 present
+        # values leaves the match result None ("not compared"/N/A), it
+        # is never treated as a mismatch.
+        price_values = [it['unit_price'] for it in (inv_item, po_item, gr_item)
+                        if it and it.get('unit_price') is not None]
+        unit_price_match = None
+        if len(price_values) >= 2:
+            unit_price_match = all(abs(v - price_values[0]) < 0.01 for v in price_values[1:])
+
         amt_values = [it['amount'] for it in (inv_item, po_item, gr_item)
                       if it and it.get('amount') is not None]
         amount_match = None
@@ -261,7 +289,7 @@ def _match_line_items(invoice_items, po_items, gr_items):
 
         if quantity_match is False or missing_on_invoice or missing_on_po or missing_on_gr:
             has_hard_mismatch = True
-        if amount_match is False:
+        if amount_match is False or unit_price_match is False:
             has_soft_mismatch = True
 
         rows.append({
@@ -281,6 +309,16 @@ def _match_line_items(invoice_items, po_items, gr_items):
             'po_quantity':        po_item['quantity'] if po_item else None,
             'gr_quantity':        gr_item['quantity'] if gr_item else None,
             'quantity_match':     quantity_match,
+            # Raw per-side unit price/amount, mirroring the quantity
+            # fields above — lets the frontend show the actual compared
+            # numbers, not just a pass/fail pill.
+            'invoice_unit_price': inv_item['unit_price'] if inv_item else None,
+            'po_unit_price':      po_item['unit_price'] if po_item else None,
+            'gr_unit_price':      gr_item['unit_price'] if gr_item else None,
+            'unit_price_match':   unit_price_match,
+            'invoice_amount':     inv_item['amount'] if inv_item else None,
+            'po_amount':          po_item['amount'] if po_item else None,
+            'gr_amount':          gr_item['amount'] if gr_item else None,
             'amount_match':       amount_match,
             'missing_on_invoice': missing_on_invoice,
             'missing_on_po':      missing_on_po,
