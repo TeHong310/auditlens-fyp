@@ -19092,3 +19092,70 @@ Setup/config needed:
      (Docker web service) and the frontend static site.
   2. Backend redeploy required (routes/auditor.py changed - no new
      migration, no new dependency, no new environment variable).
+
+------------------------------------------------------------
+2026-08-04
+
+What changed:
+  fix: recompute nicepack line amount matching
+
+  routes/auditor.py (_match_line_items -> build_row):
+    - A document's `amount` is now only included in the cross-document
+      line-amount comparison when that SAME document also has a
+      `unit_price` present. Previously a value was included purely on
+      `amount is not None`, with no relation to unit_price.
+    - Everything else in _match_line_items (quantity comparison,
+      unit_price comparison, sole-line-item fallback, item_code/
+      description pairing) is untouched.
+
+  tests/extraction/test_entity_and_line_items.py:
+    - New case run_case_nicepack_gr_amount_polluted_by_quantity(),
+      using the exact real stored values for NP2606-0613 / PO3006490:
+      Invoice qty=3000/unit_price=0.63/amount=1890.0, PO qty=3000/
+      unit_price=0.63/amount=1890.0, GR qty=3000/unit_price=None/
+      amount=3000.0 (GR's amount field wrongly held its own quantity).
+      Confirms amount_match now comes out True (GR's bogus amount is
+      excluded) while gr_amount is still exposed raw for display.
+
+  auditor-matching-details.component.html/.css:
+    - Each line item row now always displays the compared raw values
+      when both Invoice and PO amounts are present: "Invoice Line
+      Amount: RM x · PO Line Amount: RM y · Result: Match/Mismatch",
+      reusing the existing formatAmount() helper. New .li-amount-compare
+      CSS class (neutral/secondary text, green "Match", amber
+      "Mismatch").
+
+Why:
+  Reported bug: after the previous unit-price/amount-split fix, a real
+  production transaction (NICEPACK, invoice NP2606-0613, PO 3006490)
+  still showed "Line amount differs" even though Invoice and PO
+  genuinely matched (3000 x 0.63 = 1890.00 on both sides). User
+  supplied the real stored document_line_items rows via a read-only
+  query. Root cause: GR's `amount` column held 3000.0 - the same as
+  GR's own quantity, an extraction artifact - while GR's `unit_price`
+  was correctly NULL (GRs don't carry pricing). Because the comparison
+  only excluded a value via `is not None`, GR's bogus 3000.0 got
+  compared against Invoice/PO's correct 1890.0 and produced a false
+  mismatch. Fix is comparison-side only (amount requires unit_price to
+  be trusted) - no database write, no re-upload, no duplicate package;
+  since build_comparison() computes live on every page view, the fix
+  takes effect on the very next view of this transaction.
+
+Verified:
+  tests/extraction/test_entity_and_line_items.py ("the relevant
+  matching check", per this task's own scope) - all prior cases still
+  pass unchanged, plus the new NICEPACK case confirms amount_match is
+  now True and no soft mismatch is raised. Did not run the full backend
+  suite, Playwright, or an Angular production build, per this task's
+  explicit instruction to run only the relevant matching check. git
+  diff --stat confirms only routes/auditor.py, its test file, and the
+  matching-details component's html/css changed - no unrelated
+  matching rule touched, no database migration, no GR extraction code
+  touched.
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy both the backend
+     (Docker web service) and the frontend static site.
+  2. Backend + frontend redeploy required (routes/auditor.py and the
+     matching-details component changed - no new migration, no new
+     dependency, no new environment variable).
