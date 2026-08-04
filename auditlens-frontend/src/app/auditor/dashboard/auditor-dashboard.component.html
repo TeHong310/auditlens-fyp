@@ -14,189 +14,134 @@
     </div>
   </div>
 
-  <!-- KPI Cards — Finance Home card language: icon-wrap + card-color accent -->
-  <div class="stats-row">
-    <div class="stat-card" style="--card-color:var(--accent);">
-      <div class="stat-icon-wrap"><i class="ph-duotone ph-list-checks" style="font-size:19px;"></i></div>
+  <!-- KPI Cards -->
+  <div class="stats-row stats-row-5">
+    <div class="stat-card" style="--card-color:{{ kpiColors.activeCases }};">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-folder-open" style="font-size:19px;"></i></div>
       <div class="stat-info">
-        <p class="stat-label">Records Checked</p>
-        <p class="stat-value" style="color:var(--accent)">{{ totalRecords }}</p>
-        <p class="stat-sub">Total in queue</p>
+        <p class="stat-label">Active Review Cases</p>
+        <p class="stat-value" style="color:{{ kpiColors.activeCases }}">{{ reportSummaryLoaded ? (kpi?.active_cases ?? '—') : '…' }}</p>
+        <p class="stat-sub">Transaction packages in progress</p>
       </div>
     </div>
 
-    <div class="stat-card" style="--card-color:var(--success);">
+    <div class="stat-card" style="--card-color:{{ kpiColors.completed }};">
       <div class="stat-icon-wrap"><i class="ph-duotone ph-check-circle" style="font-size:19px;"></i></div>
       <div class="stat-info">
-        <div class="stat-label-row">
-          <p class="stat-label">Full Match</p>
-          <span class="stat-badge badge-safe">Safe</span>
-        </div>
-        <p class="stat-value" style="color:var(--success)">{{ fullMatch }}</p>
-        <p class="stat-sub">{{ pct(fullMatch) }}% of checks</p>
+        <p class="stat-label">Completed Reviews</p>
+        <p class="stat-value" style="color:{{ kpiColors.completed }}">{{ reportSummaryLoaded ? (kpi?.completed_reviews_30d ?? '—') : '…' }}</p>
+        <p class="stat-sub">Last 30 days</p>
       </div>
     </div>
 
-    <div class="stat-card" style="--card-color:var(--warning);">
+    <div class="stat-card" style="--card-color:{{ kpiColors.needReview }};">
       <div class="stat-icon-wrap"><i class="ph-duotone ph-eye" style="font-size:19px;"></i></div>
       <div class="stat-info">
-        <div class="stat-label-row">
-          <p class="stat-label">Need Review</p>
-          <span class="stat-badge badge-action">Action</span>
-        </div>
-        <p class="stat-value" style="color:var(--warning)">{{ needReview }}</p>
-        <p class="stat-sub">{{ pct(needReview) }}% of checks</p>
+        <p class="stat-label">Need Review</p>
+        <p class="stat-value" style="color:{{ kpiColors.needReview }}">{{ reportSummaryLoaded ? (kpi?.need_review ?? '—') : '…' }}</p>
+        <p class="stat-sub">Flagged by auditor decision</p>
       </div>
     </div>
 
-    <div class="stat-card" style="--card-color:var(--danger);">
-      <div class="stat-icon-wrap"><i class="ph-duotone ph-file-x" style="font-size:19px;"></i></div>
+    <div class="stat-card" style="--card-color:{{ kpiColors.highRisk }};">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-warning" style="font-size:19px;"></i></div>
       <div class="stat-info">
-        <div class="stat-label-row">
-          <p class="stat-label">Missing Documents</p>
-          <span class="stat-badge" [ngClass]="missingDocuments > 0 ? 'badge-risk' : 'badge-safe'">{{ missingDocuments > 0 ? 'Risk' : 'Safe' }}</span>
-        </div>
-        <p class="stat-value" style="color:var(--danger)">{{ missingDocuments }}</p>
-        <p class="stat-sub">{{ pct(missingDocuments) }}% missing PO/GR</p>
+        <p class="stat-label">High-Risk Findings</p>
+        <p class="stat-value" style="color:{{ kpiColors.highRisk }}">{{ reportSummaryLoaded ? (kpi?.high_risk_findings ?? '—') : '…' }}</p>
+        <p class="stat-sub">Packages flagged HIGH risk</p>
+      </div>
+    </div>
+
+    <div class="stat-card" style="--card-color:{{ kpiColors.avgTime }};">
+      <div class="stat-icon-wrap"><i class="ph-duotone ph-timer" style="font-size:19px;"></i></div>
+      <div class="stat-info">
+        <p class="stat-label">Average Review Time</p>
+        <p class="stat-value" style="color:{{ kpiColors.avgTime }}">{{ reportSummaryLoaded ? formatReviewTime(kpi?.avg_review_time_minutes) : '…' }}</p>
+        <p class="stat-sub">Last 30 days</p>
       </div>
     </div>
   </div>
 
-  <!-- Primary analytics: the two time-series charts, given the most visual weight -->
+  <!-- Review Workload Trend | Review Ageing -->
   <div class="charts-row-primary">
-    <div class="chart-card">
-      <p class="chart-title">Audit Trend</p>
-      <p class="chart-subtitle">Approved / sent back — last 14 days</p>
-      <div class="chart-body">
-        <canvas #trendChart></canvas>
-        <p class="chart-empty-note" *ngIf="reportSummaryLoaded && !reportSummary?.timeline?.length">No activity yet</p>
+    <div class="chart-card chart-card-wide">
+      <p class="chart-title">Review Workload Trend</p>
+      <p class="chart-subtitle">New cases, completed reviews, sent back, pending balance — last 14 days</p>
+      <div class="chart-body chart-body-large">
+        <canvas #workloadChart></canvas>
+        <p class="chart-empty-note" *ngIf="reportSummaryLoaded && !reportSummary?.workload_trend?.length">No activity yet</p>
         <p class="chart-loading-note" *ngIf="!reportSummaryLoaded">Loading…</p>
       </div>
     </div>
 
     <div class="chart-card">
-      <p class="chart-title">Review Volume</p>
-      <p class="chart-subtitle">Items added, last 14 days</p>
+      <p class="chart-title">Review Ageing Distribution</p>
+      <p class="chart-subtitle">Current active cases, by time in queue</p>
       <div class="chart-body">
-        <canvas #volumeChart></canvas>
+        <canvas #ageingChart></canvas>
         <p class="chart-loading-note" *ngIf="!reportSummaryLoaded">Loading…</p>
+        <p class="chart-empty-note" *ngIf="reportSummaryLoaded && kpi?.active_cases === 0">No active cases</p>
       </div>
     </div>
   </div>
 
-  <!-- Secondary analytics: compact breakdown row -->
-  <div class="charts-row-secondary">
+  <!-- Matching Outcomes | Authenticity Outcomes | Findings by Category -->
+  <div class="charts-row-secondary charts-row-thirds">
     <div class="chart-card">
-      <p class="chart-title">Status Breakdown</p>
-      <p class="chart-subtitle">Pass / Review / Missing Doc</p>
-      <div class="chart-body chart-body-small">
-        <p class="chart-loading-note" *ngIf="isLoading">Loading…</p>
-        <div class="radial-row" *ngIf="!isLoading">
-          <div class="radial-item">
-            <div class="radial-ring" [style.background]="ringGradient(statusBreakdown.pass, '#34D399')">
-              <div class="radial-ring-hole"><span class="radial-pct">{{ pct(statusBreakdown.pass) }}%</span></div>
-            </div>
-            <p class="radial-caption"><span class="radial-label">Pass</span><span class="radial-count">{{ statusBreakdown.pass }}</span></p>
-          </div>
-          <div class="radial-item">
-            <div class="radial-ring" [style.background]="ringGradient(statusBreakdown.review, '#FBBF24')">
-              <div class="radial-ring-hole"><span class="radial-pct">{{ pct(statusBreakdown.review) }}%</span></div>
-            </div>
-            <p class="radial-caption"><span class="radial-label">Review</span><span class="radial-count">{{ statusBreakdown.review }}</span></p>
-          </div>
-          <div class="radial-item">
-            <div class="radial-ring" [style.background]="ringGradient(statusBreakdown.missingDoc, '#F43F5E')">
-              <div class="radial-ring-hole"><span class="radial-pct">{{ pct(statusBreakdown.missingDoc) }}%</span></div>
-            </div>
-            <p class="radial-caption"><span class="radial-label">Missing Doc</span><span class="radial-count">{{ statusBreakdown.missingDoc }}</span></p>
-          </div>
+      <p class="chart-title">Matching Outcomes</p>
+      <p class="chart-subtitle">Full Match / Review Required / Mismatch / Missing Documents</p>
+      <div class="chart-body chart-body-small donut-body">
+        <canvas #matchingChart></canvas>
+        <div class="donut-center-label" *ngIf="reportSummaryLoaded && matchingOutcomesTotal > 0">
+          <span class="donut-center-count">{{ matchingOutcomesTotal }}</span>
+          <span class="donut-center-text">Packages</span>
         </div>
+        <p class="chart-loading-note" *ngIf="!reportSummaryLoaded">Loading…</p>
+        <p class="chart-empty-note" *ngIf="reportSummaryLoaded && matchingOutcomesTotal === 0">No packages yet</p>
       </div>
     </div>
 
     <div class="chart-card">
       <p class="chart-title">Authenticity Outcomes</p>
-      <p class="chart-subtitle">Pass / Warning / Fail</p>
+      <p class="chart-subtitle">Passed / Review Required / Risk Detected</p>
       <div class="chart-body chart-body-small donut-body">
         <canvas #authChart></canvas>
-        <p class="chart-loading-note" *ngIf="!authenticityLoaded">Loading…</p>
-        <p class="chart-empty-note" *ngIf="authenticityLoaded && !(authenticityOutcomes.pass || authenticityOutcomes.warning || authenticityOutcomes.fail)">No checks yet</p>
+        <p class="chart-loading-note" *ngIf="!reportSummaryLoaded">Loading…</p>
+        <p class="chart-empty-note" *ngIf="reportSummaryLoaded && !(reportSummary?.authenticity_outcomes?.passed || reportSummary?.authenticity_outcomes?.review_required || reportSummary?.authenticity_outcomes?.risk_detected)">No checks yet</p>
       </div>
     </div>
 
     <div class="chart-card">
-      <p class="chart-title">Exception Categories</p>
-      <p class="chart-subtitle">Active exception types</p>
+      <p class="chart-title">Findings by Category</p>
+      <p class="chart-subtitle">Last 30 days</p>
       <div class="chart-body chart-body-small">
-        <canvas #exceptionChart></canvas>
-        <p class="chart-loading-note" *ngIf="!exceptionsLoaded">Loading…</p>
-        <p class="chart-empty-note" *ngIf="exceptionsLoaded && exceptionCategories.length === 0">No active exceptions</p>
-      </div>
-    </div>
-
-    <div class="chart-card">
-      <p class="chart-title">Risk Distribution</p>
-      <p class="chart-subtitle">Anomaly type signature</p>
-      <div class="chart-body chart-body-small donut-body">
-        <canvas #riskChart></canvas>
-        <p class="chart-loading-note" *ngIf="!anomalyStatsLoaded">Loading…</p>
+        <p class="chart-loading-note" *ngIf="!reportSummaryLoaded">Loading…</p>
+        <ng-container *ngIf="reportSummaryLoaded">
+          <canvas #findingsChart *ngIf="findingsTotal > 0"></canvas>
+          <div class="success-state" *ngIf="findingsTotal === 0">
+            <i class="ph-duotone ph-check-circle"></i>
+            <p>No findings detected in the last 30 days.</p>
+          </div>
+        </ng-container>
       </div>
     </div>
   </div>
 
-  <!-- Queue + Priority -->
+  <!-- Vendor Finding Ranking | Priority Review Queue -->
   <div class="main-row">
 
-    <div class="table-card">
-      <div class="table-header">
-        <div>
-          <h2 class="section-title">Transaction Review Queue</h2>
-          <p class="section-subtitle">Showing {{ recentTransactions.length }} most recent of {{ totalRecords }}</p>
-        </div>
-        <button class="btn-view-all" (click)="openReviewQueue()">Open Review Queue →</button>
-      </div>
-
-      <div class="table-wrapper">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Invoice / Package</th>
-              <th>Related Docs</th>
-              <th>Supplier</th>
-              <th>Match Status</th>
-              <th>Risk</th>
-              <th>Age</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr *ngIf="isLoading"><td colspan="7" class="loading-row">Loading...</td></tr>
-            <tr *ngIf="!isLoading && recentTransactions.length === 0">
-              <td colspan="7" class="empty-row">No transactions yet.</td>
-            </tr>
-            <tr *ngFor="let txn of recentTransactions" (click)="goToRecord(txn)">
-              <td class="inv-id">{{ txn.package_name || '-' }}</td>
-              <td class="related-docs-cell">
-                <div class="related-doc-line inv-line">{{ relatedDocLabel(txn.invoice_numbers) }}</div>
-                <div class="related-doc-line po-line">PO: {{ relatedDocLabel(txn.po_numbers) }}</div>
-                <div class="related-doc-line gr-line">GR: {{ relatedDocLabel(txn.gr_numbers) }}</div>
-              </td>
-              <td>{{ txn.supplier || '-' }}</td>
-              <td>
-                <span class="badge" [ngClass]="matchingStatusClass(txn.matching_status)">
-                  {{ matchingStatusLabel(txn.matching_status) }}
-                </span>
-              </td>
-              <td>
-                <span class="badge" [ngClass]="riskBadgeClass(riskLevelFor(txn))">{{ riskLevelFor(txn) }}</span>
-              </td>
-              <td>{{ ageDays(txn.created_at) }}d</td>
-              <td>
-                <button class="btn-open" (click)="goToRecord(txn); $event.stopPropagation()">Open</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+    <div class="chart-card">
+      <p class="chart-title">Top Vendors by Findings</p>
+      <p class="chart-subtitle">Last 30 days</p>
+      <div class="chart-body">
+        <p class="chart-loading-note" *ngIf="!reportSummaryLoaded">Loading…</p>
+        <ng-container *ngIf="reportSummaryLoaded">
+          <canvas #vendorChart *ngIf="vendorRanking.length > 0"></canvas>
+          <div class="success-state" *ngIf="vendorRanking.length === 0">
+            <i class="ph-duotone ph-check-circle"></i>
+            <p>No findings detected in the last 30 days.</p>
+          </div>
+        </ng-container>
       </div>
     </div>
 
@@ -226,6 +171,60 @@
       </div>
     </div>
 
+  </div>
+
+  <!-- Transaction Review Queue -->
+  <div class="table-card">
+    <div class="table-header">
+      <div>
+        <h2 class="section-title">Transaction Review Queue</h2>
+        <p class="section-subtitle">Showing {{ recentTransactions.length }} most recent of {{ totalRecords }}</p>
+      </div>
+      <button class="btn-view-all" (click)="openReviewQueue()">Open Review Queue →</button>
+    </div>
+
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Invoice / Package</th>
+            <th>Related Docs</th>
+            <th>Supplier</th>
+            <th>Match Status</th>
+            <th>Risk</th>
+            <th>Age</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngIf="isLoading"><td colspan="7" class="loading-row">Loading...</td></tr>
+          <tr *ngIf="!isLoading && recentTransactions.length === 0">
+            <td colspan="7" class="empty-row">No transactions yet.</td>
+          </tr>
+          <tr *ngFor="let txn of recentTransactions" (click)="goToRecord(txn)">
+            <td class="inv-id">{{ txn.package_name || '-' }}</td>
+            <td class="related-docs-cell">
+              <div class="related-doc-line inv-line">{{ relatedDocLabel(txn.invoice_numbers) }}</div>
+              <div class="related-doc-line po-line">PO: {{ relatedDocLabel(txn.po_numbers) }}</div>
+              <div class="related-doc-line gr-line">GR: {{ relatedDocLabel(txn.gr_numbers) }}</div>
+            </td>
+            <td>{{ txn.supplier || '-' }}</td>
+            <td>
+              <span class="badge" [ngClass]="matchingStatusClass(txn.matching_status)">
+                {{ matchingStatusLabel(txn.matching_status) }}
+              </span>
+            </td>
+            <td>
+              <span class="badge" [ngClass]="riskBadgeClass(riskLevelFor(txn))">{{ riskLevelFor(txn) }}</span>
+            </td>
+            <td>{{ ageDays(txn.created_at) }}d</td>
+            <td>
+              <button class="btn-open" (click)="goToRecord(txn); $event.stopPropagation()">Open</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
 </div>
