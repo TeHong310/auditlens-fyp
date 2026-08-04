@@ -18,7 +18,7 @@ from helpers.transaction_packages import (
     get_transaction_authenticity_summary, get_package, get_package_documents, get_relationship_preview,
 )
 from config import Config
-from helpers.time_format import to_utc_iso, malaysia_today, malaysia_midnight_utc, malaysia_date_sql, to_malaysia_date
+from helpers.time_format import to_utc_iso, malaysia_today, malaysia_midnight_utc, malaysia_date_sql
 
 auditor_bp = Blueprint('auditor', __name__)
 
@@ -1542,28 +1542,6 @@ def _latest_review_action_for_documents(cursor, document_ids):
     return row['action'] if row else None
 
 
-def _latest_review_event_for_documents(cursor, document_ids):
-    """Same lookup as _latest_review_action_for_documents(), but also
-    returns the event's own reviewed_at timestamp (a raw datetime, not
-    isoformat'd) — needed by the Auditor Home dashboard's Completed
-    Reviews / Average Review Time KPIs (both 30-day-windowed and time-
-    delta calculations, which the action-only helper above has no
-    reason to support). Returns (None, None) when the case has never
-    been decided on."""
-    if not document_ids:
-        return None, None
-    cursor.execute(
-        '''SELECT action, reviewed_at FROM review_records
-           WHERE document_id = ANY(%s)
-           ORDER BY reviewed_at DESC LIMIT 1''',
-        (document_ids,)
-    )
-    row = cursor.fetchone()
-    if not row:
-        return None, None
-    return row['action'], row['reviewed_at']
-
-
 def _anomaly_risk_for_documents(cursor, document_ids):
     """(risk_level, has_material_finding) computed from every non-
     dismissed anomaly across document_ids — mirrors Record Detail's own
@@ -1609,155 +1587,6 @@ def _workflow_status_for(matching_status, latest_review_action):
 # GET /auditor/transactions
 # Auditor only
 # ------------------------------------------------------------
-def _build_transaction_rows(cursor):
-    """The full Transaction Review Queue row list — every transaction
-    package AND standalone/legacy invoice, each carrying its own
-    matching_status/workflow_status/anomaly risk. Factored out of
-    GET /auditor/transactions (dashboard redesign) so GET /auditor/
-    report/summary's KPI/chart aggregations can reuse the EXACT same
-    package iteration and field computation instead of a second,
-    drifting copy — this is the one place that logic lives.
-
-    created_at/latest_review_at are kept as raw datetimes here (NOT
-    isoformat'd) since /report/summary does arithmetic on them (age,
-    review-duration); get_auditor_transactions() below isoformats them
-    at its own JSON boundary, exactly as it always did.
-
-    Two fields are additive vs. the pre-redesign version of this route:
-    latest_review_at (the timestamp behind the existing latest_review_
-    action, via _latest_review_event_for_documents — an action-string-
-    only lookup had no reason to expose this before) and
-    _auth_document_ids (leading underscore: internal-only, popped
-    before the JSON response — the document_id set authenticity_checks
-    rows are keyed under for this row, reused by /report/summary's
-    package-level Authenticity Outcomes chart so it doesn't need its
-    own package/document walk). Every other field is unchanged.
-    """
-    rows = []
-
-    for pkg in list_all_packages_with_documents():
-        docs = pkg['documents']
-        invoice_ids = [inv['document_id'] for inv in docs['invoices']]
-        statuses = []
-        for inv_id in invoice_ids:
-            comparison = build_comparison(cursor, inv_id)
-            if comparison:
-                statuses.append(_matching_status_for_comparison(comparison))
-        if not statuses:
-            matching_status = 'PENDING'
-        elif all(s == 'PASS' for s in statuses):
-            matching_status = 'PASS'
-        else:
-            matching_status = 'REVIEW'
-
-        # The Auditor's actual decision (review_records) and open-
-        # anomaly risk, both scoped across every invoice in this
-        # package — matching_status above is left untouched (still
-        # the pure matching-engine verdict; "Matching may remain
-        # PASS" per the Record Detail fix this mirrors).
-        latest_review_action, latest_review_at = _latest_review_event_for_documents(cursor, invoice_ids)
-        anomaly_risk_level, has_material_finding = _anomaly_risk_for_documents(cursor, invoice_ids)
-        invoice_amounts = [inv['total_amount'] for inv in docs['invoices'] if inv.get('total_amount') is not None]
-        # authenticity_checks.document_id always references the INVOICE
-        # document_id a PO/GR was uploaded alongside (host_document_id
-        # for those two roles — see helpers/transaction_packages.py's
-        # get_transaction_authenticity_summary(), which resolves this
-        # the same way), not po_id/gr_id.
-        auth_document_ids = (
-            invoice_ids +
-            [po.get('host_document_id', po['document_id']) for po in docs['purchase_orders']] +
-            [gr.get('host_document_id', gr['document_id']) for gr in docs['goods_receipts']]
-        )
-
-        rows.append({
-            'kind':                  'transaction_package',
-            'transaction_package_id': pkg['id'],
-            'package_name':          pkg['package_name'],
-            'supplier':              pkg['supplier'],
-            'document_count':        len(invoice_ids) + len(docs['purchase_orders']) + len(docs['goods_receipts']),
-            'invoice_count':         len(invoice_ids),
-            'po_count':              len(docs['purchase_orders']),
-            'gr_count':              len(docs['goods_receipts']),
-            'matching_status':       matching_status,
-            'latest_review_action':  latest_review_action,
-            'latest_review_at':      latest_review_at,
-            'workflow_status':       _workflow_status_for(matching_status, latest_review_action),
-            'anomaly_risk_level':    anomaly_risk_level,
-            'has_material_finding':  has_material_finding,
-            'package_status':        pkg['status'],
-            'created_at':            pkg['created_at'],
-            'primary_document_id':   invoice_ids[0] if invoice_ids else None,
-            # Related Docs column (Auditor Home queue) — reuses the
-            # SAME docs already fetched above via list_all_packages_
-            # with_documents(), just surfacing each linked document's
-            # own reference number so an auditor can spot, e.g.,
-            # multiple invoices sharing one PO by scanning the column.
-            'invoice_numbers':       [inv['invoice_number'] for inv in docs['invoices'] if inv.get('invoice_number')],
-            'po_numbers':            [po['po_number'] for po in docs['purchase_orders'] if po.get('po_number')],
-            'gr_numbers':            [gr['gr_number'] for gr in docs['goods_receipts'] if gr.get('gr_number')],
-            # Three-Way Matching page's "Total Amount" column — sums
-            # every invoice already in docs['invoices'] (same list
-            # invoice_numbers above reads), no new query. Currency
-            # taken from the first invoice that has one; this app's
-            # packages are effectively always single-currency in
-            # practice, and summing across genuinely different
-            # currencies isn't meaningful anyway.
-            'total_amount':          float(sum(invoice_amounts)) if invoice_amounts else None,
-            'currency':              next((inv['currency'] for inv in docs['invoices'] if inv.get('currency')), None),
-            '_auth_document_ids':    auth_document_ids,
-        })
-
-    # STEP 10 backward compatibility: legacy/standalone invoices
-    # (never grouped into a package) still appear in the queue, one
-    # row each, exactly like the pre-Phase-6 dashboard showed.
-    for doc in list_standalone_invoices():
-        comparison = build_comparison(cursor, doc['document_id'])
-        matching_status = _matching_status_for_comparison(comparison) if comparison else 'PENDING'
-        po = comparison.get('po') if comparison else None
-        gr = comparison.get('gr') if comparison else None
-        latest_review_action, latest_review_at = _latest_review_event_for_documents(cursor, [doc['document_id']])
-        anomaly_risk_level, has_material_finding = _anomaly_risk_for_documents(cursor, [doc['document_id']])
-        rows.append({
-            'kind':                  'standalone_invoice',
-            'transaction_package_id': None,
-            'package_name':          doc['invoice_number'] or doc['file_name'],
-            'supplier':              doc['vendor_name'],
-            'document_count':        1,
-            'invoice_count':         1,
-            'po_count':              1 if po else 0,
-            'gr_count':              1 if gr else 0,
-            'matching_status':       matching_status,
-            'latest_review_action':  latest_review_action,
-            'latest_review_at':      latest_review_at,
-            'workflow_status':       _workflow_status_for(matching_status, latest_review_action),
-            'anomaly_risk_level':    anomaly_risk_level,
-            'has_material_finding':  has_material_finding,
-            'package_status':        doc['status'],
-            'created_at':            doc['uploaded_at'],
-            'primary_document_id':   doc['document_id'],
-            # Same Related Docs fields as the package branch above,
-            # reusing the SAME comparison data already fetched for
-            # matching_status — no new query.
-            'invoice_numbers':       [doc['invoice_number']] if doc.get('invoice_number') else [],
-            'po_numbers':            [po['po_no']] if po and po.get('po_no') else [],
-            'gr_numbers':            [gr['gr_no']] if gr and gr.get('gr_no') else [],
-            # Same Three-Way Matching "Total Amount" column as the
-            # package branch above — list_standalone_invoices()
-            # already selects total_amount/currency from
-            # extracted_fields, no new query.
-            'total_amount':          float(doc['total_amount']) if doc.get('total_amount') is not None else None,
-            'currency':              doc.get('currency'),
-            # PO/GR under a standalone (legacy, un-packaged) invoice
-            # share that SAME invoice's document_id in authenticity_
-            # checks — this app's older upload convention, unlike a
-            # package's PO/GR which can carry their OWN host_document_id.
-            '_auth_document_ids':    [doc['document_id']],
-        })
-
-    rows.sort(key=lambda r: r['created_at'] or datetime.min, reverse=True)
-    return rows
-
-
 @auditor_bp.route('/transactions', methods=['GET'])
 @jwt_required()
 def get_auditor_transactions():
@@ -1770,19 +1599,113 @@ def get_auditor_transactions():
     try:
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        rows = _build_transaction_rows(cursor)
-        # authenticity_outcome — new field, used by Auditor Home's
-        # Priority Review Queue for its "Failed authenticity" ranking
-        # factor (dashboard redesign). Additive; every pre-existing
-        # field is unchanged.
-        _attach_authenticity_outcomes(cursor, rows)
+
+        rows = []
+
+        for pkg in list_all_packages_with_documents():
+            docs = pkg['documents']
+            invoice_ids = [inv['document_id'] for inv in docs['invoices']]
+            statuses = []
+            for inv_id in invoice_ids:
+                comparison = build_comparison(cursor, inv_id)
+                if comparison:
+                    statuses.append(_matching_status_for_comparison(comparison))
+            if not statuses:
+                matching_status = 'PENDING'
+            elif all(s == 'PASS' for s in statuses):
+                matching_status = 'PASS'
+            else:
+                matching_status = 'REVIEW'
+
+            # The Auditor's actual decision (review_records) and open-
+            # anomaly risk, both scoped across every invoice in this
+            # package — matching_status above is left untouched (still
+            # the pure matching-engine verdict; "Matching may remain
+            # PASS" per the Record Detail fix this mirrors).
+            latest_review_action = _latest_review_action_for_documents(cursor, invoice_ids)
+            anomaly_risk_level, has_material_finding = _anomaly_risk_for_documents(cursor, invoice_ids)
+            invoice_amounts = [inv['total_amount'] for inv in docs['invoices'] if inv.get('total_amount') is not None]
+
+            rows.append({
+                'kind':                  'transaction_package',
+                'transaction_package_id': pkg['id'],
+                'package_name':          pkg['package_name'],
+                'supplier':              pkg['supplier'],
+                'document_count':        len(invoice_ids) + len(docs['purchase_orders']) + len(docs['goods_receipts']),
+                'invoice_count':         len(invoice_ids),
+                'po_count':              len(docs['purchase_orders']),
+                'gr_count':              len(docs['goods_receipts']),
+                'matching_status':       matching_status,
+                'latest_review_action':  latest_review_action,
+                'workflow_status':       _workflow_status_for(matching_status, latest_review_action),
+                'anomaly_risk_level':    anomaly_risk_level,
+                'has_material_finding':  has_material_finding,
+                'package_status':        pkg['status'],
+                'created_at':            pkg['created_at'].isoformat() if pkg['created_at'] else None,
+                'primary_document_id':   invoice_ids[0] if invoice_ids else None,
+                # Related Docs column (Auditor Home queue) — reuses the
+                # SAME docs already fetched above via list_all_packages_
+                # with_documents(), just surfacing each linked document's
+                # own reference number so an auditor can spot, e.g.,
+                # multiple invoices sharing one PO by scanning the column.
+                'invoice_numbers':       [inv['invoice_number'] for inv in docs['invoices'] if inv.get('invoice_number')],
+                'po_numbers':            [po['po_number'] for po in docs['purchase_orders'] if po.get('po_number')],
+                'gr_numbers':            [gr['gr_number'] for gr in docs['goods_receipts'] if gr.get('gr_number')],
+                # Three-Way Matching page's "Total Amount" column — sums
+                # every invoice already in docs['invoices'] (same list
+                # invoice_numbers above reads), no new query. Currency
+                # taken from the first invoice that has one; this app's
+                # packages are effectively always single-currency in
+                # practice, and summing across genuinely different
+                # currencies isn't meaningful anyway.
+                'total_amount':          float(sum(invoice_amounts)) if invoice_amounts else None,
+                'currency':              next((inv['currency'] for inv in docs['invoices'] if inv.get('currency')), None),
+            })
+
+        # STEP 10 backward compatibility: legacy/standalone invoices
+        # (never grouped into a package) still appear in the queue, one
+        # row each, exactly like the pre-Phase-6 dashboard showed.
+        for doc in list_standalone_invoices():
+            comparison = build_comparison(cursor, doc['document_id'])
+            matching_status = _matching_status_for_comparison(comparison) if comparison else 'PENDING'
+            po = comparison.get('po') if comparison else None
+            gr = comparison.get('gr') if comparison else None
+            latest_review_action = _latest_review_action_for_documents(cursor, [doc['document_id']])
+            anomaly_risk_level, has_material_finding = _anomaly_risk_for_documents(cursor, [doc['document_id']])
+            rows.append({
+                'kind':                  'standalone_invoice',
+                'transaction_package_id': None,
+                'package_name':          doc['invoice_number'] or doc['file_name'],
+                'supplier':              doc['vendor_name'],
+                'document_count':        1,
+                'invoice_count':         1,
+                'po_count':              1 if po else 0,
+                'gr_count':              1 if gr else 0,
+                'matching_status':       matching_status,
+                'latest_review_action':  latest_review_action,
+                'workflow_status':       _workflow_status_for(matching_status, latest_review_action),
+                'anomaly_risk_level':    anomaly_risk_level,
+                'has_material_finding':  has_material_finding,
+                'package_status':        doc['status'],
+                'created_at':            doc['uploaded_at'].isoformat() if doc['uploaded_at'] else None,
+                'primary_document_id':   doc['document_id'],
+                # Same Related Docs fields as the package branch above,
+                # reusing the SAME comparison data already fetched for
+                # matching_status — no new query.
+                'invoice_numbers':       [doc['invoice_number']] if doc.get('invoice_number') else [],
+                'po_numbers':            [po['po_no']] if po and po.get('po_no') else [],
+                'gr_numbers':            [gr['gr_no']] if gr and gr.get('gr_no') else [],
+                # Same Three-Way Matching "Total Amount" column as the
+                # package branch above — list_standalone_invoices()
+                # already selects total_amount/currency from
+                # extracted_fields, no new query.
+                'total_amount':          float(doc['total_amount']) if doc.get('total_amount') is not None else None,
+                'currency':              doc.get('currency'),
+            })
+
         conn.close()
 
-        for r in rows:
-            r.pop('_auth_document_ids', None)
-            r['created_at'] = r['created_at'].isoformat() if r['created_at'] else None
-            r['latest_review_at'] = r['latest_review_at'].isoformat() if r['latest_review_at'] else None
-
+        rows.sort(key=lambda r: r['created_at'] or '', reverse=True)
         return jsonify(rows), 200
 
     except Exception as e:
@@ -1826,337 +1749,6 @@ def get_auditor_transaction_detail(package_id):
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
-
-# ------------------------------------------------------------
-# AUDITOR HOME DASHBOARD REDESIGN — KPIs + charts, all derived from
-# EXISTING data (transaction packages, review_records, anomalies,
-# authenticity_checks, send_back_cycles) via EXISTING helpers
-# (_build_transaction_rows, build_comparison, _matching_status_for_
-# comparison, _anomaly_risk_for_documents). No new AI call, and no
-# change anywhere below to matching/anomaly/authenticity/review-
-# decision logic itself — every number here is a read + count/aggregate
-# of something already computed elsewhere in this app.
-# ------------------------------------------------------------
-_ANOMALY_TYPE_TO_FINDING_CATEGORY = {
-    'amount':    'unusual_amount',
-    'round':     'round_amount',
-    'weekend':   'timing',
-    'duplicate': 'duplicate',
-}
-
-
-def _package_risk_level(row):
-    """Mirrors the Auditor Home frontend's riskLevelFor() exactly (see
-    auditor-dashboard.component.ts) so the High-Risk Findings KPI never
-    disagrees with the same badge already shown for the same package in
-    the Transaction Review Queue / Priority Queue."""
-    missing_one = not row['po_count'] or not row['gr_count']
-    if row['anomaly_risk_level'] == 'HIGH':
-        return 'HIGH'
-    if row['matching_status'] == 'REVIEW' and missing_one:
-        return 'HIGH'
-    if row['matching_status'] == 'REVIEW':
-        return 'MEDIUM'
-    if row['workflow_status'] == 'NEED REVIEW' or row['has_material_finding']:
-        return 'MEDIUM'
-    if missing_one:
-        return 'MEDIUM'
-    return 'LOW'
-
-
-def _attach_authenticity_outcomes(cursor, rows):
-    """Mutates `rows` in place, adding 'authenticity_outcome' to each —
-    one of 'passed'/'review_required'/'risk_detected', or None if
-    nothing in that package/standalone row has been authenticity-
-    checked yet. Worst case across the row's own _auth_document_ids
-    (Invoice/PO/GR sharing one transaction), reading the SAME
-    authenticity_status/risk_level columns the pre-redesign per-
-    document Authenticity Outcomes chart already used. Shared by
-    GET /auditor/transactions (the Priority Review Queue's "Failed
-    authenticity" ranking factor) and GET /auditor/report/summary's
-    package-level Authenticity Outcomes chart, so the two can never
-    disagree about the same package."""
-    all_ids = sorted({doc_id for row in rows for doc_id in row['_auth_document_ids']})
-    auth_by_doc_id = {}
-    if all_ids:
-        cursor.execute(
-            'SELECT document_id, authenticity_status, risk_level FROM authenticity_checks WHERE document_id = ANY(%s)',
-            (all_ids,)
-        )
-        for r in cursor.fetchall():
-            auth_by_doc_id.setdefault(r['document_id'], []).append(r)
-
-    for row in rows:
-        checks = [c for doc_id in row['_auth_document_ids'] for c in auth_by_doc_id.get(doc_id, [])]
-        if not checks:
-            row['authenticity_outcome'] = None
-        elif any((c['risk_level'] or '').upper() == 'HIGH' for c in checks):
-            row['authenticity_outcome'] = 'risk_detected'
-        elif any(c['authenticity_status'] != 'passed' for c in checks):
-            row['authenticity_outcome'] = 'review_required'
-        else:
-            row['authenticity_outcome'] = 'passed'
-
-
-def _matching_outcome_for(row):
-    """One of 4 mutually-exclusive buckets per package for the Matching
-    Outcomes donut — priority order: Missing Documents (the most
-    fundamental blocker, same "checked first" convention the pre-
-    redesign Status Breakdown already used) > Review Required (the
-    AUDITOR's own need_review decision, which already outranks a clean
-    matching PASS per _workflow_status_for's own docstring) > Mismatch
-    (the matching ENGINE's own REVIEW verdict) > Full Match."""
-    if not row['po_count'] or not row['gr_count']:
-        return 'missing_documents'
-    if row['workflow_status'] == 'NEED REVIEW':
-        return 'review_required'
-    if row['matching_status'] == 'REVIEW':
-        return 'mismatch'
-    return 'full_match'
-
-
-def _build_dashboard_extras(cursor, transaction_rows):
-    """Returns the new KPI/chart payload for the redesigned Auditor Home
-    dashboard, merged into GET /auditor/report/summary's existing
-    response. transaction_rows: _build_transaction_rows(cursor)'s
-    already-fetched list, reused as-is (already excludes withdrawn_
-    duplicate/deleted documents — see list_all_packages_with_documents()/
-    list_standalone_invoices()'s own filtering) rather than a second
-    package walk."""
-    now_utc = datetime.utcnow()
-    thirty_days_ago_utc = malaysia_midnight_utc(malaysia_today() - timedelta(days=29))
-    fourteen_days_ago_myt = malaysia_today() - timedelta(days=13)
-
-    # ── KPI cards + Review Ageing Distribution — both derived from the
-    # SAME per-package walk. "Active" = not yet at a final decision
-    # (latest_review_action not 'approved'/'closed'); a returned/sent-
-    # back case stays active/open, awaiting Finance's resubmission. The
-    # review-queue entry timestamp reused for both age and review-
-    # duration is the SAME `created_at` the existing Transaction Review
-    # Queue/Priority Queue already use for ageDays() — package created_
-    # at, or a standalone invoice's own uploaded_at as the established
-    # fallback (see _build_transaction_rows). ──
-    active_cases = 0
-    need_review = 0
-    high_risk = 0
-    completed_30d = 0
-    review_durations = []  # seconds; from a package's own entry timestamp to its approved/returned decision, for decisions within the last 30 days
-    ageing = {'under_1d': 0, 'd1_3': 0, 'd4_7': 0, 'over_7d': 0}
-
-    for row in transaction_rows:
-        action = row['latest_review_action']
-        is_final = action in ('approved', 'closed')
-
-        if not is_final:
-            active_cases += 1
-            entry = row['created_at']
-            if entry:
-                age_days = (now_utc - entry).total_seconds() / 86400
-                if age_days < 1:
-                    ageing['under_1d'] += 1
-                elif age_days < 4:
-                    ageing['d1_3'] += 1
-                elif age_days <= 7:
-                    ageing['d4_7'] += 1
-                else:
-                    ageing['over_7d'] += 1
-
-        if row['workflow_status'] == 'NEED REVIEW':
-            need_review += 1
-        if _package_risk_level(row) == 'HIGH':
-            high_risk += 1
-
-        if action in ('approved', 'returned') and row['latest_review_at'] and row['latest_review_at'] >= thirty_days_ago_utc:
-            if action == 'approved':
-                completed_30d += 1
-            entry = row['created_at']
-            if entry:
-                duration = (row['latest_review_at'] - entry).total_seconds()
-                if duration >= 0:
-                    review_durations.append(duration)
-
-    avg_review_minutes = round(sum(review_durations) / len(review_durations) / 60) if review_durations else None
-
-    kpi = {
-        'active_cases':            active_cases,
-        'completed_reviews_30d':   completed_30d,
-        'need_review':             need_review,
-        'high_risk_findings':      high_risk,
-        'avg_review_time_minutes': avg_review_minutes,  # None -> frontend shows "—"
-    }
-
-    # ── Review Workload Trend — last 14 Malaysia days. New Cases groups
-    # transaction_rows' own created_at (a one-time, immutable event per
-    # package, so it's safe to read off the LATEST snapshot); Completed/
-    # Sent Back need the actual historical event day, which latest_
-    # review_action/at alone can't give for a package returned and later
-    # approved (its latest action is 'approved' by then) — so those two
-    # reuse the SAME review_records-grouped-by-day query the existing
-    # 30-day timeline further below already runs, not a second copy. ──
-    new_by_day = {}
-    for row in transaction_rows:
-        if row['created_at']:
-            day = to_malaysia_date(row['created_at'])
-            new_by_day[day] = new_by_day.get(day, 0) + 1
-
-    reviewed_day_sql = malaysia_date_sql('rr.reviewed_at')
-    cursor.execute(
-        f'''SELECT {reviewed_day_sql} AS day, rr.action, COUNT(*) AS cnt
-           FROM review_records rr
-           JOIN users u ON rr.reviewed_by = u.user_id
-           WHERE u.role = 'auditor' AND rr.action IN ('approved', 'returned')
-             AND rr.reviewed_at >= %s
-           GROUP BY {reviewed_day_sql}, rr.action''',
-        (malaysia_midnight_utc(fourteen_days_ago_myt),)
-    )
-    action_by_day_14 = {}
-    for r in cursor.fetchall():
-        action_by_day_14.setdefault(r['day'], {})[r['action']] = r['cnt']
-
-    window_new = sum(new_by_day.get(fourteen_days_ago_myt + timedelta(days=i), 0) for i in range(14))
-    window_completed = sum(action_by_day_14.get(fourteen_days_ago_myt + timedelta(days=i), {}).get('approved', 0) for i in range(14))
-    # Pending Balance is a running total of open cases, seeded so it
-    # lands on today's true Active Review Cases count by the last day of
-    # the window (working backwards: before this window started, the
-    # balance was today's active count minus the net change during it —
-    # only 'approved' actually exits the active pool; a returned case
-    # stays open, same definition Active Review Cases itself uses above).
-    running_balance = active_cases - window_new + window_completed
-
-    workload_trend = []
-    for i in range(14):
-        day = fourteen_days_ago_myt + timedelta(days=i)
-        day_actions = action_by_day_14.get(day, {})
-        new_cases = new_by_day.get(day, 0)
-        completed = day_actions.get('approved', 0)
-        sent_back = day_actions.get('returned', 0)
-        running_balance += new_cases - completed
-        workload_trend.append({
-            'date':            day.isoformat(),
-            'new_cases':       new_cases,
-            'completed':       completed,
-            'sent_back':       sent_back,
-            'pending_balance': max(0, running_balance),
-        })
-
-    # ── Matching Outcomes (donut) ──
-    matching_outcomes = {'full_match': 0, 'review_required': 0, 'mismatch': 0, 'missing_documents': 0}
-    for row in transaction_rows:
-        matching_outcomes[_matching_outcome_for(row)] += 1
-
-    # ── Authenticity Outcomes — package-level (Passed / Review Required
-    # / Risk Detected), reusing _attach_authenticity_outcomes() (shared
-    # with GET /auditor/transactions' own Priority Queue ranking, see
-    # that function's docstring) so a package's Invoice+PO+GR count as
-    # ONE case, never three, and both endpoints never disagree. A
-    # package with nothing checked yet isn't counted at all (matches
-    # get_transaction_authenticity_summary()'s same exclusion). ──
-    if not any('authenticity_outcome' in row for row in transaction_rows):
-        _attach_authenticity_outcomes(cursor, transaction_rows)
-
-    authenticity_outcomes = {'passed': 0, 'review_required': 0, 'risk_detected': 0}
-    for row in transaction_rows:
-        if row['authenticity_outcome']:
-            authenticity_outcomes[row['authenticity_outcome']] += 1
-
-    # ── Findings by Category (last 30 days, historical — includes
-    # already-reviewed/approved documents, deliberately not filtered to
-    # under_review/resubmitted the way _classify_exception's callers
-    # are, since a finding that already got reviewed is still a finding
-    # that was detected) + Vendor Finding Ranking, sharing this same
-    # pass — every finding is attributed to its document's vendor
-    # (invoice vendor_name, falling back to its most recent PO/GR
-    # vendor_name — same fallback order Transaction Packages already
-    # uses for a package's own "supplier" field). ──
-    cursor.execute('''
-        SELECT d.document_id,
-               COALESCE(
-                   ef.vendor_name,
-                   (SELECT po.vendor_name FROM purchase_orders po WHERE po.document_id = d.document_id ORDER BY po.uploaded_at DESC LIMIT 1),
-                   (SELECT gr.vendor_name FROM goods_receipts gr WHERE gr.document_id = d.document_id ORDER BY gr.uploaded_at DESC LIMIT 1)
-               ) AS vendor_name
-        FROM documents d
-        LEFT JOIN extracted_fields ef ON ef.document_id = d.document_id
-        WHERE d.status != 'withdrawn_duplicate'
-    ''')
-    vendor_by_document_id = {r['document_id']: r['vendor_name'] for r in cursor.fetchall()}
-
-    findings_by_category = {
-        'matching_mismatch': 0, 'missing_documents': 0, 'authenticity_concern': 0,
-        'round_amount': 0, 'timing': 0, 'duplicate': 0, 'unusual_amount': 0,
-    }
-    vendor_findings = {}
-
-    def _bump_vendor(document_id):
-        name = vendor_by_document_id.get(document_id) or 'Unknown Vendor'
-        vendor_findings[name] = vendor_findings.get(name, 0) + 1
-
-    cursor.execute('''
-        SELECT document_id FROM documents
-        WHERE status != 'withdrawn_duplicate' AND uploaded_at >= %s
-    ''', (thirty_days_ago_utc,))
-    for r in cursor.fetchall():
-        comparison = build_comparison(cursor, r['document_id'])
-        if not comparison:
-            continue
-        if comparison.get('po') is None or comparison.get('gr') is None:
-            findings_by_category['missing_documents'] += 1
-            _bump_vendor(r['document_id'])
-        elif _matching_status_for_comparison(comparison) != 'PASS':
-            findings_by_category['matching_mismatch'] += 1
-            _bump_vendor(r['document_id'])
-
-    cursor.execute('''
-        SELECT ac.document_id, ac.authenticity_status
-        FROM authenticity_checks ac
-        JOIN documents d ON ac.document_id = d.document_id
-        WHERE d.status != 'withdrawn_duplicate' AND ac.created_at >= %s
-    ''', (thirty_days_ago_utc,))
-    for r in cursor.fetchall():
-        if r['authenticity_status'] != 'passed':
-            findings_by_category['authenticity_concern'] += 1
-            _bump_vendor(r['document_id'])
-
-    cursor.execute('''
-        SELECT a.invoice_document_id, a.anomaly_type
-        FROM anomalies a
-        JOIN documents d ON a.invoice_document_id = d.document_id
-        WHERE d.status != 'withdrawn_duplicate' AND a.status != 'dismissed' AND a.created_at >= %s
-    ''', (thirty_days_ago_utc,))
-    for r in cursor.fetchall():
-        category = _ANOMALY_TYPE_TO_FINDING_CATEGORY.get(r['anomaly_type'])
-        if category:
-            findings_by_category[category] += 1
-        _bump_vendor(r['invoice_document_id'])
-
-    cursor.execute('''
-        SELECT sbc.document_id
-        FROM send_back_cycles sbc
-        JOIN documents d ON sbc.document_id = d.document_id
-        WHERE d.status != 'withdrawn_duplicate' AND sbc.sent_back_at >= %s
-    ''', (thirty_days_ago_utc,))
-    for r in cursor.fetchall():
-        # Counts toward Vendor Finding Ranking (per spec) but is not its
-        # own Findings by Category row — a send-back is already the
-        # auditor's own decision, not a distinct detected-finding TYPE
-        # like the 7 rows in findings_by_category.
-        _bump_vendor(r['document_id'])
-
-    vendor_ranking = [
-        {'vendor': v, 'count': c}
-        for v, c in sorted(vendor_findings.items(), key=lambda kv: kv[1], reverse=True)[:5]
-    ]
-
-    return {
-        'kpi':                   kpi,
-        'workload_trend':        workload_trend,
-        'review_ageing':         ageing,
-        'matching_outcomes':     matching_outcomes,
-        'authenticity_outcomes': authenticity_outcomes,
-        'findings_by_category':  findings_by_category,
-        'vendor_ranking':        vendor_ranking,
-    }
 
 
 # ------------------------------------------------------------
@@ -2313,14 +1905,6 @@ def get_report_summary():
         )
         pending_by_day = {row['day']: row['cnt'] for row in cursor.fetchall()}
 
-        # Auditor Home dashboard redesign — new KPI/chart payload,
-        # merged in below. Needs the cursor (still open), so it runs
-        # before conn.close() — everything else it needs is fetched
-        # inside _build_dashboard_extras()/_build_transaction_rows()
-        # itself, no data from above this point is reused.
-        transaction_rows = _build_transaction_rows(cursor)
-        dashboard_extras = _build_dashboard_extras(cursor, transaction_rows)
-
         conn.close()
 
         timeline = []
@@ -2335,16 +1919,9 @@ def get_report_summary():
             })
 
         return jsonify({
-            'period':               period,
-            'stats':                stats,
-            'timeline':             timeline,
-            'kpi':                  dashboard_extras['kpi'],
-            'workload_trend':       dashboard_extras['workload_trend'],
-            'review_ageing':        dashboard_extras['review_ageing'],
-            'matching_outcomes':    dashboard_extras['matching_outcomes'],
-            'authenticity_outcomes': dashboard_extras['authenticity_outcomes'],
-            'findings_by_category': dashboard_extras['findings_by_category'],
-            'vendor_ranking':       dashboard_extras['vendor_ranking'],
+            'period':   period,
+            'stats':    stats,
+            'timeline': timeline,
         }), 200
 
     except Exception as e:
