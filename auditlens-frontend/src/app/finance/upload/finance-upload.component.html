@@ -140,15 +140,21 @@
             </td>
             <td>{{ (item.file.size / 1024 / 1024).toFixed(2) }} MB</td>
             <td>
-              <select class="type-select" (change)="updateStagedType(item, $any($event.target).value)">
+              <select class="type-select" [class.unconfirmed]="item.docType === 'unconfirmed'"
+                      (change)="updateStagedType(item, $any($event.target).value)">
+                <option value="unconfirmed" [selected]="item.docType === 'unconfirmed'" disabled hidden>Unconfirmed — select a type</option>
                 <option value="invoice" [selected]="item.docType === 'invoice'">Invoice</option>
                 <option value="purchase_order" [selected]="item.docType === 'purchase_order'">Purchase Order</option>
                 <option value="goods_receipt" [selected]="item.docType === 'goods_receipt'">Goods Receipt</option>
               </select>
+              <p class="unconfirmed-note" *ngIf="item.docType === 'unconfirmed'">Type not detected — select one</p>
             </td>
             <td>
               <div style="display:flex; gap:6px;">
-                <button class="btn-view" (click)="confirmStaged(item)"><i class="ph-duotone ph-check"></i> Confirm</button>
+                <button class="btn-view" (click)="confirmStaged(item)" [disabled]="item.docType === 'unconfirmed'"
+                        [title]="item.docType === 'unconfirmed' ? 'Select a document type first' : ''">
+                  <i class="ph-duotone ph-check"></i> Confirm
+                </button>
                 <button class="btn-delete" (click)="removeStaged(item)"><i class="ph-duotone ph-x"></i></button>
               </div>
             </td>

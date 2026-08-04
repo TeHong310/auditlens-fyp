@@ -18915,3 +18915,88 @@ Setup/config needed:
      (Docker web service) and the frontend static site.
   2. Backend redeploy required (routes/documents.py changed - no new
      migration, no new dependency, no new environment variable).
+
+----------------------------------------------------------------------
+
+Date: 2026-08-04
+What was changed:
+  Frontend only (auditlens-frontend/.../finance/upload/finance-upload.
+  component.ts/.html/.css) - no backend touched.
+    - inferDocType() rewritten: Goods Receipt is now checked BEFORE
+      Purchase Order (previously PO was checked first), and its pattern
+      now recognises GR, GRPO, GRN, "Goods Receipt", "Goods Receipt PO",
+      and "Goods Received Note" - not just bare "gr". Root cause of the
+      reported bug: "GRPO" satisfied neither the old PO regex (its "po"
+      substring has no word-boundary before it, preceded by "r") nor
+      the old GR regex (its "gr" substring has no word-boundary after
+      it, followed by "po") - so it silently fell through to the
+      Invoice default. Added an explicit Invoice/INV pattern as the
+      3rd-priority check.
+    - Unknown filenames (matching none of the 3 patterns) are now typed
+      'unconfirmed' instead of defaulting to Invoice - a new StagedDocType
+      = DocType | 'unconfirmed', used only by StagedFile (pre-
+      confirmation); QueueItem/the actual upload pipeline still only
+      ever sees a real DocType. confirmStaged()/confirmAllStaged() now
+      refuse to move an 'unconfirmed' item into uploadQueue - Confirm
+      All queues whatever IS confirmed and leaves the rest staged with
+      a message; the per-row Confirm button is disabled while
+      unconfirmed. The "Confirm Document Types" select shows an
+      "Unconfirmed - select a type" placeholder option (disabled/
+      hidden, so it can't be re-selected once changed) with a small red
+      note under it.
+    - uploadNextInQueue() now picks the next 'pending' item to actually
+      process by document-type priority (Invoice -> Purchase Order ->
+      Goods Receipt), not array/archive-entry order - a stable sort
+      (ES2019+) over the pending items, so same-type items keep their
+      original relative order. This is the ACTUAL fix for "ZIP
+      processing depends on archive file order" - previously the queue
+      just took the first 'pending' item in array order, which could be
+      a PO or GR added earlier in a ZIP's own internal listing, before
+      that batch's Invoice had even been attempted. The one-item-at-a-
+      time sequential upload itself (unchanged) already guaranteed the
+      Invoice's own HTTP call fully completes and returns document_id
+      before anything else starts; this fix is entirely about WHICH
+      pending item gets picked next, not the sequential-processing
+      mechanism itself.
+    - Same priority-based selection automatically makes retryFailed()
+      (unchanged itself - it just flips failed items back to 'pending'
+      in place) reprocess a batch's Invoice before its PO/GR on retry,
+      with no separate retry-ordering code needed.
+    - When a PO/GR has no invoice document_id to attach to, the error
+      message now distinguishes two cases: if this batch's own Invoice
+      item is present and its status is 'error', shows the exact
+      required "Invoice upload must complete before supporting
+      documents can be attached." (retrying is the actual fix); every
+      other case (no Invoice was ever part of this batch) keeps the
+      existing, more general "No invoice available..." guidance.
+      Marked 'error' (the existing status value) rather than adding a
+      new one.
+
+Why:
+  Reported bugs: a real filename ("NICEPACK - GRPO PD6012343.pdf") was
+  being classified as Invoice instead of Goods Receipt, and because ZIP
+  processing just walked the upload queue in whatever order files ended
+  up in it (itself following the ZIP archive's own internal entry
+  order), a Purchase Order could be attempted before its batch's own
+  Invoice existed yet to attach to.
+
+Verified:
+  Traced all 3 given examples plus the 5 additional GR synonyms by hand
+  against the new regex (NICEPACK - INV NP2606-0613.pdf -> Invoice,
+  NICEPACK - PO 3006490.pdf -> Purchase Order, NICEPACK - GRPO
+  PD6012343.pdf -> Goods Receipt; GR/GRN/"Goods Receipt"/"Goods Receipt
+  PO"/"Goods Received Note" variants all -> Goods Receipt; a filename
+  matching none of the 3 -> 'unconfirmed', never a default). npx ng
+  build --configuration production - clean compile (including the
+  StagedDocType/DocType type-narrowing cast), only the same pre-
+  existing bundle-budget warnings on two unrelated files this task
+  never touched. Did not run backend tests or Playwright, per this
+  task's own scope (no backend file was changed). git diff --stat
+  confirms only the 3 finance-upload component files changed - no
+  backend endpoint, no OCR/AI extraction, no ZIP extraction rule,
+  upload progress state, duplicate-file check, or existing PO/GR
+  attachment logic touched.
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy the frontend static
+     site (no backend change, so a backend redeploy isn't required).

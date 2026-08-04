@@ -26,6 +26,24 @@ const STATUS_PRIORITY: Record<string, number> = {
 // as a form field.
 export type DocType = 'invoice' | 'purchase_order' | 'goods_receipt';
 
+// A staged file whose filename matched none of the known type patterns
+// — never silently uploaded as any of the 3 real types; see
+// confirmStaged()/confirmAllStaged() for the gate that keeps it out of
+// uploadQueue until the user picks one.
+export type StagedDocType = DocType | 'unconfirmed';
+
+// Upload-processing order within a batch: Invoice must always be
+// attempted before its own Purchase Order/Goods Receipt (which attach
+// TO the invoice's document_id) — never the order files happened to
+// appear in a ZIP archive. See uploadNextInQueue()'s pending-item
+// selection below, the one place this is actually enforced for the
+// real API calls.
+const DOC_TYPE_UPLOAD_PRIORITY: Record<DocType, number> = {
+  invoice: 0,
+  purchase_order: 1,
+  goods_receipt: 2,
+};
+
 export type QueueStatus = 'pending' | 'uploading' | 'processing' | 'done' | 'error';
 
 export interface QueueItem {
@@ -45,8 +63,8 @@ export interface QueueItem {
 export interface StagedFile {
   id: number;
   file: File;
-  docType: DocType;
-  inferredType: DocType;
+  docType: StagedDocType;
+  inferredType: StagedDocType;
   previewUrl?: string;
   batchId: number;
 }
@@ -566,11 +584,31 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
   // Filename-based document-type guess — an editable starting point
   // only; see confirmStaged()/confirmAllStaged() for the confirmation
   // gate that must happen before any file actually uploads.
-  inferDocType(fileName: string): DocType {
+  //
+  // Detection priority is 1) Goods Receipt/GRPO, 2) Purchase Order/PO,
+  // 3) Invoice/INV — checked in that order specifically so a compound
+  // token like "GRPO" (Goods Receipt PO) is matched as Goods Receipt
+  // BEFORE the Purchase Order check ever runs, never as a bare "PO".
+  // A filename matching none of the 3 is left 'unconfirmed' rather than
+  // defaulting to Invoice — the user must pick a real type in "Confirm
+  // Document Types" before it can be queued.
+  inferDocType(fileName: string): StagedDocType {
     const name = fileName.toLowerCase();
-    if (/(^|[\s_.\-])(purchase[\s_\-]?order|po)([\s_.\-]|$)/.test(name)) return 'purchase_order';
-    if (/(^|[\s_.\-])(goods[\s_\-]?receipt|gr)([\s_.\-]|$)/.test(name)) return 'goods_receipt';
-    return 'invoice'; // covers explicit "invoice"/"inv" matches and the sensible default otherwise
+
+    // Goods Receipt: GR, GRPO, GRN, "Goods Receipt", "Goods Receipt PO",
+    // "Goods Received Note".
+    if (/(^|[\s_.\-])(goods[\s_\-]?receipt(?:[\s_\-]?po)?|goods[\s_\-]?received[\s_\-]?note|grpo|grn|gr)([\s_.\-]|$)/.test(name)) {
+      return 'goods_receipt';
+    }
+    // Purchase Order: PO, "Purchase Order".
+    if (/(^|[\s_.\-])(purchase[\s_\-]?order|po)([\s_.\-]|$)/.test(name)) {
+      return 'purchase_order';
+    }
+    // Invoice: INV, "Invoice".
+    if (/(^|[\s_.\-])(invoice|inv)([\s_.\-]|$)/.test(name)) {
+      return 'invoice';
+    }
+    return 'unconfirmed';
   }
 
   // ── Type-confirmation staging (gates entry into uploadQueue) ──────
@@ -586,6 +624,9 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
   }
 
   confirmStaged(item: StagedFile) {
+    // A file whose type couldn't be inferred must be classified by the
+    // user first — never silently queued as any particular type.
+    if (item.docType === 'unconfirmed') return;
     this.stagedFiles = this.stagedFiles.filter(s => s.id !== item.id);
     this.uploadQueue = [...this.uploadQueue, this.toQueueItem(item)];
     this.saveQueueToStorage();
@@ -595,9 +636,25 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
 
   confirmAllStaged() {
     if (this.stagedFiles.length === 0) return;
-    const newItems = this.stagedFiles.map(item => this.toQueueItem(item));
-    this.stagedFiles = [];
+    this.errorMessage = '';
+
+    // Only files with a real, confirmed type are queued; anything still
+    // 'unconfirmed' stays staged until the user picks a type for it.
+    const confirmable = this.stagedFiles.filter(item => item.docType !== 'unconfirmed');
+    const remaining = this.stagedFiles.filter(item => item.docType === 'unconfirmed');
+
+    if (confirmable.length === 0) {
+      this.errorMessage = 'Select a document type for each file before confirming.';
+      this.cdr.detectChanges();
+      return;
+    }
+
+    const newItems = confirmable.map(item => this.toQueueItem(item));
+    this.stagedFiles = remaining;
     this.uploadQueue = [...this.uploadQueue, ...newItems];
+    if (remaining.length > 0) {
+      this.errorMessage = 'Select a document type for each remaining file before confirming.';
+    }
     this.saveQueueToStorage();
     this.cdr.detectChanges();
     this.uploadNextInQueue();
@@ -606,7 +663,7 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
   private toQueueItem(item: StagedFile): QueueItem {
     return {
       file: item.file,
-      docType: item.docType,
+      docType: item.docType as DocType, // callers only ever pass a confirmed (non-'unconfirmed') item
       status: 'pending',
       message: '',
       previewUrl: item.previewUrl,
@@ -630,8 +687,21 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
     // (below) calls this again once it's actually free.
     if (this.isUploading) return;
 
-    const pendingIndex = this.uploadQueue.findIndex(item => item.status === 'pending');
-    if (pendingIndex === -1) {
+    // Picks the next item to actually process by DOC_TYPE_UPLOAD_
+    // PRIORITY (Invoice -> Purchase Order -> Goods Receipt), never by
+    // array/archive-entry order — a ZIP's own internal file ordering
+    // must never determine whether a PO is attempted before the
+    // Invoice it depends on exists yet. Array.prototype.sort() is
+    // stable (ES2019+), so items sharing the same doc type keep their
+    // original relative order. This also makes retryFailed() (which
+    // resets failed items back to 'pending' in place) automatically
+    // reprocess a batch's Invoice before its Purchase Order/Goods
+    // Receipt, with no separate retry-ordering logic needed.
+    const pendingItems = this.uploadQueue
+      .filter(i => i.status === 'pending')
+      .sort((a, b) => DOC_TYPE_UPLOAD_PRIORITY[a.docType] - DOC_TYPE_UPLOAD_PRIORITY[b.docType]);
+
+    if (pendingItems.length === 0) {
       this.isUploading = false;
       this.loadDocuments();
       this.saveQueueToStorage();
@@ -650,7 +720,7 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
     }
 
     this.isUploading = true;
-    const item = this.uploadQueue[pendingIndex];
+    const item = pendingItems[0];
     item.status = 'uploading';
     item.progress = 0;
     this.saveQueueToStorage();
@@ -676,8 +746,15 @@ export class FinanceUploadComponent implements OnInit, OnDestroy {
       const targetDocumentId = this.batchAnchorInvoice[item.batchId] ?? this.selectedDocumentId;
       if (!targetDocumentId) {
         item.status = 'error';
-        item.message = `No invoice available to attach this ${this.docTypeLabel(item.docType)} to. ` +
-          `Upload an Invoice in the same batch first, or select an existing invoice via "Attach PO/GR".`;
+        // Distinguishes "this batch's own Invoice was attempted but
+        // failed" (the exact required message, since retrying it is
+        // the actual fix) from "no Invoice was ever part of this batch"
+        // (the existing, more general guidance).
+        const batchInvoice = this.uploadQueue.find(q => q.batchId === item.batchId && q.docType === 'invoice');
+        item.message = batchInvoice?.status === 'error'
+          ? 'Invoice upload must complete before supporting documents can be attached.'
+          : `No invoice available to attach this ${this.docTypeLabel(item.docType)} to. ` +
+            `Upload an Invoice in the same batch first, or select an existing invoice via "Attach PO/GR".`;
         this.isUploading = false;
         this.saveQueueToStorage();
         this.cdr.detectChanges();

@@ -427,6 +427,14 @@
   cursor: pointer;
 }
 
+.type-select.unconfirmed { border-color: var(--danger); color: var(--danger); }
+
+.unconfirmed-note {
+  font-size: 11px;
+  color: var(--danger);
+  margin-top: 4px;
+}
+
 /* Overall processing summary panel */
 .summary-stats-row {
   display: grid;
@@ -472,6 +480,8 @@
   font-weight: 600;
   cursor: pointer;
 }
+
+.btn-view:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .loading-row, .empty-row {
   text-align: center;
