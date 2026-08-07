@@ -471,6 +471,24 @@
       </div>
     </div>
 
+    <!-- 10. Audit Evidence Passport -->
+    <div class="manual-card" *ngIf="matches('audit evidence passport export pdf record detail summary')">
+      <button class="manual-card-header" (click)="toggleSection('a-passport')" [class.expanded]="isExpanded('a-passport')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-identification-card"></i>
+          <span class="manual-card-title">10. Audit Evidence Passport</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('a-passport')">
+        <p class="manual-purpose"><strong>Purpose:</strong> a single, exportable summary of everything already known about one transaction — matching, exceptions, authenticity, anomalies, review history, and the final decision.</p>
+
+        <app-screenshot-placeholder src="manual/audit-evidence-passport.png" label="Add real system screenshot here — Audit Evidence Passport"></app-screenshot-placeholder>
+
+        <p class="manual-note">Available from a record's Audit Review page — click <strong>View Evidence Passport</strong>, or <strong>Export PDF</strong> to download it directly.</p>
+      </div>
+    </div>
+
   </ng-container>
 
   <!-- ============================================================ -->

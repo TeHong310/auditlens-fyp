@@ -17,6 +17,7 @@ showing its dashed placeholder box.
 | AI Audit Assistant — Approval Assessment result | `approval-assessment.png` |
 | Approval Workflow (Document Workflow Timeline) | `approval-workflow.png` |
 | Report & Log | `report-log.png` |
+| Audit Evidence Passport | `audit-evidence-passport.png` |
 | Finance — Upload Document | `upload-document.png` |
 | Finance — Transaction Package | `transaction-package.png` |
 | Finance — OCR Review | `ocr-review.png` |
