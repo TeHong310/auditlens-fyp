@@ -12,6 +12,41 @@ Chart.register(...registerables);
 type Period = 'today' | 'week' | 'month' | 'all';
 type ActionFilter = 'all' | 'approved' | 'sent_back' | 'need_review';
 
+// Shared trend-line palette (Report dashboard redesign) — reused as-is
+// for the new Review Outcome Distribution doughnut so every chart on
+// this page describes Approved/Sent Back/Need Review with the same
+// three colors.
+const ACTION_COLORS = {
+  approved:    '#4FD1B5',
+  sent_back:   '#F45B69',
+  need_review: '#F5B83D',
+};
+
+// Ad-hoc Chart.js v4 plugin (no new npm dependency) — draws each bar's
+// numeric value just past its end. Passed per-chart via the `plugins`
+// array, not globally registered, so it only affects Audit Findings
+// Breakdown (the one chart that asked for value labels).
+const valueLabelPlugin = {
+  id: 'valueLabelPlugin',
+  afterDatasetsDraw(chart: any) {
+    const { ctx } = chart;
+    chart.data.datasets.forEach((dataset: any, datasetIndex: number) => {
+      const meta = chart.getDatasetMeta(datasetIndex);
+      meta.data.forEach((bar: any, index: number) => {
+        const value = dataset.data[index];
+        if (value === null || value === undefined) return;
+        ctx.save();
+        ctx.fillStyle = '#E6E7EE';
+        ctx.font = '600 11px Inter, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(value), bar.x + 6, bar.y);
+        ctx.restore();
+      });
+    });
+  }
+};
+
 @Component({
   selector: 'app-auditor-report',
   standalone: true,
@@ -21,6 +56,9 @@ type ActionFilter = 'all' | 'approved' | 'sent_back' | 'need_review';
 })
 export class AuditorReportComponent implements OnInit, AfterViewInit {
   @ViewChild('timelineChart') timelineChartRef!: ElementRef;
+  @ViewChild('outcomeChart') outcomeChartRef!: ElementRef;
+  @ViewChild('findingsChart') findingsChartRef!: ElementRef;
+  @ViewChild('vendorsChart') vendorsChartRef!: ElementRef;
 
   periods: { key: Period; label: string }[] = [
     { key: 'today', label: 'Today' },
@@ -30,7 +68,10 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
   ];
   activePeriod: Period = 'month';
 
-  stats: any = { approved: 0, sent_back: 0, pending: 0, exceptions: 0, match_pass: 0, match_review: 0 };
+  stats: any = {
+    approved: 0, sent_back: 0, need_review: 0, pending: 0, exceptions: 0,
+    match_pass: 0, match_review: 0, avg_review_time_hours: null,
+  };
   timeline: any[] = [];
   isLoadingSummary: boolean = false;
   summaryError: string = '';
@@ -43,9 +84,30 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
   // here rather than adding new backend endpoints. null = not yet
   // loaded / unavailable -> template shows a graceful empty state,
   // never fabricated numbers.
-  authenticityQuality: { passed: number; warning: number } | null = null;
-  anomalyQuality: { high: number; medium: number } | null = null;
+  //
+  // authenticityQuality reads authentication_status (PASS/REVIEW/FAIL —
+  // the same 3-tier field the Authenticity page's own filter chips use),
+  // not the older binary authenticity_status column, so "Failed" is a
+  // real, distinct count rather than folded into "Warning".
+  authenticityQuality: { passed: number; warning: number; failed: number } | null = null;
+  anomalyQuality: { high: number; medium: number; low: number } | null = null;
+  // Anomaly type breakdown (amount/round/weekend/duplicate) — same
+  // /anomalies/stats response as anomalyQuality above, just also
+  // capturing by_type for the Audit Findings Breakdown chart. No second
+  // call.
+  anomalyByType: { amount: number; round: number; weekend: number; duplicate: number } | null = null;
   isLoadingQuality: boolean = false;
+
+  // Top Vendors by Review Activity — a dedicated fetch of the SAME
+  // /auditor/report/audit-trail endpoint the table below already uses,
+  // just with a larger limit (identical to the existing exportCsv()'s
+  // own limit=1000 call) so the vendor aggregation isn't skewed by
+  // whatever page the Audit Trail table happens to have loaded. Always
+  // all-time/all-actions, matching how Audit Quality Overview is also a
+  // period-independent current snapshot rather than following the
+  // period selector above.
+  vendorActivityEntries: any[] = [];
+  isLoadingVendorActivity: boolean = false;
 
   // Audit trail
   entries: any[] = [];
@@ -66,7 +128,14 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
   currentReviewPage = 1;
   currentAuditTrailPage = 1;
 
+  // Recent Review Activity — collapsed to a 5-row preview by default;
+  // "View All" reveals the existing paginated (10/page) view below.
+  reviewActivityExpanded = false;
+
   private chartInstance: any = null;
+  private outcomeChartInstance: any = null;
+  private findingsChartInstance: any = null;
+  private vendorsChartInstance: any = null;
   private chartReady: boolean = false;
 
   private apiUrl = environment.apiUrl;
@@ -81,10 +150,12 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
     this.loadSummary();
     this.loadAuditTrail(true);
     this.loadQualityOverview();
+    this.loadVendorActivity();
   }
 
   ngAfterViewInit() {
     if (this.chartReady) this.renderChart();
+    this.maybeRenderFindingsChart();
   }
 
   getHeaders() {
@@ -92,7 +163,7 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
     return new HttpHeaders({ 'Authorization': `Bearer ${token}` });
   }
 
-  // ── Summary + chart ──────────────────────────────────────
+  // ── Summary + charts ──────────────────────────────────────
 
   setPeriod(p: Period) {
     this.activePeriod = p;
@@ -111,7 +182,11 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
         this.isLoadingSummary = false;
         this.chartReady = true;
         this.cdr.detectChanges();
-        setTimeout(() => this.renderChart(), 100);
+        setTimeout(() => {
+          this.renderChart();
+          this.renderOutcomeChart();
+          this.maybeRenderFindingsChart();
+        }, 100);
       },
       error: (err) => {
         this.isLoadingSummary = false;
@@ -136,10 +211,12 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
       next: (res) => {
         const rows = res || [];
         this.authenticityQuality = {
-          passed:  rows.filter(r => r.authenticity_status === 'passed').length,
-          warning: rows.filter(r => r.authenticity_status === 'warning').length,
+          passed:  rows.filter(r => r.authentication_status === 'PASS').length,
+          warning: rows.filter(r => r.authentication_status === 'REVIEW').length,
+          failed:  rows.filter(r => r.authentication_status === 'FAIL').length,
         };
         this.cdr.detectChanges();
+        setTimeout(() => this.maybeRenderFindingsChart(), 100);
       },
       error: () => {
         this.authenticityQuality = null;
@@ -152,12 +229,21 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
         this.anomalyQuality = {
           high:   res?.by_severity?.high ?? 0,
           medium: res?.by_severity?.medium ?? 0,
+          low:    res?.by_severity?.low ?? 0,
+        };
+        this.anomalyByType = {
+          amount:    res?.by_type?.amount ?? 0,
+          round:     res?.by_type?.round ?? 0,
+          weekend:   res?.by_type?.weekend ?? 0,
+          duplicate: res?.by_type?.duplicate ?? 0,
         };
         this.isLoadingQuality = false;
         this.cdr.detectChanges();
+        setTimeout(() => this.maybeRenderFindingsChart(), 100);
       },
       error: () => {
         this.anomalyQuality = null;
+        this.anomalyByType = null;
         this.isLoadingQuality = false;
         this.cdr.detectChanges();
       }
@@ -168,12 +254,115 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
     return !this.isLoadingSummary && !this.summaryError;
   }
 
+  // ── KPI cards ──────────────────────────────────────────────
+  // All four reuse fields already loaded above (stats.* / exceptions) —
+  // no new backend call beyond avg_review_time_hours, which the summary
+  // endpoint now also returns.
+
+  get totalReviewedDocuments(): number {
+    return (this.stats.approved || 0) + (this.stats.sent_back || 0);
+  }
+
+  get approvalRateLabel(): string {
+    const total = this.totalReviewedDocuments;
+    if (total === 0) return '—';
+    return ((this.stats.approved / total) * 100).toFixed(1) + '%';
+  }
+
+  get avgReviewTimeLabel(): string {
+    const hours = this.stats.avg_review_time_hours;
+    if (hours === null || hours === undefined) return '—';
+    if (hours < 24) return `${hours}h`;
+    return `${(hours / 24).toFixed(1)}d`;
+  }
+
+  get riskFindingsCount(): number {
+    return this.stats.exceptions || 0;
+  }
+
+  // ── Audit Quality Overview donuts — pure CSS conic-gradient, same
+  // technique as the Authenticity page's own ringGradient(), generalized
+  // to more than one non-background segment. green = clean/passing tier,
+  // amber = caution tier, red = the worst tier, kept consistent with the
+  // color each of these already used before this redesign (match REVIEW
+  // and anomaly High Risk were already red; authenticity Warning and
+  // anomaly Medium were already amber). ──
+
+  private donutGradient(segments: { value: number; color: string }[]): string {
+    const total = segments.reduce((sum, s) => sum + s.value, 0);
+    if (total <= 0) return 'conic-gradient(var(--bg-hover) 0% 100%)';
+    let cursor = 0;
+    const stops = segments
+      .filter(s => s.value > 0)
+      .map(s => {
+        const start = cursor;
+        cursor += (s.value / total) * 100;
+        return `${s.color} ${start}% ${cursor}%`;
+      });
+    return `conic-gradient(${stops.join(', ')})`;
+  }
+
+  get matchingTotal(): number {
+    return (this.stats.match_pass || 0) + (this.stats.match_review || 0);
+  }
+
+  get matchingDonutGradient(): string {
+    return this.donutGradient([
+      { value: this.stats.match_pass || 0, color: 'var(--success)' },
+      { value: this.stats.match_review || 0, color: 'var(--danger)' },
+    ]);
+  }
+
+  get authenticityTotal(): number {
+    if (!this.authenticityQuality) return 0;
+    return this.authenticityQuality.passed + this.authenticityQuality.warning + this.authenticityQuality.failed;
+  }
+
+  get authenticityDonutGradient(): string {
+    if (!this.authenticityQuality) return 'conic-gradient(var(--bg-hover) 0% 100%)';
+    return this.donutGradient([
+      { value: this.authenticityQuality.passed, color: 'var(--success)' },
+      { value: this.authenticityQuality.warning, color: 'var(--warning)' },
+      { value: this.authenticityQuality.failed, color: 'var(--danger)' },
+    ]);
+  }
+
+  get anomalyTotal(): number {
+    if (!this.anomalyQuality) return 0;
+    return this.anomalyQuality.high + this.anomalyQuality.medium + this.anomalyQuality.low;
+  }
+
+  get anomalyDonutGradient(): string {
+    if (!this.anomalyQuality) return 'conic-gradient(var(--bg-hover) 0% 100%)';
+    return this.donutGradient([
+      { value: this.anomalyQuality.low, color: 'var(--success)' },
+      { value: this.anomalyQuality.medium, color: 'var(--warning)' },
+      { value: this.anomalyQuality.high, color: 'var(--danger)' },
+    ]);
+  }
+
+  // ── Audit Activity Trend — last 14 days, Approved/Sent Back/Need
+  // Review (Need Review replaces the old Pending series; Pending is a
+  // current-state snapshot, not a "how many that day" figure, so it
+  // never belonged on a per-day trend). Gradient fills via
+  // ctx.createLinearGradient, same technique already used by Finance
+  // Home's own upload trend chart. ──
+
   renderChart() {
     if (!this.timelineChartRef) return;
     if (this.chartInstance) this.chartInstance.destroy();
 
-    const labels = this.timeline.map(t => this.formatChartDate(t.date));
+    const last14 = this.timeline.slice(-14);
+    const labels = last14.map(t => this.formatChartDate(t.date));
     const ctx = this.timelineChartRef.nativeElement.getContext('2d');
+
+    const fill = (hex: string, alpha: number) => {
+      const gradient = ctx.createLinearGradient(0, 0, 0, 220);
+      gradient.addColorStop(0, this.hexToRgba(hex, alpha));
+      gradient.addColorStop(1, this.hexToRgba(hex, 0));
+      return gradient;
+    };
+
     this.chartInstance = new Chart(ctx, {
       type: 'line',
       data: {
@@ -181,36 +370,41 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
         datasets: [
           {
             label: 'Approved',
-            data: this.timeline.map(t => t.approved),
-            borderColor: '#10B981',
-            backgroundColor: 'rgba(16,185,129,0.08)',
-            tension: 0.3,
+            data: last14.map(t => t.approved),
+            borderColor: ACTION_COLORS.approved,
+            backgroundColor: fill(ACTION_COLORS.approved, 0.25),
+            tension: 0.4,
             fill: true,
             pointRadius: 2,
+            pointBackgroundColor: ACTION_COLORS.approved,
           },
           {
             label: 'Sent Back',
-            data: this.timeline.map(t => t.sent_back),
-            borderColor: '#EF4444',
-            backgroundColor: 'rgba(239,68,68,0.08)',
-            tension: 0.3,
+            data: last14.map(t => t.sent_back),
+            borderColor: ACTION_COLORS.sent_back,
+            backgroundColor: fill(ACTION_COLORS.sent_back, 0.25),
+            tension: 0.4,
             fill: true,
             pointRadius: 2,
+            pointBackgroundColor: ACTION_COLORS.sent_back,
           },
           {
-            label: 'Pending',
-            data: this.timeline.map(t => t.pending),
-            borderColor: '#F59E0B',
-            backgroundColor: 'rgba(245,158,11,0.08)',
-            tension: 0.3,
+            label: 'Need Review',
+            data: last14.map(t => t.need_review),
+            borderColor: ACTION_COLORS.need_review,
+            backgroundColor: fill(ACTION_COLORS.need_review, 0.25),
+            tension: 0.4,
             fill: true,
             pointRadius: 2,
+            pointBackgroundColor: ACTION_COLORS.need_review,
           },
         ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        layout: { padding: { top: 4, right: 4, bottom: 0, left: 4 } },
+        animation: { duration: 700, easing: 'easeOutQuart' },
         interaction: { mode: 'index' as const, intersect: false },
         plugins: {
           legend: {
@@ -219,15 +413,168 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
           }
         },
         scales: {
-          x: { grid: { display: false }, ticks: { maxTicksLimit: 10, font: { size: 10 } } },
-          y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 }, grid: { color: '#F3F4F6' } }
+          x: { grid: { display: false }, ticks: { maxTicksLimit: 14, font: { size: 10 } } },
+          y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 }, grid: { color: 'rgba(255,255,255,0.06)' } }
         }
       }
     });
   }
 
+  private hexToRgba(hex: string, alpha: number): string {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+
   formatChartDate(dateStr: string): string {
     return new Date(dateStr).toLocaleDateString('en-MY', { day: '2-digit', month: 'short' });
+  }
+
+  // ── Chart 1: Review Outcome Distribution (doughnut) — review_records.
+  // action, period-scoped exactly like the KPI cards above since it
+  // reads the same stats.approved/sent_back/need_review. ──
+
+  renderOutcomeChart() {
+    if (!this.outcomeChartRef) return;
+    if (this.outcomeChartInstance) this.outcomeChartInstance.destroy();
+
+    const ctx = this.outcomeChartRef.nativeElement.getContext('2d');
+    this.outcomeChartInstance = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: ['Approved', 'Sent Back', 'Need Review'],
+        datasets: [{
+          data: [this.stats.approved || 0, this.stats.sent_back || 0, this.stats.need_review || 0],
+          backgroundColor: [ACTION_COLORS.approved, ACTION_COLORS.sent_back, ACTION_COLORS.need_review],
+          borderWidth: 0,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '68%',
+        animation: { duration: 700, easing: 'easeOutQuart' },
+        plugins: {
+          legend: { position: 'bottom' as const, labels: { boxWidth: 10, padding: 12, font: { size: 11 } } }
+        }
+      }
+    });
+  }
+
+  // ── Chart 2: Audit Findings Breakdown (horizontal bar, value labels)
+  // — combines three-way matching REVIEW count, authenticity FAIL
+  // count, and the anomaly type breakdown, all already loaded above.
+  // Rendered only once every source has actually resolved, so it never
+  // draws a partial/misleading breakdown while one of the three calls
+  // is still in flight. ──
+
+  private maybeRenderFindingsChart() {
+    if (!this.findingsChartRef || this.isLoadingSummary || !this.authenticityQuality || !this.anomalyByType) return;
+    if (this.findingsChartInstance) this.findingsChartInstance.destroy();
+
+    const rows = [
+      { label: 'Matching: Review Required', value: this.stats.match_review || 0, color: '#F45B69' },
+      { label: 'Authenticity: Failed',       value: this.authenticityQuality.failed, color: '#F45B69' },
+      { label: 'Anomaly: Unusual Amount',    value: this.anomalyByType.amount, color: '#F5B83D' },
+      { label: 'Anomaly: Round Amount',      value: this.anomalyByType.round, color: '#F5B83D' },
+      { label: 'Anomaly: Timing',            value: this.anomalyByType.weekend, color: '#F5B83D' },
+      { label: 'Anomaly: Duplicate',         value: this.anomalyByType.duplicate, color: '#F5B83D' },
+    ];
+
+    const ctx = this.findingsChartRef.nativeElement.getContext('2d');
+    this.findingsChartInstance = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: rows.map(r => r.label),
+        datasets: [{
+          data: rows.map(r => r.value),
+          backgroundColor: rows.map(r => r.color),
+          borderRadius: 4,
+          borderSkipped: false,
+          barThickness: 16,
+        }]
+      },
+      options: {
+        indexAxis: 'y' as const,
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 700, easing: 'easeOutQuart' },
+        layout: { padding: { right: 28 } },
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { beginAtZero: true, ticks: { precision: 0, font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+          y: { ticks: { font: { size: 10.5 } }, grid: { display: false } }
+        }
+      },
+      plugins: [valueLabelPlugin]
+    });
+  }
+
+  // ── Chart 3: Top Vendors by Review Activity (horizontal bar) — top 5
+  // vendors by reviewed transaction count, from a dedicated larger fetch
+  // of the SAME audit-trail endpoint (see vendorActivityEntries above). ──
+
+  loadVendorActivity() {
+    this.isLoadingVendorActivity = true;
+    const url = `${this.apiUrl}/auditor/report/audit-trail?action=all&limit=1000&offset=0`;
+    this.http.get<any>(url, { headers: this.getHeaders() }).subscribe({
+      next: (res) => {
+        this.vendorActivityEntries = res.entries || [];
+        this.isLoadingVendorActivity = false;
+        this.cdr.detectChanges();
+        setTimeout(() => this.renderVendorsChart(), 100);
+      },
+      error: () => {
+        this.vendorActivityEntries = [];
+        this.isLoadingVendorActivity = false;
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  get topVendors(): { vendor: string; count: number }[] {
+    const counts = new Map<string, number>();
+    for (const entry of this.vendorActivityEntries) {
+      const vendor = entry.vendor_name || 'Unknown vendor';
+      counts.set(vendor, (counts.get(vendor) || 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .map(([vendor, count]) => ({ vendor, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+  }
+
+  renderVendorsChart() {
+    if (!this.vendorsChartRef) return;
+    if (this.vendorsChartInstance) this.vendorsChartInstance.destroy();
+
+    const top = this.topVendors;
+    const ctx = this.vendorsChartRef.nativeElement.getContext('2d');
+    this.vendorsChartInstance = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: top.map(v => v.vendor),
+        datasets: [{
+          data: top.map(v => v.count),
+          backgroundColor: '#8B9BFF',
+          borderRadius: 4,
+          borderSkipped: false,
+          barThickness: 16,
+        }]
+      },
+      options: {
+        indexAxis: 'y' as const,
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 700, easing: 'easeOutQuart' },
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { beginAtZero: true, ticks: { precision: 0, font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+          y: { ticks: { font: { size: 10.5 } }, grid: { display: false } }
+        }
+      }
+    });
   }
 
   // ── Audit trail ──────────────────────────────────────────
@@ -346,6 +693,16 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
 
   nextReviewPage() {
     this.goToReviewPage(this.currentReviewPage + 1);
+  }
+
+  // Collapsed (default) view shows just the first 5 rows, no pagination
+  // controls; "View All" switches to the existing 10/page paginated view.
+  get displayedReviewActivity(): any[] {
+    return this.reviewActivityExpanded ? this.paginatedReviewActivity : this.recentActivity.slice(0, 5);
+  }
+
+  showAllReviewActivity() {
+    this.reviewActivityExpanded = true;
   }
 
   // Status shown alongside each Audit Trail entry / Recent Activity row

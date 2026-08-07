@@ -1806,15 +1806,19 @@ def get_report_summary():
 
         period_start = _period_start(period)
 
-        # ── Stats: approved/sent_back counted as events within the
-        # period; pending/exceptions are current-state snapshots (a
-        # "how many right now", not something a past period bounds). ──
+        # ── Stats: approved/sent_back/need_review counted as events
+        # within the period; pending/exceptions are current-state
+        # snapshots (a "how many right now", not something a past period
+        # bounds). need_review added alongside approved/returned (Report
+        # dashboard redesign) purely so the new Review Outcome
+        # Distribution chart has a real, period-scoped count to show —
+        # approved/sent_back's own values are computed exactly as before. ──
         if period_start:
             cursor.execute(
                 '''SELECT rr.action, COUNT(*) AS cnt
                    FROM review_records rr
                    JOIN users u ON rr.reviewed_by = u.user_id
-                   WHERE u.role = 'auditor' AND rr.action IN ('approved', 'returned')
+                   WHERE u.role = 'auditor' AND rr.action IN ('approved', 'returned', 'need_review')
                      AND rr.reviewed_at >= %s
                    GROUP BY rr.action''',
                 (period_start,)
@@ -1824,10 +1828,37 @@ def get_report_summary():
                 '''SELECT rr.action, COUNT(*) AS cnt
                    FROM review_records rr
                    JOIN users u ON rr.reviewed_by = u.user_id
-                   WHERE u.role = 'auditor' AND rr.action IN ('approved', 'returned')
+                   WHERE u.role = 'auditor' AND rr.action IN ('approved', 'returned', 'need_review')
                    GROUP BY rr.action'''
             )
         action_counts = {row['action']: row['cnt'] for row in cursor.fetchall()}
+
+        # Average Review Time (Report dashboard redesign) — mean elapsed
+        # time between a document's upload and its approve/send-back
+        # decision, for the SAME auditor review_records rows/period
+        # counted above. A separate, additive query (not folded into the
+        # action_counts query above) so approved/sent_back/need_review
+        # stay computed exactly as they were. NULL (no reviewed documents
+        # in this period) reported as None, not a fabricated 0. Each
+        # row's duration is floored at 0 (GREATEST) before averaging —
+        # verified against real local data: a handful of older test-
+        # fixture rows have reviewed_at earlier than uploaded_at (not
+        # possible via the real upload-then-review workflow, but present
+        # in seeded/fixture data), which without the floor drags the
+        # whole average negative.
+        avg_review_time_params = [period_start] if period_start else []
+        avg_review_time_where = "AND rr.reviewed_at >= %s" if period_start else ""
+        cursor.execute(
+            f'''SELECT AVG(GREATEST(EXTRACT(EPOCH FROM (rr.reviewed_at - d.uploaded_at)), 0)) AS avg_seconds
+               FROM review_records rr
+               JOIN users u ON rr.reviewed_by = u.user_id
+               JOIN documents d ON rr.document_id = d.document_id
+               WHERE u.role = 'auditor' AND rr.action IN ('approved', 'returned')
+                 {avg_review_time_where}''',
+            avg_review_time_params
+        )
+        avg_seconds = cursor.fetchone()['avg_seconds']
+        avg_review_time_hours = round(float(avg_seconds) / 3600, 1) if avg_seconds is not None else None
 
         cursor.execute(
             "SELECT COUNT(*) AS cnt FROM documents WHERE status IN ('under_review', 'resubmitted')"
@@ -1885,10 +1916,12 @@ def get_report_summary():
         stats = {
             'approved':      action_counts.get('approved', 0),
             'sent_back':     action_counts.get('returned', 0),
+            'need_review':   action_counts.get('need_review', 0),
             'pending':       pending,
             'exceptions':    exception_count,
             'match_pass':    match_pass_count,
             'match_review':  match_review_count,
+            'avg_review_time_hours': avg_review_time_hours,
             'enterprise_matching_coverage': {
                 'single_document_matches': single_document_match_count,
                 'multi_document_matches':  multi_document_match_count,

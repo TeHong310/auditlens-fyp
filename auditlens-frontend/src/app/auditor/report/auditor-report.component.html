@@ -17,35 +17,35 @@
 
   <!-- Stat Cards -->
   <div class="stats-grid">
-    <div class="stat-card stat-approved">
-      <span class="stat-icon"><i class="ph-duotone ph-check-circle"></i></span>
+    <div class="stat-card stat-exceptions">
+      <span class="stat-icon"><i class="ph-duotone ph-files"></i></span>
       <div>
-        <p class="stat-value">{{ isLoadingSummary ? '…' : stats.approved }}</p>
-        <p class="stat-label">Approved Documents</p>
-        <p class="stat-subtext">Reviewed and finalized</p>
+        <p class="stat-value">{{ isLoadingSummary ? '…' : totalReviewedDocuments }}</p>
+        <p class="stat-label">Total Reviewed Documents</p>
+        <p class="stat-subtext">Approved + Sent Back this period</p>
       </div>
     </div>
-    <div class="stat-card stat-sent-back">
-      <span class="stat-icon"><i class="ph-duotone ph-arrow-u-up-left"></i></span>
+    <div class="stat-card stat-approved">
+      <span class="stat-icon"><i class="ph-duotone ph-seal-check"></i></span>
       <div>
-        <p class="stat-value">{{ isLoadingSummary ? '…' : stats.sent_back }}</p>
-        <p class="stat-label">Sent Back</p>
-        <p class="stat-subtext">Returned to Finance</p>
+        <p class="stat-value">{{ isLoadingSummary ? '…' : approvalRateLabel }}</p>
+        <p class="stat-label">Approval Rate</p>
+        <p class="stat-subtext">Share of reviews approved</p>
       </div>
     </div>
     <div class="stat-card stat-pending">
-      <span class="stat-icon"><i class="ph-duotone ph-hourglass-medium"></i></span>
+      <span class="stat-icon"><i class="ph-duotone ph-timer"></i></span>
       <div>
-        <p class="stat-value">{{ isLoadingSummary ? '…' : stats.pending }}</p>
-        <p class="stat-label">Pending Review</p>
-        <p class="stat-subtext">Require auditor action</p>
+        <p class="stat-value">{{ isLoadingSummary ? '…' : avgReviewTimeLabel }}</p>
+        <p class="stat-label">Average Review Time</p>
+        <p class="stat-subtext">Upload to auditor decision</p>
       </div>
     </div>
-    <div class="stat-card stat-exceptions">
+    <div class="stat-card stat-sent-back">
       <span class="stat-icon"><i class="ph-duotone ph-siren"></i></span>
       <div>
-        <p class="stat-value">{{ isLoadingSummary ? '…' : stats.exceptions }}</p>
-        <p class="stat-label">Open Exceptions</p>
+        <p class="stat-value">{{ isLoadingSummary ? '…' : riskFindingsCount }}</p>
+        <p class="stat-label">Risk Findings</p>
         <p class="stat-subtext">Mismatches &amp; flags</p>
       </div>
     </div>
@@ -61,15 +61,14 @@
       <div class="quality-block">
         <p class="quality-block-title"><i class="ph-duotone ph-scales"></i> Three-way Matching</p>
         <ng-container *ngIf="hasMatchQuality; else qualityEmpty">
-          <div class="quality-row">
-            <span class="quality-dot quality-dot-pass"></span>
-            <span class="quality-row-label">PASS</span>
-            <span class="quality-row-value">{{ stats.match_pass }}</span>
-          </div>
-          <div class="quality-row">
-            <span class="quality-dot quality-dot-review"></span>
-            <span class="quality-row-label">REVIEW</span>
-            <span class="quality-row-value">{{ stats.match_review }}</span>
+          <div class="donut-wrap">
+            <div class="donut-ring" [style.background]="matchingDonutGradient">
+              <div class="donut-hole"><span class="donut-total">{{ matchingTotal }}</span></div>
+            </div>
+            <div class="donut-legend">
+              <div class="legend-row"><span class="legend-dot" style="background:var(--success)"></span><span class="legend-label">PASS</span><span class="legend-value">{{ stats.match_pass }}</span></div>
+              <div class="legend-row"><span class="legend-dot" style="background:var(--danger)"></span><span class="legend-label">REVIEW</span><span class="legend-value">{{ stats.match_review }}</span></div>
+            </div>
           </div>
         </ng-container>
       </div>
@@ -78,15 +77,15 @@
       <div class="quality-block">
         <p class="quality-block-title"><i class="ph-duotone ph-fingerprint"></i> Authenticity</p>
         <ng-container *ngIf="authenticityQuality; else qualityEmpty">
-          <div class="quality-row">
-            <span class="quality-dot quality-dot-pass"></span>
-            <span class="quality-row-label">Passed</span>
-            <span class="quality-row-value">{{ authenticityQuality.passed }}</span>
-          </div>
-          <div class="quality-row">
-            <span class="quality-dot quality-dot-warning"></span>
-            <span class="quality-row-label">Warning</span>
-            <span class="quality-row-value">{{ authenticityQuality.warning }}</span>
+          <div class="donut-wrap">
+            <div class="donut-ring" [style.background]="authenticityDonutGradient">
+              <div class="donut-hole"><span class="donut-total">{{ authenticityTotal }}</span></div>
+            </div>
+            <div class="donut-legend">
+              <div class="legend-row"><span class="legend-dot" style="background:var(--success)"></span><span class="legend-label">Passed</span><span class="legend-value">{{ authenticityQuality.passed }}</span></div>
+              <div class="legend-row"><span class="legend-dot" style="background:var(--warning)"></span><span class="legend-label">Warning</span><span class="legend-value">{{ authenticityQuality.warning }}</span></div>
+              <div class="legend-row"><span class="legend-dot" style="background:var(--danger)"></span><span class="legend-label">Failed</span><span class="legend-value">{{ authenticityQuality.failed }}</span></div>
+            </div>
           </div>
         </ng-container>
       </div>
@@ -95,15 +94,15 @@
       <div class="quality-block">
         <p class="quality-block-title"><i class="ph-duotone ph-warning-circle"></i> Anomaly</p>
         <ng-container *ngIf="anomalyQuality; else qualityEmpty">
-          <div class="quality-row">
-            <span class="quality-dot quality-dot-review"></span>
-            <span class="quality-row-label">High Risk</span>
-            <span class="quality-row-value">{{ anomalyQuality.high }}</span>
-          </div>
-          <div class="quality-row">
-            <span class="quality-dot quality-dot-warning"></span>
-            <span class="quality-row-label">Medium Risk</span>
-            <span class="quality-row-value">{{ anomalyQuality.medium }}</span>
+          <div class="donut-wrap">
+            <div class="donut-ring" [style.background]="anomalyDonutGradient">
+              <div class="donut-hole"><span class="donut-total">{{ anomalyTotal }}</span></div>
+            </div>
+            <div class="donut-legend">
+              <div class="legend-row"><span class="legend-dot" style="background:var(--danger)"></span><span class="legend-label">High</span><span class="legend-value">{{ anomalyQuality.high }}</span></div>
+              <div class="legend-row"><span class="legend-dot" style="background:var(--warning)"></span><span class="legend-label">Medium</span><span class="legend-value">{{ anomalyQuality.medium }}</span></div>
+              <div class="legend-row"><span class="legend-dot" style="background:var(--success)"></span><span class="legend-label">Low</span><span class="legend-value">{{ anomalyQuality.low }}</span></div>
+            </div>
           </div>
         </ng-container>
       </div>
@@ -117,14 +116,44 @@
   <!-- Chart -->
   <div class="chart-card">
     <h2 class="section-title"><i class="ph-duotone ph-chart-line"></i> Audit Activity Trend</h2>
+    <p class="section-subtitle">Last 14 days</p>
     <div class="chart-wrap">
       <canvas #timelineChart></canvas>
     </div>
   </div>
 
+  <!-- Analytics Charts -->
+  <div class="analytics-row">
+    <div class="chart-card analytics-card-narrow">
+      <h2 class="section-title"><i class="ph-duotone ph-chart-donut"></i> Review Outcome Distribution</h2>
+      <div class="chart-wrap chart-wrap-small">
+        <canvas #outcomeChart></canvas>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <h2 class="section-title"><i class="ph-duotone ph-flag"></i> Audit Findings Breakdown</h2>
+      <div class="chart-wrap chart-wrap-small">
+        <canvas #findingsChart></canvas>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <h2 class="section-title"><i class="ph-duotone ph-storefront"></i> Top Vendors by Review Activity</h2>
+      <div class="chart-wrap chart-wrap-small">
+        <canvas #vendorsChart></canvas>
+      </div>
+    </div>
+  </div>
+
   <!-- Recent Review Activity -->
   <div class="activity-card" *ngIf="recentActivity.length">
-    <h2 class="section-title"><i class="ph-duotone ph-list-checks"></i> Recent Review Activity</h2>
+    <div class="activity-header">
+      <h2 class="section-title"><i class="ph-duotone ph-list-checks"></i> Recent Review Activity</h2>
+      <button class="btn-view-all" *ngIf="!reviewActivityExpanded && recentActivity.length > 5" (click)="showAllReviewActivity()">
+        View All <i class="ph-duotone ph-arrow-right"></i>
+      </button>
+    </div>
     <div class="activity-table-wrap">
       <table class="activity-table">
         <thead>
@@ -136,7 +165,7 @@
           </tr>
         </thead>
         <tbody>
-          <tr *ngFor="let entry of paginatedReviewActivity" (click)="viewInvoice(entry)">
+          <tr *ngFor="let entry of displayedReviewActivity" (click)="viewInvoice(entry)">
             <td class="activity-doc">{{ entry.invoice_no || '-' }}</td>
             <td>{{ entry.vendor_name || '-' }}</td>
             <td>
@@ -150,7 +179,7 @@
       </table>
     </div>
 
-    <div class="pagination-row" *ngIf="recentActivity.length > 0">
+    <div class="pagination-row" *ngIf="reviewActivityExpanded && recentActivity.length > 0">
       <button class="page-btn page-nav" [disabled]="currentReviewPage === 1" (click)="prevReviewPage()">← Previous</button>
       <button *ngFor="let p of reviewPageNumbers" class="page-btn" [class.active]="p === currentReviewPage" (click)="goToReviewPage(p)">{{ p }}</button>
       <button class="page-btn page-nav" [disabled]="currentReviewPage === totalReviewPages" (click)="nextReviewPage()">Next →</button>
