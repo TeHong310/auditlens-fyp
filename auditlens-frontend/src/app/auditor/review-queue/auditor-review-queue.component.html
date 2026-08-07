@@ -84,7 +84,7 @@
 
     <div class="search-bar">
       <i class="ph-duotone ph-magnifying-glass" style="font-size:15px; color:var(--text-muted);"></i>
-      <input type="text" placeholder="Search transaction package or supplier..." class="search-input" [(ngModel)]="searchText" />
+      <input type="text" placeholder="Search transaction package or supplier..." class="search-input" [(ngModel)]="searchText" (ngModelChange)="onSearchChange()" />
     </div>
 
     <!-- Table -->
@@ -108,7 +108,7 @@
           <tr *ngIf="!isLoading && filteredTransactions.length === 0">
             <td colspan="9" class="empty-row">No transactions match this filter.</td>
           </tr>
-          <tr *ngFor="let txn of filteredTransactions" (click)="goToRecord(txn)">
+          <tr *ngFor="let txn of paginatedTransactions" (click)="goToRecord(txn)">
             <td class="package-name">{{ txn.package_name || '-' }}</td>
             <td>{{ txn.supplier || 'Unknown' }}</td>
             <td>{{ txn.document_count }} document{{ txn.document_count === 1 ? '' : 's' }}</td>
@@ -129,6 +129,12 @@
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <div class="pagination-row" *ngIf="!isLoading && filteredTransactions.length > 0">
+      <button class="page-btn page-nav" [disabled]="currentPage === 1" (click)="prevPage()">← Previous</button>
+      <button *ngFor="let p of pageNumbers" class="page-btn" [class.active]="p === currentPage" (click)="goToPage(p)">{{ p }}</button>
+      <button class="page-btn page-nav" [disabled]="currentPage === totalPages" (click)="nextPage()">Next →</button>
     </div>
 
   </div>
