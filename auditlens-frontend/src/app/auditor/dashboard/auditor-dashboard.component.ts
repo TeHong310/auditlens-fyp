@@ -396,12 +396,12 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     return this.trendDays.some((t: any) => (t.approved || 0) + (t.need_review || 0) + (t.sent_back || 0) > 0);
   }
 
-  // Grouped bar chart (Approved / Need Review / Sent Back side-by-side
-  // per date) with a Cumulative Reviews line overlay — each bar shows
-  // its own daily category, the line shows the running total across
-  // the 7-day window (not a same-day total, which sat right on top of
-  // the bar values and read as a misleading extra bar-height rather
-  // than a distinct trend signal).
+  // Grouped bar chart only (Approved / Need Review / Sent Back side-by-
+  // side per date) — no line overlay. Both the earlier "Total
+  // Reviewed" (same-day sum) and "Cumulative Reviews" (running sum)
+  // lines ended up competing visually with the bars rather than adding
+  // a clear signal; "Total decisions" is still surfaced, just in the
+  // tooltip instead of as a plotted series.
   renderTrendChart() {
     if (!this.viewReady || !this.trendChartRef || !this.reportSummaryLoaded || !this.reportSummary) return;
     if (this.trendChartInstance) this.trendChartInstance.destroy();
@@ -412,14 +412,18 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     const approved = days.map(t => t.approved || 0);
     const needReview = days.map(t => t.need_review || 0);
     const sentBack = days.map(t => t.sent_back || 0);
-    // Cumulative Reviews = running sum, across the visible window, of
-    // each day's 3 review_records action counts added together — each
-    // review_records row has exactly one action, counted once via the
-    // backend's GROUP BY day/action, so each day's own contribution is
-    // a plain sum of 3 disjoint categories (never a double count)
-    // before it's carried forward into the running total.
-    let runningTotal = 0;
-    const cumulativeReviews = days.map((_: any, i: number) => (runningTotal += approved[i] + needReview[i] + sentBack[i]));
+    // Total decisions per day — each review_records row has exactly one
+    // action, counted once via the backend's GROUP BY day/action, so
+    // this is a plain sum of 3 disjoint categories, never a double
+    // count. Used by the tooltip only, not plotted as its own series.
+    const totalDecisions = days.map((_: any, i: number) => approved[i] + needReview[i] + sentBack[i]);
+    // suggestedMax: a tight-but-breathing-room ceiling so a quiet day
+    // (max count of 1-2) still reads as a substantial bar instead of a
+    // sliver lost in a tall, mostly-empty axis — floored at 4 so even
+    // an all-zero-or-one window doesn't look cramped, and always at
+    // least 1 above the tallest bar so it never touches the top edge.
+    const maxCount = Math.max(1, ...approved, ...needReview, ...sentBack);
+    const suggestedMax = Math.max(maxCount + 1, 4);
 
     const ctx = this.trendChartRef.nativeElement.getContext('2d');
 
@@ -474,13 +478,6 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
             borderRadius: 3, borderSkipped: false,
             categoryPercentage: 0.55, barPercentage: 0.75,
           },
-          {
-            type: 'line', label: 'Cumulative Reviews', data: cumulativeReviews,
-            borderColor: CHART_PALETTE.violet, backgroundColor: 'transparent', fill: false,
-            borderWidth: 2, tension: 0.35,
-            pointRadius: 2.5, pointHoverRadius: 5,
-            pointBackgroundColor: CHART_PALETTE.violet, pointBorderColor: CHART_PALETTE.violet,
-          },
         ]
       },
       options: {
@@ -494,6 +491,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
             callbacks: {
               title: (items: any[]) => items[0]?.label || '',
               label: (item: any) => `${item.dataset.label}: ${item.formattedValue}`,
+              afterBody: (items: any[]) => [`Total decisions: ${totalDecisions[items[0]?.dataIndex ?? 0]}`],
             },
             padding: 8,
             titleFont: { size: 11, weight: 'bold' as const },
@@ -502,7 +500,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         },
         scales: {
           x: { display: true, grid: { display: false }, ticks: { font: { size: 9 } } },
-          y: { display: false, beginAtZero: true },
+          y: { display: false, beginAtZero: true, suggestedMax },
         }
       }
     });
