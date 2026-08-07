@@ -7,21 +7,6 @@ import { environment } from '../../../environments/environment';
 
 Chart.register(...registerables);
 
-// exception_type -> stable short label for the Exception Categories
-// chart. The literal type strings mirror routes/auditor.py::
-// _classify_exception() exactly (mismatch / review / sent_back /
-// missing_document / low_confidence) - display-only, no new
-// classification. (exception_label from the API is per-instance,
-// e.g. "Low OCR Confidence (72%)", so it isn't stable enough to group
-// a chart axis by - this map is for the chart only.)
-const EXCEPTION_TYPE_LABELS: Record<string, string> = {
-  mismatch: 'Matching Mismatch',
-  review: 'Review Required',
-  sent_back: 'Sent Back to Finance',
-  missing_document: 'Missing Documents',
-  low_confidence: 'Low OCR Confidence',
-};
-
 // Shared chart palette — richer/more varied than the app's 4 flat
 // semantic tokens, used only for chart decoration (display only, no
 // data/logic implication). Family grouping keeps status meaning
@@ -50,16 +35,17 @@ const CHART_PALETTE = {
 // Matching V2 dispatcher. No calculation happens in this component.
 //
 // Audit Command Centre redesign — data loading is intentionally split
-// into ONE primary call (unchanged: loadQueue(), same endpoint, same
-// isLoading gate, same stat computation as before this redesign) and
-// FOUR secondary calls that fire in parallel alongside it, each
-// rendering its own chart independently the moment its own response
-// arrives — none of them block the primary KPI/table render, and none
-// of them re-fire on their own (no polling/interval anywhere; each is
-// called exactly once, from ngOnInit, for the lifetime of this
-// component instance). Status Breakdown and the Priority Review Queue
-// are DERIVED from the already-loaded transactions array rather than
-// fetched separately, to avoid a duplicate/overlapping request.
+// into ONE primary call (loadQueue(), same endpoint, same isLoading
+// gate) and 2 secondary calls (report/summary for Audit Decision
+// Trend, authenticity for Authenticity Outcomes) that fire in parallel
+// alongside it — none of them block the primary KPI/table render, and
+// none of them re-fire on their own (no polling/interval anywhere;
+// each is called exactly once, from ngOnInit, for the lifetime of this
+// component instance). Status Breakdown, the Priority Review Queue,
+// Review Workload, Audit Findings Overview, and Transaction Risk
+// Distribution are all DERIVED from the already-loaded transactions
+// array (Findings Overview also reads the authenticity call's own
+// result) rather than fetched separately.
 @Component({
   selector: 'app-auditor-dashboard',
   standalone: true,
@@ -90,17 +76,9 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   // ── Secondary sections: independent load state, each fetched
   // exactly once in ngOnInit, none blocking the primary render ──
   reportSummaryLoaded = false;
-  exceptionsLoaded = false;
   authenticityLoaded = false;
-  anomalyStatsLoaded = false;
 
-  exceptionCategories: { label: string; value: number }[] = [];
   authenticityOutcomes = { pass: 0, warning: 0, fail: 0 };
-  // Anomaly TYPE breakdown (not severity) — powers the Risk
-  // Distribution radar chart. Read from the SAME /anomalies/stats
-  // response already fetched below (its by_type field was simply
-  // unused before this redesign) — no new request.
-  anomalyTypeDistribution = { amount: 0, round: 0, weekend: 0, duplicate: 0 };
 
   private viewReady = false;
   private trendChartInstance: any = null;
@@ -118,16 +96,19 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   ) {}
 
   ngOnInit() {
-    // All 5 requests fire together, in parallel — the primary call
-    // (loadQueue) is not chained behind the other 4, and none of the
-    // 4 secondary calls are chained behind each other. Each is called
-    // exactly once for this component's lifetime; nothing here polls
-    // or re-fires on an interval.
+    // 3 requests fire together, in parallel — none chained behind
+    // another. Each is called exactly once for this component's
+    // lifetime; nothing here polls or re-fires on an interval. Review
+    // Workload / Audit Findings Overview / Transaction Risk
+    // Distribution are all now derived from loadQueue()'s own
+    // transactions array (Findings Overview also reads
+    // authenticityOutcomes once loadAuthenticity() resolves) — the
+    // earlier separate GET /auditor/exceptions and GET /anomalies/stats
+    // calls are gone, since nothing on this page reads their data
+    // anymore.
     this.loadQueue();
     this.loadReportSummary();
-    this.loadExceptions();
     this.loadAuthenticity();
-    this.loadAnomalyStats();
   }
 
   ngAfterViewInit() {
@@ -169,6 +150,9 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         this.computeStatusBreakdown();
         this.computePriorityItems();
         this.cdr.detectChanges();
+        this.renderVolumeChart();
+        this.renderExceptionChart();
+        this.renderRiskChart();
       },
       error: () => { this.isLoading = false; }
     });
@@ -255,7 +239,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
       .slice(0, 5);
   }
 
-  // ── Secondary: Audit Trend + Review Volume (report/summary) ──
+  // ── Secondary: Audit Decision Trend (report/summary) ──
   reportSummary: any = null;
 
   loadReportSummary() {
@@ -265,33 +249,16 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         this.reportSummaryLoaded = true;
         this.cdr.detectChanges();
         this.renderTrendChart();
-        this.renderVolumeChart();
       },
       error: () => { this.reportSummaryLoaded = true; }
     });
   }
 
-  // ── Secondary: Exception Categories ──
-  loadExceptions() {
-    this.http.get<any[]>(`${this.apiUrl}/auditor/exceptions`, { headers: this.getHeaders() }).subscribe({
-      next: (res) => {
-        const list = res || [];
-        const counts: Record<string, number> = {};
-        for (const e of list) {
-          counts[e.exception_type] = (counts[e.exception_type] || 0) + 1;
-        }
-        this.exceptionCategories = Object.entries(counts)
-          .map(([type, value]) => ({ label: EXCEPTION_TYPE_LABELS[type] || type, value }))
-          .sort((a, b) => b.value - a.value);
-        this.exceptionsLoaded = true;
-        this.cdr.detectChanges();
-        this.renderExceptionChart();
-      },
-      error: () => { this.exceptionsLoaded = true; }
-    });
-  }
-
-  // ── Secondary: Authenticity Outcomes ──
+  // ── Secondary: Authenticity Outcomes (also feeds Audit Findings
+  // Overview's "Authenticity Risk" bar — renderExceptionChart() is
+  // re-triggered here too, since that chart depends on BOTH this data
+  // and the transactions array from loadQueue(), whichever resolves
+  // second is what actually draws it). ──
   loadAuthenticity() {
     this.http.get<any[]>(`${this.apiUrl}/authenticity`, { headers: this.getHeaders() }).subscribe({
       next: (res) => {
@@ -306,27 +273,9 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         this.authenticityLoaded = true;
         this.cdr.detectChanges();
         this.renderAuthChart();
+        this.renderExceptionChart();
       },
       error: () => { this.authenticityLoaded = true; }
-    });
-  }
-
-  // ── Secondary: Risk Distribution (anomaly type — radar) ──
-  loadAnomalyStats() {
-    this.http.get<any>(`${this.apiUrl}/anomalies/stats`, { headers: this.getHeaders() }).subscribe({
-      next: (res) => {
-        const byType = res?.by_type || {};
-        this.anomalyTypeDistribution = {
-          amount: byType.amount || 0,
-          round: byType.round || 0,
-          weekend: byType.weekend || 0,
-          duplicate: byType.duplicate || 0,
-        };
-        this.anomalyStatsLoaded = true;
-        this.cdr.detectChanges();
-        this.renderRiskChart();
-      },
-      error: () => { this.anomalyStatsLoaded = true; }
     });
   }
 
@@ -506,37 +455,78 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     });
   }
 
+  // Shared "grow from zero, staggered" load animation for the 3 charts
+  // redesigned here (Review Workload / Audit Findings Overview /
+  // Transaction Risk Distribution) — the same Chart.js delay-based
+  // approach Audit Decision Trend already uses, duplicated locally
+  // rather than factored out, since that chart is explicitly out of
+  // scope for this change and shouldn't be touched to share it.
+  private chartLoadAnimation(): any {
+    const reducedMotion = typeof window !== 'undefined' && !!window.matchMedia &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reducedMotion) return { duration: 0 };
+    return {
+      duration: 900,
+      easing: 'easeOutQuart',
+      delay: (context: any) => {
+        if (context.type === 'data' && context.mode === 'default' && !context.dropped) {
+          context.dropped = true;
+          return context.dataIndex * 60 + context.datasetIndex * 80;
+        }
+        return 0;
+      },
+    };
+  }
+
+  // Review Workload — current auditor workload distribution (a live
+  // snapshot of the SAME transactions array the queue table/Priority
+  // Queue already use, not a date-range report), mutually-exclusive by
+  // each package's own latest_review_action: never reviewed or
+  // resubmitted-awaiting-a-look counts as Pending Review.
+  get workloadDistribution() {
+    let pending = 0, needReview = 0, completed = 0, sentBack = 0;
+    for (const t of this.transactions) {
+      const action = t.latest_review_action;
+      if (action === 'approved' || action === 'closed') completed++;
+      else if (action === 'returned') sentBack++;
+      else if (action === 'need_review') needReview++;
+      else pending++;
+    }
+    return { pending, needReview, completed, sentBack };
+  }
+
   renderVolumeChart() {
-    if (!this.viewReady || !this.volumeChartRef || !this.reportSummaryLoaded || !this.reportSummary) return;
+    if (!this.viewReady || !this.volumeChartRef || this.isLoading) return;
     if (this.volumeChartInstance) this.volumeChartInstance.destroy();
 
-    const timeline: any[] = this.reportSummary.timeline || [];
-    const recent = timeline.slice(-14);
-    const labels = recent.map(t => this.formatShortDate(t.date));
+    const w = this.workloadDistribution;
+    const cats = [
+      { label: 'Pending Review', value: w.pending, color: CHART_PALETTE.blue },
+      { label: 'Need Review', value: w.needReview, color: CHART_PALETTE.amber },
+      { label: 'Completed', value: w.completed, color: CHART_PALETTE.teal },
+      { label: 'Sent Back', value: w.sentBack, color: CHART_PALETTE.coral },
+    ];
 
     const ctx = this.volumeChartRef.nativeElement.getContext('2d');
-    const barGradient = ctx.createLinearGradient(0, 0, 0, 100);
-    barGradient.addColorStop(0, CHART_PALETTE.violet);
-    barGradient.addColorStop(1, CHART_PALETTE.blue);
-
     this.volumeChartInstance = new Chart(ctx, {
       type: 'bar',
       data: {
-        labels,
+        labels: cats.map(c => c.label),
         datasets: [{
-          data: recent.map(t => t.pending),
-          backgroundColor: barGradient,
-          hoverBackgroundColor: CHART_PALETTE.cyan,
-          borderRadius: 5, borderSkipped: false,
+          data: cats.map(c => c.value),
+          backgroundColor: cats.map(c => c.color),
+          borderRadius: 4, borderSkipped: false,
         }]
       },
       options: {
+        indexAxis: 'y' as const,
         responsive: true,
         maintainAspectRatio: false,
+        animation: this.chartLoadAnimation(),
         plugins: { legend: { display: false } },
         scales: {
-          y: { display: false, beginAtZero: true },
-          x: { display: false }
+          x: { display: false, beginAtZero: true },
+          y: { ticks: { font: { size: 10.5 }, color: '#E6E7EE' }, grid: { display: false } }
         }
       }
     });
@@ -582,15 +572,46 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     });
   }
 
+  // Audit Findings Overview — detected findings across all reviewed
+  // transactions, reusing 3 existing signal sources: three-way
+  // matching (Missing Documents, Amount Difference, Quantity
+  // Difference — the latter two from has_amount_mismatch/has_quantity_
+  // mismatch, a small backend addition to GET /auditor/transactions
+  // that just reads 2 already-fetched match_result keys, no new query),
+  // authenticity results (Authenticity Risk, reusing authenticityOutcomes.
+  // fail — the SAME aggregate the untouched Authenticity Outcomes chart
+  // already computes from GET /authenticity), and anomaly detection
+  // (Anomaly Detected, reusing has_material_finding). A package can
+  // contribute to more than one bar (e.g. missing a GR AND flagged by
+  // an anomaly) — this is a findings-by-type count, not a mutually-
+  // exclusive bucket like Review Workload above.
+  get findingsOverview(): { label: string; value: number }[] {
+    let missingDocs = 0, amountDiff = 0, qtyDiff = 0, anomalyDetected = 0;
+    for (const t of this.transactions) {
+      if (!t.po_count || !t.gr_count) missingDocs++;
+      if (t.has_amount_mismatch) amountDiff++;
+      if (t.has_quantity_mismatch) qtyDiff++;
+      if (t.has_material_finding) anomalyDetected++;
+    }
+    return [
+      { label: 'Missing Documents', value: missingDocs },
+      { label: 'Amount Difference', value: amountDiff },
+      { label: 'Quantity Difference', value: qtyDiff },
+      { label: 'Authenticity Risk', value: this.authenticityOutcomes.fail },
+      { label: 'Anomaly Detected', value: anomalyDetected },
+    ].filter(c => c.value > 0).sort((a, b) => b.value - a.value);
+  }
+
   renderExceptionChart() {
-    if (!this.viewReady || !this.exceptionChartRef || !this.exceptionsLoaded) return;
+    if (!this.viewReady || !this.exceptionChartRef || this.isLoading || !this.authenticityLoaded) return;
     if (this.exceptionChartInstance) this.exceptionChartInstance.destroy();
 
-    // Categorical palette — these are different exception TYPES, not a
-    // severity ranking, so a varied hue per bar (rather than one flat
-    // color) reads more clearly and matches the richer dashboard style.
+    const cats = this.findingsOverview;
+    if (!cats.length) return; // canvas isn't in the DOM here (*ngIf) — the "No findings detected" empty state shows instead
+
+    // Categorical palette — these are different finding TYPES, not a
+    // severity ranking, so a varied hue per bar reads more clearly.
     const categoryColors = [CHART_PALETTE.violet, CHART_PALETTE.cyan, CHART_PALETTE.blue, CHART_PALETTE.amber, CHART_PALETTE.pink];
-    const cats = this.exceptionCategories;
     const ctx = this.exceptionChartRef.nativeElement.getContext('2d');
     this.exceptionChartInstance = new Chart(ctx, {
       type: 'bar',
@@ -606,6 +627,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         indexAxis: 'y' as const,
         responsive: true,
         maintainAspectRatio: false,
+        animation: this.chartLoadAnimation(),
         plugins: { legend: { display: false } },
         scales: {
           x: { display: false, beginAtZero: true },
@@ -615,43 +637,44 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     });
   }
 
+  // Transaction Risk Distribution — Low/Medium/High, reusing
+  // riskLevelFor() (the SAME existing transaction risk classification
+  // already driving the queue table's/Priority Queue's risk badges),
+  // not the earlier anomaly-TYPE breakdown.
+  get riskDistribution() {
+    let low = 0, medium = 0, high = 0;
+    for (const t of this.transactions) {
+      const level = this.riskLevelFor(t);
+      if (level === 'HIGH') high++;
+      else if (level === 'MEDIUM') medium++;
+      else low++;
+    }
+    return { low, medium, high };
+  }
+
   renderRiskChart() {
-    if (!this.viewReady || !this.riskChartRef || !this.anomalyStatsLoaded) return;
+    if (!this.viewReady || !this.riskChartRef || this.isLoading) return;
     if (this.riskChartInstance) this.riskChartInstance.destroy();
 
-    // Polar area — a colorful, clearly-readable alternative to a radar
-    // for 4 categorical values (each anomaly TYPE gets its own hue and
-    // slice size shows its count), same by_type data as before.
-    const t = this.anomalyTypeDistribution;
+    const r = this.riskDistribution;
     const ctx = this.riskChartRef.nativeElement.getContext('2d');
     this.riskChartInstance = new Chart(ctx, {
-      type: 'polarArea',
+      type: 'doughnut',
       data: {
-        labels: ['Amount', 'Round Number', 'Weekend', 'Duplicate'],
+        labels: ['Low Risk', 'Medium Risk', 'High Risk'],
         datasets: [{
-          data: [t.amount, t.round, t.weekend, t.duplicate],
-          backgroundColor: [
-            'rgba(139, 92, 246, 0.75)',
-            'rgba(34, 211, 238, 0.75)',
-            'rgba(251, 191, 36, 0.75)',
-            'rgba(244, 114, 182, 0.75)',
-          ],
-          borderColor: '#14151E',
-          borderWidth: 2,
+          data: [r.low, r.medium, r.high],
+          backgroundColor: [CHART_PALETTE.teal, CHART_PALETTE.amber, CHART_PALETTE.red],
+          borderWidth: 0, borderRadius: 6, spacing: 3, hoverOffset: 6,
         }]
       },
       options: {
+        cutout: '65%',
         responsive: true,
         maintainAspectRatio: false,
+        animation: this.chartLoadAnimation(),
         plugins: {
           legend: { display: true, position: 'bottom' as const, labels: { boxWidth: 8, padding: 6, font: { size: 10 } } }
-        },
-        scales: {
-          r: {
-            beginAtZero: true,
-            ticks: { display: false, backdropColor: 'transparent' },
-            grid: { color: 'rgba(255,255,255,0.08)' },
-          }
         }
       }
     });

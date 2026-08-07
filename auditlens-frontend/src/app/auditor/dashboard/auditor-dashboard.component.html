@@ -75,11 +75,11 @@
     </div>
 
     <div class="chart-card">
-      <p class="chart-title">Review Volume</p>
-      <p class="chart-subtitle">Items added, last 14 days</p>
+      <p class="chart-title">Review Workload</p>
+      <p class="chart-subtitle">Current auditor workload distribution</p>
       <div class="chart-body">
         <canvas #volumeChart></canvas>
-        <p class="chart-loading-note" *ngIf="!reportSummaryLoaded">Loading…</p>
+        <p class="chart-loading-note" *ngIf="isLoading">Loading…</p>
       </div>
     </div>
   </div>
@@ -125,21 +125,21 @@
     </div>
 
     <div class="chart-card">
-      <p class="chart-title">Exception Categories</p>
-      <p class="chart-subtitle">Active exception types</p>
+      <p class="chart-title">Audit Findings Overview</p>
+      <p class="chart-subtitle">Detected findings across reviewed transactions</p>
       <div class="chart-body chart-body-small">
-        <canvas #exceptionChart></canvas>
-        <p class="chart-loading-note" *ngIf="!exceptionsLoaded">Loading…</p>
-        <p class="chart-empty-note" *ngIf="exceptionsLoaded && exceptionCategories.length === 0">No active exceptions</p>
+        <canvas #exceptionChart *ngIf="!isLoading && authenticityLoaded && findingsOverview.length > 0"></canvas>
+        <p class="chart-loading-note" *ngIf="isLoading || !authenticityLoaded">Loading…</p>
+        <p class="chart-empty-note" *ngIf="!isLoading && authenticityLoaded && findingsOverview.length === 0">No findings detected</p>
       </div>
     </div>
 
     <div class="chart-card">
-      <p class="chart-title">Risk Distribution</p>
-      <p class="chart-subtitle">Anomaly type signature</p>
+      <p class="chart-title">Transaction Risk Distribution</p>
+      <p class="chart-subtitle">Low / Medium / High risk</p>
       <div class="chart-body chart-body-small donut-body">
         <canvas #riskChart></canvas>
-        <p class="chart-loading-note" *ngIf="!anomalyStatsLoaded">Loading…</p>
+        <p class="chart-loading-note" *ngIf="isLoading">Loading…</p>
       </div>
     </div>
   </div>

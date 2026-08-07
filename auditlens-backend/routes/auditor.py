@@ -1606,10 +1606,24 @@ def get_auditor_transactions():
             docs = pkg['documents']
             invoice_ids = [inv['document_id'] for inv in docs['invoices']]
             statuses = []
+            # has_amount_mismatch/has_quantity_mismatch (Audit Findings
+            # Overview's "Amount Difference"/"Quantity Difference" bars) —
+            # read straight off match_result, already inside `comparison`
+            # fetched above for matching_status; no extra query. Strict
+            # `is False` (not falsy) so a None (not applicable — e.g. no
+            # PO to compare against) never counts as a mismatch, only a
+            # genuine compared-and-differs result does.
+            has_amount_mismatch = False
+            has_quantity_mismatch = False
             for inv_id in invoice_ids:
                 comparison = build_comparison(cursor, inv_id)
                 if comparison:
                     statuses.append(_matching_status_for_comparison(comparison))
+                    match_result = comparison.get('match_result') or {}
+                    if match_result.get('amount_match') is False:
+                        has_amount_mismatch = True
+                    if match_result.get('quantity_match') is False:
+                        has_quantity_mismatch = True
             if not statuses:
                 matching_status = 'PENDING'
             elif all(s == 'PASS' for s in statuses):
@@ -1640,6 +1654,8 @@ def get_auditor_transactions():
                 'workflow_status':       _workflow_status_for(matching_status, latest_review_action),
                 'anomaly_risk_level':    anomaly_risk_level,
                 'has_material_finding':  has_material_finding,
+                'has_amount_mismatch':   has_amount_mismatch,
+                'has_quantity_mismatch': has_quantity_mismatch,
                 'package_status':        pkg['status'],
                 'created_at':            pkg['created_at'].isoformat() if pkg['created_at'] else None,
                 'primary_document_id':   invoice_ids[0] if invoice_ids else None,
@@ -1670,6 +1686,7 @@ def get_auditor_transactions():
             matching_status = _matching_status_for_comparison(comparison) if comparison else 'PENDING'
             po = comparison.get('po') if comparison else None
             gr = comparison.get('gr') if comparison else None
+            match_result = (comparison.get('match_result') if comparison else None) or {}
             latest_review_action = _latest_review_action_for_documents(cursor, [doc['document_id']])
             anomaly_risk_level, has_material_finding = _anomaly_risk_for_documents(cursor, [doc['document_id']])
             rows.append({
@@ -1686,6 +1703,8 @@ def get_auditor_transactions():
                 'workflow_status':       _workflow_status_for(matching_status, latest_review_action),
                 'anomaly_risk_level':    anomaly_risk_level,
                 'has_material_finding':  has_material_finding,
+                'has_amount_mismatch':   match_result.get('amount_match') is False,
+                'has_quantity_mismatch': match_result.get('quantity_match') is False,
                 'package_status':        doc['status'],
                 'created_at':            doc['uploaded_at'].isoformat() if doc['uploaded_at'] else None,
                 'primary_document_id':   doc['document_id'],
