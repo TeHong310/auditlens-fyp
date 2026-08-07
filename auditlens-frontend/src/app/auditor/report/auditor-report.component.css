@@ -265,8 +265,13 @@
   border-bottom: 1px solid var(--bg-hover);
 }
 
-.activity-table tbody tr { cursor: pointer; transition: background .2s ease; }
+.activity-table tbody tr { cursor: pointer; transition: background .2s ease; animation: report-row-fade-in .25s ease; }
 .activity-table tbody tr:hover { background: var(--bg-hover); }
+
+@keyframes report-row-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
 
 .activity-doc {
   font-weight: 600;
@@ -370,6 +375,7 @@
   border-radius: 8px;
   border-bottom: 1px solid var(--bg-hover);
   transition: background .2s ease, transform .2s ease;
+  animation: report-row-fade-in .25s ease;
 }
 
 .trail-row:hover { background: var(--bg-hover); transform: translateX(3px); }
@@ -428,6 +434,41 @@
   font-weight: 600;
   color: var(--text-secondary);
 }
+
+/* Pagination */
+.pagination-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.page-btn {
+  min-width: 36px;
+  padding: 7px 12px;
+  background: var(--bg-hover);
+  border: 1.5px solid var(--border);
+  border-radius: 20px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all .2s ease;
+}
+
+.page-btn:hover:not(:disabled) { background: var(--bg-card); border-color: var(--border-hover); }
+
+.page-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.page-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.page-nav { font-weight: 700; }
 
 .btn-load-more {
   display: block;

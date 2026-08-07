@@ -58,6 +58,14 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
   isLoadingTrail: boolean = false;
   trailError: string = '';
 
+  // ── Pagination — frontend-only, over the already-loaded entries
+  // array shared by both tables below (no new backend call; distinct
+  // from the existing `pageSize` above, which is the Load More fetch
+  // batch size, not the on-screen rows-per-page). ──
+  rowsPerPage = 10;
+  currentReviewPage = 1;
+  currentAuditTrailPage = 1;
+
   private chartInstance: any = null;
   private chartReady: boolean = false;
 
@@ -237,6 +245,8 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
     if (reset) {
       this.offset = 0;
       this.entries = [];
+      this.currentReviewPage = 1;
+      this.currentAuditTrailPage = 1;
     }
     this.isLoadingTrail = true;
     this.trailError = '';
@@ -269,11 +279,73 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
     return this.entries.length < this.totalEntries;
   }
 
+  // ── Pagination, Audit Trail — over the currently-loaded entries
+  // array (Load More above still fetches further backend pages into
+  // entries exactly as before; this only paginates what's already
+  // loaded). ──
+
+  get totalAuditTrailPages(): number {
+    return Math.max(1, Math.ceil(this.entries.length / this.rowsPerPage));
+  }
+
+  get auditTrailPageNumbers(): number[] {
+    return Array.from({ length: this.totalAuditTrailPages }, (_, i) => i + 1);
+  }
+
+  get paginatedAuditTrail(): any[] {
+    const startIndex = (this.currentAuditTrailPage - 1) * this.rowsPerPage;
+    return this.entries.slice(startIndex, startIndex + this.rowsPerPage);
+  }
+
+  goToAuditTrailPage(page: number) {
+    if (page < 1 || page > this.totalAuditTrailPages) return;
+    this.currentAuditTrailPage = page;
+  }
+
+  prevAuditTrailPage() {
+    this.goToAuditTrailPage(this.currentAuditTrailPage - 1);
+  }
+
+  nextAuditTrailPage() {
+    this.goToAuditTrailPage(this.currentAuditTrailPage + 1);
+  }
+
   // Recent Review Activity table (Feature 5) — reuses the SAME entries
-  // array already loaded for the Audit Trail below it, just the most
-  // recent handful in a compact table. No second fetch.
+  // array already loaded for the Audit Trail below it, in a compact
+  // table. No second fetch. Paginated via paginatedReviewActivity below
+  // instead of a fixed row cap.
   get recentActivity(): any[] {
-    return this.entries.slice(0, 8);
+    return this.entries;
+  }
+
+  // ── Pagination, Recent Review Activity — over recentActivity above
+  // (same source Audit Trail's own pagination reads, just tracked with
+  // its own page cursor since the two tables are independent views). ──
+
+  get totalReviewPages(): number {
+    return Math.max(1, Math.ceil(this.recentActivity.length / this.rowsPerPage));
+  }
+
+  get reviewPageNumbers(): number[] {
+    return Array.from({ length: this.totalReviewPages }, (_, i) => i + 1);
+  }
+
+  get paginatedReviewActivity(): any[] {
+    const startIndex = (this.currentReviewPage - 1) * this.rowsPerPage;
+    return this.recentActivity.slice(startIndex, startIndex + this.rowsPerPage);
+  }
+
+  goToReviewPage(page: number) {
+    if (page < 1 || page > this.totalReviewPages) return;
+    this.currentReviewPage = page;
+  }
+
+  prevReviewPage() {
+    this.goToReviewPage(this.currentReviewPage - 1);
+  }
+
+  nextReviewPage() {
+    this.goToReviewPage(this.currentReviewPage + 1);
   }
 
   // Status shown alongside each Audit Trail entry / Recent Activity row

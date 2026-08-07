@@ -136,7 +136,7 @@
           </tr>
         </thead>
         <tbody>
-          <tr *ngFor="let entry of recentActivity" (click)="viewInvoice(entry)">
+          <tr *ngFor="let entry of paginatedReviewActivity" (click)="viewInvoice(entry)">
             <td class="activity-doc">{{ entry.invoice_no || '-' }}</td>
             <td>{{ entry.vendor_name || '-' }}</td>
             <td>
@@ -148,6 +148,12 @@
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <div class="pagination-row" *ngIf="recentActivity.length > 0">
+      <button class="page-btn page-nav" [disabled]="currentReviewPage === 1" (click)="prevReviewPage()">← Previous</button>
+      <button *ngFor="let p of reviewPageNumbers" class="page-btn" [class.active]="p === currentReviewPage" (click)="goToReviewPage(p)">{{ p }}</button>
+      <button class="page-btn page-nav" [disabled]="currentReviewPage === totalReviewPages" (click)="nextReviewPage()">Next →</button>
     </div>
   </div>
 
@@ -191,7 +197,7 @@
         <p>No audit trail entries yet.</p>
       </div>
 
-      <div class="trail-row" *ngFor="let entry of entries; let i = index" [class.row-alt]="i % 2 === 1">
+      <div class="trail-row" *ngFor="let entry of paginatedAuditTrail; let i = index" [class.row-alt]="i % 2 === 1">
         <div class="trail-main">
           <span class="trail-timestamp">{{ formatTimestamp(entry.timestamp) }}</span>
           <span class="trail-auditor">{{ entry.auditor_name }}</span>
@@ -203,6 +209,12 @@
         <p class="trail-detail" *ngIf="entry.remarks"><span class="trail-detail-label">Reason:</span> {{ entry.remarks }}</p>
         <p class="trail-detail"><span class="trail-detail-label">Status:</span> {{ statusForAction(entry.action) }}</p>
       </div>
+    </div>
+
+    <div class="pagination-row" *ngIf="!isLoadingTrail && entries.length > 0">
+      <button class="page-btn page-nav" [disabled]="currentAuditTrailPage === 1" (click)="prevAuditTrailPage()">← Previous</button>
+      <button *ngFor="let p of auditTrailPageNumbers" class="page-btn" [class.active]="p === currentAuditTrailPage" (click)="goToAuditTrailPage(p)">{{ p }}</button>
+      <button class="page-btn page-nav" [disabled]="currentAuditTrailPage === totalAuditTrailPages" (click)="nextAuditTrailPage()">Next →</button>
     </div>
 
     <button class="btn-load-more" *ngIf="hasMore" (click)="loadMore()" [disabled]="isLoadingTrail">
