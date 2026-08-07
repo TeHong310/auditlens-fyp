@@ -410,7 +410,7 @@
     </div>
 
     <!-- 8. Approval Workflow -->
-    <div class="manual-card" *ngIf="matches('approval workflow ai assessment auditor review final decision ready not ready requires review')">
+    <div class="manual-card" *ngIf="matches('approval workflow document workflow timeline document uploaded ocr extraction three-way matching exception review authenticity review anomaly review final audit decision view matching details view exception details view authenticity review view anomaly details')">
       <button class="manual-card-header" (click)="toggleSection('a-workflow')" [class.expanded]="isExpanded('a-workflow')">
         <span class="manual-card-header-left">
           <i class="ph-duotone ph-flow-arrow"></i>
@@ -419,6 +419,8 @@
         <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
       </button>
       <div class="manual-card-body" *ngIf="isExpanded('a-workflow')">
+        <p class="manual-purpose"><strong>Purpose:</strong> every record moves through the same Document Workflow Timeline, shown on its Record Detail page.</p>
+
         <div class="workflow-row">
           <ng-container *ngFor="let step of approvalWorkflowSteps; let last = last">
             <div class="workflow-step">{{ step }}</div>
@@ -426,27 +428,20 @@
           </ng-container>
         </div>
 
-        <div class="severity-row severity-low">
-          <span class="severity-dot"></span>
-          <div>
-            <p class="severity-label">Ready</p>
-            <p class="severity-desc">Evidence is sufficient.</p>
-          </div>
-        </div>
-        <div class="severity-row severity-high">
-          <span class="severity-dot"></span>
-          <div>
-            <p class="severity-label">Not Ready</p>
-            <p class="severity-desc">Important evidence is missing.</p>
-          </div>
-        </div>
-        <div class="severity-row severity-medium">
-          <span class="severity-dot"></span>
-          <div>
-            <p class="severity-label">Requires Review</p>
-            <p class="severity-desc">Further investigation required.</p>
-          </div>
-        </div>
+        <p class="manual-label">Steps</p>
+        <ul class="manual-list">
+          <li><strong>Document Uploaded</strong> — the initial submission; shows the upload timestamp.</li>
+          <li><strong>OCR Extraction</strong> — AuditLens reads the document automatically; shows the OCR confidence score.</li>
+          <li><strong>Three-Way Matching</strong> — Invoice/PO/GR verification; shows the matching status plus who reviewed it and when. Use <strong>View Matching Details</strong> to see the full comparison.</li>
+          <li><strong>Exception Review</strong> — review any detected discrepancies; shows the exception status. Use <strong>View Exception Details</strong> to investigate.</li>
+          <li><strong>Authenticity Review</strong> — verify the document's authenticity signals; shows the authenticity status. Use <strong>View Authenticity Review</strong> to see the evidence.</li>
+          <li><strong>Anomaly Review</strong> — review any detected anomalies; shows the anomaly status. Use <strong>View Anomaly Details</strong> for the full findings.</li>
+          <li><strong>Final Audit Decision</strong> — your Approve / Send Back / Need Review decision; shows the final status, your name, and the decision timestamp.</li>
+        </ul>
+
+        <p class="manual-note">Three-Way Matching through Anomaly Review unlock in order — mark each step Reviewed to move on to the next.</p>
+
+        <app-screenshot-placeholder src="manual/approval-workflow.png" label="Add real system screenshot here — Document Workflow Timeline"></app-screenshot-placeholder>
       </div>
     </div>
 

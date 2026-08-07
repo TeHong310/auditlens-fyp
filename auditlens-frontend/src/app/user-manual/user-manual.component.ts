@@ -34,7 +34,15 @@ export class UserManualComponent implements OnInit {
   // Workflow diagrams (task spec) — plain step arrays rendered as a
   // vertical chain of boxes with an arrow between each pair.
   uploadWorkflowSteps: string[] = ['Upload Document', 'OCR Extraction', 'Data Validation', 'Audit Processing'];
-  approvalWorkflowSteps: string[] = ['AI Assessment', 'Auditor Review', 'Final Decision'];
+  // Matches Record Detail's actual Document Workflow Timeline (the
+  // gated Three-Way Matching -> Exception Review -> Authenticity
+  // Review -> Anomaly Review -> Final Audit Decision sequence), not
+  // the old AI Assessment / Auditor Review / Final Decision summary
+  // that no longer reflects the current system.
+  approvalWorkflowSteps: string[] = [
+    'Document Uploaded', 'OCR Extraction', 'Three-Way Matching',
+    'Exception Review', 'Authenticity Review', 'Anomaly Review', 'Final Audit Decision'
+  ];
 
   financeFaqs: FaqItem[] = [
     {

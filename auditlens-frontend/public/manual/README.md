@@ -15,6 +15,7 @@ showing its dashed placeholder box.
 | Anomaly Detection | `anomaly-detection.png` |
 | AI Audit Assistant panel | `ai-audit-assistant.png` |
 | AI Audit Assistant — Approval Assessment result | `approval-assessment.png` |
+| Approval Workflow (Document Workflow Timeline) | `approval-workflow.png` |
 | Report & Log | `report-log.png` |
 | Finance — Upload Document | `upload-document.png` |
 | Finance — Transaction Package | `transaction-package.png` |
