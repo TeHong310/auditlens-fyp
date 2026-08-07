@@ -380,22 +380,56 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   // and again from each load method's own callback (covers view-
   // ready-first) — whichever happens second is what actually draws. ──
 
+  // Audit Activity Trend — every day in the visible 14-day window has
+  // zero of all 3 review actions -> nothing meaningful to plot; the
+  // template shows the empty-state note instead of an empty chart.
+  get trendHasActivity(): boolean {
+    const timeline: any[] = this.reportSummary?.timeline || [];
+    return timeline.slice(-14).some((t: any) => (t.approved || 0) + (t.need_review || 0) + (t.sent_back || 0) > 0);
+  }
+
   renderTrendChart() {
     if (!this.viewReady || !this.trendChartRef || !this.reportSummaryLoaded || !this.reportSummary) return;
     if (this.trendChartInstance) this.trendChartInstance.destroy();
+    if (!this.trendHasActivity) return; // canvas isn't even in the DOM (*ngIf) in this case
 
     const timeline: any[] = this.reportSummary.timeline || [];
     const recent = timeline.slice(-14); // last 14 of the 30 days, compact view
     const labels = recent.map(t => this.formatShortDate(t.date));
+    const approved = recent.map(t => t.approved || 0);
+    const needReview = recent.map(t => t.need_review || 0);
+    const sentBack = recent.map(t => t.sent_back || 0);
+    // Total Reviewed = the 3 review_records action counts for that day
+    // added together — each review_records row has exactly one action,
+    // counted once via the backend's GROUP BY day/action, so this is a
+    // plain sum of 3 disjoint categories, never a double count.
+    const totals = recent.map((_: any, i: number) => approved[i] + needReview[i] + sentBack[i]);
 
     const ctx = this.trendChartRef.nativeElement.getContext('2d');
-    // Mixed bar + line: Approved as teal/cyan gradient bars (volume of
-    // completed work), Sent Back as a smooth coral line overlay (the
-    // trend to watch) — same 2 existing timeline fields as before,
-    // just rendered as two different chart types in one canvas.
-    const barGradient = ctx.createLinearGradient(0, 0, 0, 100);
-    barGradient.addColorStop(0, CHART_PALETTE.teal);
-    barGradient.addColorStop(1, CHART_PALETTE.cyan);
+
+    // Chart.js's own per-element "delay" animation (no extra library, no
+    // manual setInterval/looping) — staggers each bar/point left to
+    // right so the stacked bars grow from zero and the Total Reviewed
+    // line/points appear progressively rather than instantly. One-shot:
+    // this method always destroys + recreates the Chart instance rather
+    // than calling .update(), so a fresh render with new data re-plays
+    // it; Chart.js never repeats an animation on its own. Respects
+    // prefers-reduced-motion by collapsing to an instant render.
+    const reducedMotion = typeof window !== 'undefined' && !!window.matchMedia &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const animation: any = reducedMotion
+      ? { duration: 0 }
+      : {
+          duration: 900,
+          easing: 'easeOutQuart',
+          delay: (context: any) => {
+            if (context.type === 'data' && context.mode === 'default' && !context.dropped) {
+              context.dropped = true;
+              return context.dataIndex * 35 + context.datasetIndex * 70;
+            }
+            return 0;
+          },
+        };
 
     this.trendChartInstance = new Chart(ctx, {
       type: 'bar',
@@ -403,36 +437,54 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         labels,
         datasets: [
           {
-            type: 'bar',
-            label: 'Approved',
-            data: recent.map(t => t.approved),
-            backgroundColor: barGradient,
-            borderRadius: 4,
-            borderSkipped: false,
-            order: 2,
+            type: 'bar', label: 'Approved', data: approved,
+            backgroundColor: CHART_PALETTE.teal, stack: 'reviews',
+            borderRadius: 3, borderSkipped: false, order: 3,
           },
           {
-            type: 'line',
-            label: 'Sent Back',
-            data: recent.map(t => t.sent_back),
-            borderColor: CHART_PALETTE.coral,
-            backgroundColor: 'rgba(251, 113, 133, 0.15)',
-            borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 4,
-            pointBackgroundColor: CHART_PALETTE.coral,
-            tension: 0.4, fill: true, order: 1,
+            type: 'bar', label: 'Need Review', data: needReview,
+            backgroundColor: CHART_PALETTE.amber, stack: 'reviews',
+            borderRadius: 3, borderSkipped: false, order: 3,
+          },
+          {
+            type: 'bar', label: 'Sent Back', data: sentBack,
+            backgroundColor: CHART_PALETTE.coral, stack: 'reviews',
+            borderRadius: 3, borderSkipped: false, order: 3,
+          },
+          {
+            type: 'line', label: 'Total Reviewed', data: totals,
+            borderColor: CHART_PALETTE.violet, backgroundColor: 'rgba(139, 92, 246, 0.12)',
+            borderWidth: 2.5, pointRadius: 2.5, pointHoverRadius: 5,
+            pointBackgroundColor: CHART_PALETTE.violet, pointBorderColor: CHART_PALETTE.violet,
+            tension: 0.35, fill: false, order: 1,
           },
         ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation,
         interaction: { mode: 'index' as const, intersect: false },
         plugins: {
-          legend: { display: true, position: 'top' as const, labels: { boxWidth: 7, font: { size: 9.5 }, padding: 4 } }
+          legend: { display: true, position: 'top' as const, labels: { boxWidth: 7, font: { size: 9.5 }, padding: 4 } },
+          tooltip: {
+            // Total Reviewed is shown once via beforeBody (first, right
+            // after the date) instead of also appearing as its own
+            // per-dataset line further down.
+            filter: (item: any) => item.dataset.label !== 'Total Reviewed',
+            callbacks: {
+              title: (items: any[]) => items[0]?.label || '',
+              beforeBody: (items: any[]) => [`Total Reviewed: ${totals[items[0]?.dataIndex ?? 0]}`],
+              label: (item: any) => `${item.dataset.label}: ${item.formattedValue}`,
+            },
+            padding: 8,
+            titleFont: { size: 11, weight: 'bold' as const },
+            bodyFont: { size: 10.5 },
+          },
         },
         scales: {
-          y: { display: false, beginAtZero: true },
-          x: { display: true, grid: { display: false }, ticks: { font: { size: 9 } } }
+          x: { stacked: true, display: true, grid: { display: false }, ticks: { font: { size: 9 } } },
+          y: { stacked: true, display: false, beginAtZero: true },
         }
       }
     });

@@ -1883,11 +1883,15 @@ def get_report_summary():
         reviewed_day_sql = malaysia_date_sql('rr.reviewed_at')
         uploaded_day_sql = malaysia_date_sql('uploaded_at')
 
+        # 'need_review' added alongside 'approved'/'returned' for the
+        # Audit Trend chart's Need Review series — this query only feeds
+        # `timeline` below, never `stats` above (that action_counts
+        # query is untouched, so the KPI cards are unaffected).
         cursor.execute(
             f'''SELECT {reviewed_day_sql} AS day, rr.action, COUNT(*) AS cnt
                FROM review_records rr
                JOIN users u ON rr.reviewed_by = u.user_id
-               WHERE u.role = 'auditor' AND rr.action IN ('approved', 'returned')
+               WHERE u.role = 'auditor' AND rr.action IN ('approved', 'returned', 'need_review')
                  AND rr.reviewed_at >= %s
                GROUP BY {reviewed_day_sql}, rr.action''',
             (thirty_days_ago_utc,)
@@ -1912,10 +1916,11 @@ def get_report_summary():
             day = thirty_days_ago_myt + timedelta(days=i)
             day_actions = action_by_day.get(day, {})
             timeline.append({
-                'date':      day.isoformat(),
-                'approved':  day_actions.get('approved', 0),
-                'sent_back': day_actions.get('returned', 0),
-                'pending':   pending_by_day.get(day, 0),
+                'date':        day.isoformat(),
+                'approved':    day_actions.get('approved', 0),
+                'sent_back':   day_actions.get('returned', 0),
+                'need_review': day_actions.get('need_review', 0),
+                'pending':     pending_by_day.get(day, 0),
             })
 
         return jsonify({

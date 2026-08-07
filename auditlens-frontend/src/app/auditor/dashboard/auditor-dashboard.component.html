@@ -65,11 +65,11 @@
   <!-- Primary analytics: the two time-series charts, given the most visual weight -->
   <div class="charts-row-primary">
     <div class="chart-card">
-      <p class="chart-title">Audit Trend</p>
-      <p class="chart-subtitle">Approved / sent back — last 14 days</p>
+      <p class="chart-title">Audit Activity Trend</p>
+      <p class="chart-subtitle">Daily review decisions and workload — last 14 days</p>
       <div class="chart-body">
-        <canvas #trendChart></canvas>
-        <p class="chart-empty-note" *ngIf="reportSummaryLoaded && !reportSummary?.timeline?.length">No activity yet</p>
+        <canvas #trendChart *ngIf="!reportSummaryLoaded || trendHasActivity"></canvas>
+        <p class="chart-empty-note" *ngIf="reportSummaryLoaded && !trendHasActivity">No review activity in the last 14 days</p>
         <p class="chart-loading-note" *ngIf="!reportSummaryLoaded">Loading…</p>
       </div>
     </div>
