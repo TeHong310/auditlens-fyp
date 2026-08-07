@@ -380,41 +380,49 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   // and again from each load method's own callback (covers view-
   // ready-first) — whichever happens second is what actually draws. ──
 
-  // Audit Activity Trend — every day in the visible 14-day window has
-  // zero of all 3 review actions -> nothing meaningful to plot; the
-  // template shows the empty-state note instead of an empty chart.
-  get trendHasActivity(): boolean {
+  // Audit Decision Trend — only dates with real activity are worth a
+  // bar (see redesign note below); scans the full 30-day timeline
+  // (not just a 14-day slice) so "latest 7 active dates" can reach back
+  // far enough to find them on a low-activity system, then keeps only
+  // the most recent 7 of those.
+  get trendActiveDays(): any[] {
     const timeline: any[] = this.reportSummary?.timeline || [];
-    return timeline.slice(-14).some((t: any) => (t.approved || 0) + (t.need_review || 0) + (t.sent_back || 0) > 0);
+    const active = timeline.filter((t: any) => (t.approved || 0) + (t.need_review || 0) + (t.sent_back || 0) > 0);
+    return active.slice(-7);
   }
 
+  get trendHasActivity(): boolean {
+    return this.trendActiveDays.length > 0;
+  }
+
+  // Grouped bar chart (Approved / Need Review / Sent Back side-by-side
+  // per date) — replaces the earlier stacked-bars-plus-line design,
+  // which read as cluttered and, over a fixed 14-day window on a low-
+  // activity system, mostly empty space. Only dates that actually had a
+  // review decision are plotted at all (trendActiveDays above), and the
+  // Total Reviewed line/dataset is gone entirely — each bar's own
+  // height already tells that story without the overlay.
   renderTrendChart() {
     if (!this.viewReady || !this.trendChartRef || !this.reportSummaryLoaded || !this.reportSummary) return;
     if (this.trendChartInstance) this.trendChartInstance.destroy();
     if (!this.trendHasActivity) return; // canvas isn't even in the DOM (*ngIf) in this case
 
-    const timeline: any[] = this.reportSummary.timeline || [];
-    const recent = timeline.slice(-14); // last 14 of the 30 days, compact view
-    const labels = recent.map(t => this.formatShortDate(t.date));
-    const approved = recent.map(t => t.approved || 0);
-    const needReview = recent.map(t => t.need_review || 0);
-    const sentBack = recent.map(t => t.sent_back || 0);
-    // Total Reviewed = the 3 review_records action counts for that day
-    // added together — each review_records row has exactly one action,
-    // counted once via the backend's GROUP BY day/action, so this is a
-    // plain sum of 3 disjoint categories, never a double count.
-    const totals = recent.map((_: any, i: number) => approved[i] + needReview[i] + sentBack[i]);
+    const active = this.trendActiveDays;
+    const labels = active.map(t => this.formatShortDate(t.date));
+    const approved = active.map(t => t.approved || 0);
+    const needReview = active.map(t => t.need_review || 0);
+    const sentBack = active.map(t => t.sent_back || 0);
 
     const ctx = this.trendChartRef.nativeElement.getContext('2d');
 
     // Chart.js's own per-element "delay" animation (no extra library, no
-    // manual setInterval/looping) — staggers each bar/point left to
-    // right so the stacked bars grow from zero and the Total Reviewed
-    // line/points appear progressively rather than instantly. One-shot:
-    // this method always destroys + recreates the Chart instance rather
-    // than calling .update(), so a fresh render with new data re-plays
-    // it; Chart.js never repeats an animation on its own. Respects
-    // prefers-reduced-motion by collapsing to an instant render.
+    // manual setInterval/looping) — staggers each bar left to right so
+    // they grow upward from zero rather than appearing instantly.
+    // One-shot: this method always destroys + recreates the Chart
+    // instance rather than calling .update(), so a fresh render with
+    // new data re-plays it; Chart.js never repeats an animation on its
+    // own. Respects prefers-reduced-motion by collapsing to an instant
+    // render.
     const reducedMotion = typeof window !== 'undefined' && !!window.matchMedia &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const animation: any = reducedMotion
@@ -438,25 +446,18 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         datasets: [
           {
             type: 'bar', label: 'Approved', data: approved,
-            backgroundColor: CHART_PALETTE.teal, stack: 'reviews',
-            borderRadius: 3, borderSkipped: false, order: 3,
+            backgroundColor: CHART_PALETTE.teal,
+            borderRadius: 3, borderSkipped: false,
           },
           {
             type: 'bar', label: 'Need Review', data: needReview,
-            backgroundColor: CHART_PALETTE.amber, stack: 'reviews',
-            borderRadius: 3, borderSkipped: false, order: 3,
+            backgroundColor: CHART_PALETTE.amber,
+            borderRadius: 3, borderSkipped: false,
           },
           {
             type: 'bar', label: 'Sent Back', data: sentBack,
-            backgroundColor: CHART_PALETTE.coral, stack: 'reviews',
-            borderRadius: 3, borderSkipped: false, order: 3,
-          },
-          {
-            type: 'line', label: 'Total Reviewed', data: totals,
-            borderColor: CHART_PALETTE.violet, backgroundColor: 'rgba(139, 92, 246, 0.12)',
-            borderWidth: 2.5, pointRadius: 2.5, pointHoverRadius: 5,
-            pointBackgroundColor: CHART_PALETTE.violet, pointBorderColor: CHART_PALETTE.violet,
-            tension: 0.35, fill: false, order: 1,
+            backgroundColor: CHART_PALETTE.coral,
+            borderRadius: 3, borderSkipped: false,
           },
         ]
       },
@@ -468,13 +469,8 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         plugins: {
           legend: { display: true, position: 'top' as const, labels: { boxWidth: 7, font: { size: 9.5 }, padding: 4 } },
           tooltip: {
-            // Total Reviewed is shown once via beforeBody (first, right
-            // after the date) instead of also appearing as its own
-            // per-dataset line further down.
-            filter: (item: any) => item.dataset.label !== 'Total Reviewed',
             callbacks: {
               title: (items: any[]) => items[0]?.label || '',
-              beforeBody: (items: any[]) => [`Total Reviewed: ${totals[items[0]?.dataIndex ?? 0]}`],
               label: (item: any) => `${item.dataset.label}: ${item.formattedValue}`,
             },
             padding: 8,
@@ -483,8 +479,8 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
           },
         },
         scales: {
-          x: { stacked: true, display: true, grid: { display: false }, ticks: { font: { size: 9 } } },
-          y: { stacked: true, display: false, beginAtZero: true },
+          x: { display: true, grid: { display: false }, ticks: { font: { size: 9 } } },
+          y: { display: false, beginAtZero: true },
         }
       }
     });
