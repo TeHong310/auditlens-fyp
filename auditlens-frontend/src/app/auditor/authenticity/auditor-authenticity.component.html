@@ -148,7 +148,7 @@
 
   <!-- Compact document review queue -->
   <div class="check-list" *ngIf="!isLoading">
-    <div class="check-card" [ngClass]="statusBadgeClass(c.authentication_status)" *ngFor="let c of filteredChecks" (click)="viewDocument(c)">
+    <div class="check-card" [ngClass]="statusBadgeClass(c.authentication_status)" *ngFor="let c of paginatedChecks" (click)="viewDocument(c)">
 
       <div class="check-header">
         <span class="check-doc-no">{{ c.document_number || 'Unknown Document' }}</span>
@@ -188,6 +188,12 @@
       </div>
 
     </div>
+  </div>
+
+  <div class="pagination-row" *ngIf="!isLoading && filteredChecks.length > 0">
+    <button class="page-btn page-nav" [disabled]="currentPage === 1" (click)="prevPage()">← Previous</button>
+    <button *ngFor="let p of pageNumbers" class="page-btn" [class.active]="p === currentPage" (click)="goToPage(p)">{{ p }}</button>
+    <button class="page-btn page-nav" [disabled]="currentPage === totalPages" (click)="nextPage()">Next →</button>
   </div>
 
 </div>

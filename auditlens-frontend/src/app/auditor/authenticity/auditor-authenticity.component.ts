@@ -36,6 +36,12 @@ export class AuditorAuthenticityComponent implements OnInit, AfterViewInit {
   activeFilter: Filter = 'all';
   activeDocTypeFilter: DocTypeFilter = 'all';
 
+  // ── Pagination — frontend-only, over the already-loaded/filtered
+  // checks array (no new backend call, no change to the existing
+  // filter logic above, which paginatedChecks below reads through). ──
+  pageSize = 10;
+  currentPage = 1;
+
   // Set ONLY when this page is reached from a specific case's Audit
   // Review Timeline (?document_id=X&ref=audit-review) — the normal
   // sidebar-accessed global list (no query params) leaves this null and
@@ -112,10 +118,12 @@ export class AuditorAuthenticityComponent implements OnInit, AfterViewInit {
 
   setFilter(f: Filter) {
     this.activeFilter = f;
+    this.currentPage = 1;
   }
 
   setDocTypeFilter(f: DocTypeFilter) {
     this.activeDocTypeFilter = f;
+    this.currentPage = 1;
   }
 
   // Status filter and document-type filter combine with AND — e.g.
@@ -131,6 +139,36 @@ export class AuditorAuthenticityComponent implements OnInit, AfterViewInit {
       (this.activeFilter === 'all' || c.authentication_status === this.activeFilter) &&
       (this.activeDocTypeFilter === 'all' || c.document_type === this.activeDocTypeFilter)
     );
+  }
+
+  // ── Pagination, over filteredChecks above (so filters are always
+  // applied before the page slice — pagination narrows an already-
+  // filtered list, it never bypasses it). ──
+
+  get totalPages(): number {
+    return Math.max(1, Math.ceil(this.filteredChecks.length / this.pageSize));
+  }
+
+  get pageNumbers(): number[] {
+    return Array.from({ length: this.totalPages }, (_, i) => i + 1);
+  }
+
+  get paginatedChecks(): any[] {
+    const startIndex = (this.currentPage - 1) * this.pageSize;
+    return this.filteredChecks.slice(startIndex, startIndex + this.pageSize);
+  }
+
+  goToPage(page: number) {
+    if (page < 1 || page > this.totalPages) return;
+    this.currentPage = page;
+  }
+
+  prevPage() {
+    this.goToPage(this.currentPage - 1);
+  }
+
+  nextPage() {
+    this.goToPage(this.currentPage + 1);
   }
 
   get passedCount(): number {
