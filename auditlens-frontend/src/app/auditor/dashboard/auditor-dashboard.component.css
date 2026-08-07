@@ -127,11 +127,11 @@
 /* ── Chart Grid — two-tier hierarchy ── */
 .charts-row-primary {
   display: grid;
-  /* Audit Decision Trend (1st card) slightly wider than before (was
-     1.8fr), Review Workload (2nd card) narrower to compensate — same
+  /* Audit Decision Trend (1st card) wider than before (was 1.8fr, then
+     2.2fr), Review Workload (2nd card) narrower to compensate — same
      canvas/height/animation, purely a column-width change; Chart.js's
      own responsive:true fills whatever width the grid gives it. */
-  grid-template-columns: 2.2fr 1fr;
+  grid-template-columns: 3fr 1fr;
   gap: 10px;
 }
 
