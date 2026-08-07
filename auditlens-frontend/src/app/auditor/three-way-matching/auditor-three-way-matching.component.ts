@@ -28,6 +28,13 @@ export class AuditorThreeWayMatchingComponent implements OnInit {
   searchText: string = '';
   activeFilter: MatchFilter = 'all';
 
+  // ── Pagination — frontend-only, over the already-loaded/filtered
+  // transactions array (no new backend call, no change to the existing
+  // search/filter logic above, which paginatedTransactions below reads
+  // through). ──
+  pageSize = 10;
+  currentPage = 1;
+
   private apiUrl = environment.apiUrl;
 
   constructor(
@@ -76,6 +83,15 @@ export class AuditorThreeWayMatchingComponent implements OnInit {
 
   setFilter(f: MatchFilter) {
     this.activeFilter = f;
+    this.currentPage = 1;
+  }
+
+  // Bound alongside the search input's existing [(ngModel)] — keeps
+  // that two-way binding exactly as it was, just also resets to page 1
+  // whenever the keyword changes so pagination never strands the user
+  // on a page that no longer exists for the new, narrower result set.
+  onSearchChange() {
+    this.currentPage = 1;
   }
 
   get filteredTransactions() {
@@ -92,6 +108,36 @@ export class AuditorThreeWayMatchingComponent implements OnInit {
       );
     }
     return rows;
+  }
+
+  // ── Pagination, over filteredTransactions above (so filters/search
+  // are always applied before the page slice — pagination narrows an
+  // already-filtered list, it never bypasses it). ──
+
+  get totalPages(): number {
+    return Math.max(1, Math.ceil(this.filteredTransactions.length / this.pageSize));
+  }
+
+  get pageNumbers(): number[] {
+    return Array.from({ length: this.totalPages }, (_, i) => i + 1);
+  }
+
+  get paginatedTransactions(): any[] {
+    const startIndex = (this.currentPage - 1) * this.pageSize;
+    return this.filteredTransactions.slice(startIndex, startIndex + this.pageSize);
+  }
+
+  goToPage(page: number) {
+    if (page < 1 || page > this.totalPages) return;
+    this.currentPage = page;
+  }
+
+  prevPage() {
+    this.goToPage(this.currentPage - 1);
+  }
+
+  nextPage() {
+    this.goToPage(this.currentPage + 1);
   }
 
   // Related Docs columns — same fields/helper Auditor Home already
