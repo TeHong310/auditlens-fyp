@@ -42,9 +42,10 @@ const CHART_PALETTE = {
 // none of them re-fire on their own (no polling/interval anywhere;
 // each is called exactly once, from ngOnInit, for the lifetime of this
 // component instance). Status Breakdown, the Priority Review Queue,
-// Review Workload, Audit Risk Distribution, and Transaction Risk
-// Distribution are all DERIVED from the already-loaded transactions
-// array rather than fetched separately.
+// Review Workload, Audit Risk Distribution, and Top Risk Suppliers are
+// all DERIVED from the already-loaded transactions array (Top Risk
+// Suppliers also reads the authenticity call's own per-vendor result)
+// rather than fetched separately.
 @Component({
   selector: 'app-auditor-dashboard',
   standalone: true,
@@ -57,7 +58,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   @ViewChild('volumeChart') volumeChartRef!: ElementRef;
   @ViewChild('authChart') authChartRef!: ElementRef;
   @ViewChild('riskBarChart') riskBarChartRef!: ElementRef;
-  @ViewChild('riskChart') riskChartRef!: ElementRef;
+  @ViewChild('topSuppliersChart') topSuppliersChartRef!: ElementRef;
 
   // ── Primary content (unchanged behavior) ──────────────────
   isLoading: boolean = false;
@@ -78,13 +79,17 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   authenticityLoaded = false;
 
   authenticityOutcomes = { pass: 0, warning: 0, fail: 0 };
+  // Per-vendor authenticity FAIL counts (risk_level HIGH), from the SAME
+  // /authenticity call above — feeds Top Risk Suppliers' "Authenticity
+  // failure: +3" scoring component. No second call.
+  authenticityFailBySupplier: Map<string, number> = new Map();
 
   private viewReady = false;
   private trendChartInstance: any = null;
   private volumeChartInstance: any = null;
   private authChartInstance: any = null;
   private riskBarChartInstance: any = null;
-  private riskChartInstance: any = null;
+  private topSuppliersChartInstance: any = null;
 
   private apiUrl = environment.apiUrl;
 
@@ -98,11 +103,11 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     // 3 requests fire together, in parallel — none chained behind
     // another. Each is called exactly once for this component's
     // lifetime; nothing here polls or re-fires on an interval. Review
-    // Workload / Audit Risk Distribution / Transaction Risk
-    // Distribution are all derived from loadQueue()'s own transactions
-    // array — the earlier separate GET /auditor/exceptions and
-    // GET /anomalies/stats calls are gone, since nothing on this page
-    // reads their data anymore.
+    // Workload / Audit Risk Distribution are derived from loadQueue()'s
+    // own transactions array; Top Risk Suppliers reads both that array
+    // AND the authenticity call's per-vendor result — the earlier
+    // separate GET /auditor/exceptions and GET /anomalies/stats calls
+    // are gone, since nothing on this page reads their data anymore.
     this.loadQueue();
     this.loadReportSummary();
     this.loadAuthenticity();
@@ -117,7 +122,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     this.renderVolumeChart();
     this.renderAuthChart();
     this.renderRiskBarChart();
-    this.renderRiskChart();
+    this.renderTopSuppliersChart();
   }
 
   getHeaders() {
@@ -149,7 +154,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         this.cdr.detectChanges();
         this.renderVolumeChart();
         this.renderRiskBarChart();
-        this.renderRiskChart();
+        this.renderTopSuppliersChart();
       },
       error: () => { this.isLoading = false; }
     });
@@ -251,23 +256,34 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     });
   }
 
-  // ── Secondary: Authenticity Outcomes (feeds only the Authenticity
-  // Outcomes chart below — the Audit Risk Distribution chart no longer
-  // reads from here, since it's entirely transactions-driven). ──
+  // ── Secondary: Authenticity Outcomes — feeds the Authenticity
+  // Outcomes chart below (unchanged), and ALSO builds a per-vendor FAIL
+  // count from the SAME rows (authenticityFailBySupplier) for Top Risk
+  // Suppliers' scoring — no second call. renderTopSuppliersChart() is
+  // re-triggered here too, since that chart depends on BOTH this data
+  // and the transactions array from loadQueue(); whichever resolves
+  // second is what actually draws it. ──
   loadAuthenticity() {
     this.http.get<any[]>(`${this.apiUrl}/authenticity`, { headers: this.getHeaders() }).subscribe({
       next: (res) => {
         const list = res || [];
         let pass = 0, warning = 0, fail = 0;
+        const failBySupplier = new Map<string, number>();
         for (const a of list) {
-          if (a.risk_level === 'HIGH') fail++;
+          if (a.risk_level === 'HIGH') {
+            fail++;
+            const vendor = a.vendor_name || 'Unknown supplier';
+            failBySupplier.set(vendor, (failBySupplier.get(vendor) || 0) + 1);
+          }
           else if (a.authenticity_status === 'passed') pass++;
           else warning++;
         }
         this.authenticityOutcomes = { pass, warning, fail };
+        this.authenticityFailBySupplier = failBySupplier;
         this.authenticityLoaded = true;
         this.cdr.detectChanges();
         this.renderAuthChart();
+        this.renderTopSuppliersChart();
       },
       error: () => { this.authenticityLoaded = true; }
     });
@@ -456,12 +472,12 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     });
   }
 
-  // Shared "grow from zero, staggered" load animation for the 3 charts
-  // redesigned here (Review Workload / Audit Findings Overview /
-  // Transaction Risk Distribution) — the same Chart.js delay-based
-  // approach Audit Decision Trend already uses, duplicated locally
-  // rather than factored out, since that chart is explicitly out of
-  // scope for this change and shouldn't be touched to share it.
+  // Shared "grow from zero, staggered" load animation for the bar
+  // charts redesigned here (Review Workload / Audit Risk Distribution /
+  // Top Risk Suppliers) — the same Chart.js delay-based approach Audit
+  // Decision Trend already uses, duplicated locally rather than
+  // factored out, since that chart is explicitly out of scope for this
+  // change and shouldn't be touched to share it.
   private chartLoadAnimation(): any {
     const reducedMotion = typeof window !== 'undefined' && !!window.matchMedia &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -582,10 +598,9 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   // Audit Risk Distribution — High / Medium / Low count of reviewed
   // transactions, reusing riskLevelFor()/riskDistribution below (the
   // SAME existing transaction risk classification already driving the
-  // Transaction Risk Distribution doughnut and the queue table's/
-  // Priority Queue's risk badges) rather than a second calculation.
-  // Fixed High → Medium → Low display order per spec, independent of
-  // each bucket's value.
+  // queue table's/Priority Queue's risk badges) rather than a second
+  // calculation. Fixed High → Medium → Low display order per spec,
+  // independent of each bucket's value.
   renderRiskBarChart() {
     if (!this.viewReady || !this.riskBarChartRef || this.isLoading) return;
     if (this.riskBarChartInstance) this.riskBarChartInstance.destroy();
@@ -659,10 +674,13 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     });
   }
 
-  // Transaction Risk Distribution — Low/Medium/High, reusing
-  // riskLevelFor() (the SAME existing transaction risk classification
-  // already driving the queue table's/Priority Queue's risk badges),
-  // not the earlier anomaly-TYPE breakdown.
+  // Low/Medium/High transaction counts, reusing riskLevelFor() (the
+  // SAME existing transaction risk classification already driving the
+  // queue table's/Priority Queue's risk badges). Sole remaining
+  // consumer is Audit Risk Distribution above (the earlier Transaction
+  // Risk Distribution doughnut that also read this getter has been
+  // replaced by Top Risk Suppliers, below, which duplicated the same
+  // risk information in a second chart).
   get riskDistribution() {
     let low = 0, medium = 0, high = 0;
     for (const t of this.transactions) {
@@ -674,32 +692,129 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     return { low, medium, high };
   }
 
-  renderRiskChart() {
-    if (!this.viewReady || !this.riskChartRef || this.isLoading) return;
-    if (this.riskChartInstance) this.riskChartInstance.destroy();
+  // ── Top Risk Suppliers — replaces the old Transaction Risk
+  // Distribution doughnut, whose Low/Medium/High breakdown duplicated
+  // Audit Risk Distribution's own information. Groups the SAME
+  // transactions array by supplier, scoring each transaction with
+  // riskLevelFor() (shared with riskDistribution above — no second risk
+  // calculation) plus the auditor's own review outcome, then adds each
+  // supplier's authenticity failures from authenticityFailBySupplier
+  // (built in loadAuthenticity() from the SAME /authenticity call
+  // already made for Authenticity Outcomes — no new backend call). ──
 
-    const r = this.riskDistribution;
-    const ctx = this.riskChartRef.nativeElement.getContext('2d');
-    this.riskChartInstance = new Chart(ctx, {
-      type: 'doughnut',
+  // High risk transaction: +3, Medium risk transaction: +2, Sent Back
+  // review: +2, Need Review status: +1 — reads riskLevelFor()/
+  // latest_review_action/workflow_status, the same fields Review
+  // Workload and Audit Risk Distribution already read off this
+  // transaction.
+  private transactionRiskScore(t: any): number {
+    let score = 0;
+    const level = this.riskLevelFor(t);
+    if (level === 'HIGH') score += 3;
+    else if (level === 'MEDIUM') score += 2;
+    if (t.latest_review_action === 'returned') score += 2;
+    if (t.workflow_status === 'NEED REVIEW') score += 1;
+    return score;
+  }
+
+  get topRiskSuppliers(): { supplier: string; score: number }[] {
+    const scores = new Map<string, number>();
+    for (const t of this.transactions) {
+      const supplier = t.supplier || 'Unknown supplier';
+      scores.set(supplier, (scores.get(supplier) || 0) + this.transactionRiskScore(t));
+    }
+    // Authenticity failure: +3 per failed check recorded for that supplier.
+    for (const [supplier, failCount] of this.authenticityFailBySupplier) {
+      scores.set(supplier, (scores.get(supplier) || 0) + failCount * 3);
+    }
+    return Array.from(scores.entries())
+      .map(([supplier, score]) => ({ supplier, score }))
+      .filter(s => s.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+  }
+
+  // Linear RGB interpolation between CHART_PALETTE's own red and violet
+  // tokens (no new hex values) — t=0 (highest exposure, this list's top
+  // supplier) reads red/pink, t=1 (lowest exposure among the displayed
+  // suppliers) reads purple, per spec.
+  private riskColor(t: number): string {
+    const clamped = Math.max(0, Math.min(1, t));
+    const from = this.hexToRgb(CHART_PALETTE.red);
+    const to = this.hexToRgb(CHART_PALETTE.violet);
+    const r = Math.round(from[0] + (to[0] - from[0]) * clamped);
+    const g = Math.round(from[1] + (to[1] - from[1]) * clamped);
+    const b = Math.round(from[2] + (to[2] - from[2]) * clamped);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+
+  private hexToRgb(hex: string): [number, number, number] {
+    return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+  }
+
+  renderTopSuppliersChart() {
+    if (!this.viewReady || !this.topSuppliersChartRef || this.isLoading || !this.authenticityLoaded) return;
+    if (this.topSuppliersChartInstance) this.topSuppliersChartInstance.destroy();
+
+    const suppliers = this.topRiskSuppliers;
+    if (!suppliers.length) return; // canvas isn't in the DOM here (*ngIf) — the empty state shows instead
+
+    const maxScore = suppliers[0].score;
+    const minScore = suppliers[suppliers.length - 1].score;
+    const range = maxScore - minScore || 1;
+    const barColors = suppliers.map(s => this.riskColor((maxScore - s.score) / range));
+    const maxValue = Math.max(1, ...suppliers.map(s => s.score));
+
+    // Draws each bar's own score just past its end — same inline
+    // Chart.js plugin technique Audit Risk Distribution already uses,
+    // registered only on this chart's own `plugins` array below.
+    const valueLabelPlugin = {
+      id: 'topSuppliersValueLabels',
+      afterDatasetsDraw(chart: any) {
+        const { ctx } = chart;
+        const meta = chart.getDatasetMeta(0);
+        meta.data.forEach((bar: any, i: number) => {
+          const value = chart.data.datasets[0].data[i];
+          ctx.save();
+          ctx.fillStyle = '#E6E7EE';
+          ctx.font = '600 10.5px Segoe UI, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(String(value), bar.x + 6, bar.y);
+          ctx.restore();
+        });
+      },
+    };
+
+    const ctx = this.topSuppliersChartRef.nativeElement.getContext('2d');
+    this.topSuppliersChartInstance = new Chart(ctx, {
+      type: 'bar',
+      plugins: [valueLabelPlugin],
       data: {
-        labels: ['Low Risk', 'Medium Risk', 'High Risk'],
+        labels: suppliers.map(s => s.supplier),
         datasets: [{
-          data: [r.low, r.medium, r.high],
-          backgroundColor: [CHART_PALETTE.teal, CHART_PALETTE.amber, CHART_PALETTE.red],
-          borderWidth: 0, borderRadius: 6, spacing: 3, hoverOffset: 6,
+          data: suppliers.map(s => s.score),
+          backgroundColor: barColors,
+          borderRadius: 3, borderSkipped: false,
+          categoryPercentage: 0.6, barPercentage: 0.5,
         }]
       },
       options: {
-        // Same compact-donut treatment as Authenticity Outcomes — see
-        // that chart's own comment.
-        cutout: '55%',
-        radius: '58%',
+        indexAxis: 'y' as const,
         responsive: true,
         maintainAspectRatio: false,
+        layout: { padding: { right: 18 } },
         animation: this.chartLoadAnimation(),
-        plugins: {
-          legend: { display: true, position: 'bottom' as const, labels: { boxWidth: 8, padding: 6, font: { size: 10 } } }
+        plugins: { legend: { display: false } },
+        scales: {
+          x: {
+            display: true,
+            beginAtZero: true,
+            suggestedMax: Math.max(maxValue + 1, 4),
+            ticks: { stepSize: 1, font: { size: 9 }, color: '#8A8D9E' },
+            grid: { color: 'rgba(255, 255, 255, 0.08)' },
+          },
+          y: { ticks: { font: { size: 10.5 }, color: '#E6E7EE' }, grid: { display: false } }
         }
       }
     });

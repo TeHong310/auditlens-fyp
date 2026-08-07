@@ -135,11 +135,12 @@
     </div>
 
     <div class="chart-card">
-      <p class="chart-title">Transaction Risk Distribution</p>
-      <p class="chart-subtitle">Low / Medium / High risk</p>
-      <div class="chart-body chart-body-donut donut-body">
-        <canvas #riskChart></canvas>
-        <p class="chart-loading-note" *ngIf="isLoading">Loading…</p>
+      <p class="chart-title">Top Risk Suppliers</p>
+      <p class="chart-subtitle">Suppliers with highest audit risk exposure</p>
+      <div class="chart-body chart-body-risk-bar">
+        <canvas #topSuppliersChart *ngIf="!isLoading && authenticityLoaded && topRiskSuppliers.length > 0"></canvas>
+        <p class="chart-loading-note" *ngIf="isLoading || !authenticityLoaded">Loading…</p>
+        <p class="chart-empty-note" *ngIf="!isLoading && authenticityLoaded && topRiskSuppliers.length === 0">No risk exposure detected</p>
       </div>
     </div>
   </div>

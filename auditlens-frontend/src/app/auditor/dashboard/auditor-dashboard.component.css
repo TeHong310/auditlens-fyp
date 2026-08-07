@@ -183,11 +183,11 @@
   flex: 0 0 auto;
 }
 
-/* Status Breakdown / Authenticity Outcomes / Transaction Risk
-   Distribution — these 3 cards share this row with Audit Risk
-   Distribution, whose taller chart-body-risk-bar (190px) makes CSS
-   Grid's default align-items:stretch stretch every card in the row to
-   match it. Rather than letting the chart itself grow to fill that stretched
+/* Status Breakdown / Authenticity Outcomes — these 2 cards share this
+   row with Audit Risk Distribution and Top Risk Suppliers, whose
+   taller chart-body-risk-bar (190px) makes CSS Grid's default
+   align-items:stretch stretch every card in the row to match it.
+   Rather than letting the chart itself grow to fill that stretched
    space (which just made the same-size donut/rings sit in a bigger
    box), these stay capped at a small fixed height so they read as
    compact summary visuals — "margin: auto 0" (auto top+bottom margins
@@ -207,11 +207,11 @@
   margin: auto 0;
 }
 
-/* Audit Risk Distribution only — kept at the same 190px height its
-   predecessor (Audit Findings Overview) used, unchanged card size per
-   spec, even though its own 3 rows (High/Medium/Low) + a visible
-   x-axis need less vertical room than that. Still the row's tallest,
-   driving how much stretched space CSS Grid gives every card in it. */
+/* Audit Risk Distribution + Top Risk Suppliers — both horizontal bar
+   charts with a visible x-axis, sharing this 190px height (kept at the
+   same size Audit Risk Distribution's own predecessor, Audit Findings
+   Overview, used). Still the row's tallest, driving how much stretched
+   space CSS Grid gives every card in it. */
 .chart-body-risk-bar { height: 190px; }
 
 .donut-body { display: flex; align-items: center; justify-content: center; }
