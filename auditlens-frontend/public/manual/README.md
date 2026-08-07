@@ -22,6 +22,5 @@ showing its dashed placeholder box.
 | Finance — Upload Document | `finance-upload-document.png` |
 | Finance — Transaction Packages | `transaction-package.png` |
 | Finance — OCR Review | `ocr-review.png` |
-| Finance — Correction Center | `finance-correction-center.png` |
-| Finance — Correction Detail | `finance-correction-detail.png` |
+| Finance — Correction Center | `correction-center.png` |
 | Finance — Reports | `finance-report.png` |
