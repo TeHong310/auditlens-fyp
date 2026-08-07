@@ -181,12 +181,42 @@
   <!-- ============================================================ -->
   <ng-container *ngIf="!isFinance">
 
-    <!-- 1. Review Queue -->
-    <div class="manual-card" *ngIf="matches('review queue prioritization status filtering risk filtering transaction details')">
+    <!-- 1. Auditor Dashboard -->
+    <div class="manual-card" *ngIf="matches('auditor dashboard home overview charts audit decision trend review workload status breakdown authenticity outcomes audit risk distribution top risk suppliers')">
+      <button class="manual-card-header" (click)="toggleSection('a-dashboard')" [class.expanded]="isExpanded('a-dashboard')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-house"></i>
+          <span class="manual-card-title">1. Auditor Dashboard</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('a-dashboard')">
+        <p class="manual-purpose"><strong>Purpose:</strong> your at-a-glance overview of the audit workload and system-wide risk signals, shown when you log in.</p>
+
+        <p class="manual-label">Charts on this page</p>
+        <ul class="manual-list">
+          <li><strong>Audit Decision Trend</strong> — daily Approved / Need Review / Sent Back counts over the last 7 days.</li>
+          <li><strong>Review Workload</strong> — how many transactions are Pending Review, Need Review, Completed, or Sent Back right now.</li>
+          <li><strong>Status Breakdown</strong> — the Pass / Review / Missing Document split across all transactions.</li>
+          <li><strong>Authenticity Outcomes</strong> — the Pass / Warning / Fail split of authenticity checks.</li>
+          <li><strong>Audit Risk Distribution</strong> — how many transactions currently sit at High, Medium, or Low risk.</li>
+          <li><strong>Top Risk Suppliers</strong> — the 5 suppliers with the most risk-related transactions, so a recurring problem vendor stands out at a glance.</li>
+        </ul>
+
+        <app-screenshot-placeholder label="Add real system screenshot here — Auditor Dashboard"></app-screenshot-placeholder>
+
+        <a class="manual-open-btn" routerLink="/auditor/home">
+          <i class="ph-duotone ph-arrow-square-out"></i> Open Auditor Dashboard
+        </a>
+      </div>
+    </div>
+
+    <!-- 2. Review Queue -->
+    <div class="manual-card" *ngIf="matches('review queue prioritization status filtering risk filtering transaction details pagination')">
       <button class="manual-card-header" (click)="toggleSection('a-queue')" [class.expanded]="isExpanded('a-queue')">
         <span class="manual-card-header-left">
           <i class="ph-duotone ph-list-checks"></i>
-          <span class="manual-card-title">1. Review Queue</span>
+          <span class="manual-card-title">2. Review Queue</span>
         </span>
         <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
       </button>
@@ -196,6 +226,7 @@
           <li><strong>Prioritization</strong> — cases needing attention surface first, instead of a plain chronological list.</li>
           <li><strong>Status filtering</strong> — narrow the queue to a specific stage of review.</li>
           <li><strong>Risk filtering</strong> — narrow the queue to a specific risk level.</li>
+          <li><strong>Pagination</strong> — results show 10 records per page, with page controls below the table.</li>
           <li>Click any row to open its full transaction detail.</li>
         </ul>
 
@@ -207,12 +238,38 @@
       </div>
     </div>
 
-    <!-- 2. Exception Handling -->
+    <!-- 3. Three-Way Matching -->
+    <div class="manual-card" *ngIf="matches('three-way matching invoice purchase order po goods receipt gr match status pagination')">
+      <button class="manual-card-header" (click)="toggleSection('a-matching')" [class.expanded]="isExpanded('a-matching')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-arrows-left-right"></i>
+          <span class="manual-card-title">3. Three-Way Matching</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('a-matching')">
+        <p class="manual-purpose"><strong>Purpose:</strong> see every transaction's Invoice / PO / GR match verdict in one list, without opening each record individually.</p>
+        <ul class="manual-list">
+          <li>Filter by match status — All, Passed, Review Required, or Failed.</li>
+          <li>Search by invoice number or supplier.</li>
+          <li><strong>Pagination</strong> — results show 10 records per page, with page controls below the table.</li>
+          <li>Click <strong>View Details</strong> on any row to see the full Invoice/PO/GR comparison.</li>
+        </ul>
+
+        <app-screenshot-placeholder label="Add real system screenshot here — Three-Way Matching page"></app-screenshot-placeholder>
+
+        <a class="manual-open-btn" routerLink="/auditor/three-way-matching">
+          <i class="ph-duotone ph-arrow-square-out"></i> Open Three-Way Matching
+        </a>
+      </div>
+    </div>
+
+    <!-- 4. Exception Handling -->
     <div class="manual-card" *ngIf="matches('exception handling missing documents matching issues risk findings investigate document findings')">
       <button class="manual-card-header" (click)="toggleSection('a-exceptions')" [class.expanded]="isExpanded('a-exceptions')">
         <span class="manual-card-header-left">
           <i class="ph-duotone ph-warning-circle"></i>
-          <span class="manual-card-title">2. Exception Handling</span>
+          <span class="manual-card-title">4. Exception Handling</span>
         </span>
         <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
       </button>
@@ -236,12 +293,12 @@
       </div>
     </div>
 
-    <!-- 3. Authenticity Verification -->
-    <div class="manual-card" *ngIf="matches('authenticity verification results risk interpretation genuine tampering')">
+    <!-- 5. Authenticity Verification -->
+    <div class="manual-card" *ngIf="matches('authenticity verification results risk interpretation genuine tampering pagination')">
       <button class="manual-card-header" (click)="toggleSection('a-authenticity')" [class.expanded]="isExpanded('a-authenticity')">
         <span class="manual-card-header-left">
           <i class="ph-duotone ph-shield-check"></i>
-          <span class="manual-card-title">3. Authenticity Verification</span>
+          <span class="manual-card-title">5. Authenticity Verification</span>
         </span>
         <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
       </button>
@@ -250,7 +307,10 @@
           <li><strong>Purpose:</strong> check whether a document's visual evidence (logo, company name, stamp, signature) matches what a genuine document from that vendor should show.</li>
           <li><strong>Verification results</strong> — each check returns Passed or Warning, with the specific evidence it found or couldn't find.</li>
           <li><strong>Risk interpretation</strong> — a Warning is advisory, not a verdict of fraud — use it alongside the rest of the case to decide whether to verify further with the vendor.</li>
+          <li><strong>Pagination</strong> — the document list shows 10 records per page, with page controls below it.</li>
         </ul>
+
+        <app-screenshot-placeholder label="Add real system screenshot here — Authenticity page"></app-screenshot-placeholder>
 
         <a class="manual-open-btn" routerLink="/auditor/authenticity">
           <i class="ph-duotone ph-arrow-square-out"></i> Open Authenticity
@@ -258,19 +318,22 @@
       </div>
     </div>
 
-    <!-- 4. Anomaly Detection -->
-    <div class="manual-card" *ngIf="matches('anomaly detection amount anomaly weekend transaction duplicate invoice severity high medium low risk')">
+    <!-- 6. Anomaly Detection -->
+    <div class="manual-card" *ngIf="matches('anomaly detection amount anomaly round amount weekend transaction duplicate invoice severity high medium low risk pending reviewed dismissed filters')">
       <button class="manual-card-header" (click)="toggleSection('a-anomaly')" [class.expanded]="isExpanded('a-anomaly')">
         <span class="manual-card-header-left">
           <i class="ph-duotone ph-sparkle"></i>
-          <span class="manual-card-title">4. Anomaly Detection</span>
+          <span class="manual-card-title">6. Anomaly Detection</span>
         </span>
         <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
       </button>
       <div class="manual-card-body" *ngIf="isExpanded('a-anomaly')">
+        <p class="manual-note">Anomaly checks run automatically whenever a document is processed — this page is a read-only view of the results, there's no manual "Run Analysis" button to press.</p>
+
         <p class="manual-label">Common anomaly types</p>
         <ul class="manual-list">
           <li><strong>Amount anomaly</strong> — the invoice amount is unusually high compared to this vendor's history.</li>
+          <li><strong>Round amount</strong> — the invoice total is a suspiciously round figure (e.g. exactly RM 5,000.00).</li>
           <li><strong>Weekend transaction</strong> — the invoice is dated on a weekend, unusual for typical business activity.</li>
           <li><strong>Duplicate invoice</strong> — this invoice closely matches another already in the system.</li>
         </ul>
@@ -298,18 +361,27 @@
           </div>
         </div>
 
+        <p class="manual-label">Status filters</p>
+        <ul class="manual-list">
+          <li><strong>Pending</strong> — not yet reviewed or dismissed (the default view).</li>
+          <li><strong>Reviewed</strong> — you've looked into it and taken it into account.</li>
+          <li><strong>Dismissed</strong> — you've determined it isn't a real concern.</li>
+        </ul>
+
+        <app-screenshot-placeholder label="Add real system screenshot here — Anomaly Detection page"></app-screenshot-placeholder>
+
         <a class="manual-open-btn" routerLink="/auditor/anomalies">
           <i class="ph-duotone ph-arrow-square-out"></i> Open Anomaly Detection
         </a>
       </div>
     </div>
 
-    <!-- 5. AI Audit Assistant -->
+    <!-- 7. AI Audit Assistant -->
     <div class="manual-card" *ngIf="matches('ai audit assistant explain exception explain risk approval assessment generate audit remark prepare send back instruction')">
       <button class="manual-card-header" (click)="toggleSection('a-ai')" [class.expanded]="isExpanded('a-ai')">
         <span class="manual-card-header-left">
           <i class="ph-duotone ph-robot"></i>
-          <span class="manual-card-title">5. AI Audit Assistant</span>
+          <span class="manual-card-title">7. AI Audit Assistant</span>
         </span>
         <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
       </button>
@@ -337,12 +409,12 @@
       </div>
     </div>
 
-    <!-- 6. Approval Workflow -->
+    <!-- 8. Approval Workflow -->
     <div class="manual-card" *ngIf="matches('approval workflow ai assessment auditor review final decision ready not ready requires review')">
       <button class="manual-card-header" (click)="toggleSection('a-workflow')" [class.expanded]="isExpanded('a-workflow')">
         <span class="manual-card-header-left">
           <i class="ph-duotone ph-flow-arrow"></i>
-          <span class="manual-card-title">6. Approval Workflow</span>
+          <span class="manual-card-title">8. Approval Workflow</span>
         </span>
         <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
       </button>
@@ -375,6 +447,32 @@
             <p class="severity-desc">Further investigation required.</p>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- 9. Report & Log -->
+    <div class="manual-card" *ngIf="matches('report log recent review activity audit trail export csv pagination action filter date range')">
+      <button class="manual-card-header" (click)="toggleSection('a-report')" [class.expanded]="isExpanded('a-report')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-file-text"></i>
+          <span class="manual-card-title">9. Report & Log</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('a-report')">
+        <p class="manual-purpose"><strong>Purpose:</strong> review summary statistics and a full history of every audit decision made.</p>
+
+        <ul class="manual-list">
+          <li><strong>Recent Review Activity</strong> — shows your 5 most recent decisions, with a <strong>View All</strong> button that expands it into a paginated list (10 per page).</li>
+          <li><strong>Audit Trail</strong> — the complete decision history, filterable by action and date range, shown 10 records per page.</li>
+          <li><strong>Export CSV</strong> — download the currently filtered Audit Trail as a CSV file.</li>
+        </ul>
+
+        <app-screenshot-placeholder label="Add real system screenshot here — Report & Log page"></app-screenshot-placeholder>
+
+        <a class="manual-open-btn" routerLink="/auditor/report">
+          <i class="ph-duotone ph-arrow-square-out"></i> Open Report & Log
+        </a>
       </div>
     </div>
 
