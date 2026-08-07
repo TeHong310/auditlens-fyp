@@ -409,23 +409,25 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
             type: 'bar', label: 'Approved', data: approved,
             backgroundColor: CHART_PALETTE.teal,
             borderRadius: 3, borderSkipped: false,
-            // Slimmer bars with more breathing room between them than
-            // Chart.js's defaults (0.8/0.9) — each day's 3-bar group
-            // occupies 55% of its label's width, and each bar within
-            // that group occupies 75% of its own slot.
-            categoryPercentage: 0.55, barPercentage: 0.75,
+            // Each day's 3-bar group occupies 65% of its label's
+            // width, and each bar within that group occupies 82% of
+            // its own slot — noticeably slimmer than Chart.js's
+            // defaults (0.8/0.9) so the 3 categories stay readable
+            // side by side, but larger than this chart's earlier 55%/
+            // 75% now that its canvas has more vertical room to match.
+            categoryPercentage: 0.65, barPercentage: 0.82,
           },
           {
             type: 'bar', label: 'Need Review', data: needReview,
             backgroundColor: CHART_PALETTE.amber,
             borderRadius: 3, borderSkipped: false,
-            categoryPercentage: 0.55, barPercentage: 0.75,
+            categoryPercentage: 0.65, barPercentage: 0.82,
           },
           {
             type: 'bar', label: 'Sent Back', data: sentBack,
             backgroundColor: CHART_PALETTE.coral,
             borderRadius: 3, borderSkipped: false,
-            categoryPercentage: 0.55, barPercentage: 0.75,
+            categoryPercentage: 0.65, barPercentage: 0.82,
           },
         ]
       },
@@ -565,6 +567,11 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
       },
       options: {
         cutout: '65%',
+        // Shrinks the whole ring within its already-centered canvas
+        // area (Chart.js default is 100%, i.e. fill available space) —
+        // a smaller, more compact summary donut with breathing room
+        // around it, same ring-thickness proportion (cutout unchanged).
+        radius: '72%',
         responsive: true,
         maintainAspectRatio: false,
         plugins: { legend: { position: 'bottom' as const, labels: { boxWidth: 8, padding: 6, font: { size: 10.5 } } } }
@@ -718,6 +725,9 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
       },
       options: {
         cutout: '65%',
+        // Same compact-donut treatment as Authenticity Outcomes — see
+        // that chart's own comment.
+        radius: '72%',
         responsive: true,
         maintainAspectRatio: false,
         animation: this.chartLoadAnimation(),

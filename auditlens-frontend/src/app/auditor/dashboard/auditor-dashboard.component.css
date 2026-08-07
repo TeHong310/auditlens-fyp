@@ -166,6 +166,17 @@
   margin-bottom: 4px;
 }
 
+/* Audit Decision Trend — the dashboard's main large visualization now
+   (see charts-row-primary's 3fr/1fr column split above): a taller
+   canvas than the base chart-body (100px) gives its grouped bars more
+   vertical room. Review Workload shares this same grid row, so CSS
+   Grid's default align-items:stretch stretches its card to match this
+   new height too — chart-body-workload lets it grow to fill that
+   already-stretched space (same fix as chart-body-small below) so it
+   doesn't end up with empty space under its own, unrelated bars. */
+.chart-body-trend { height: 190px; }
+.chart-body-workload { flex: 1 1 auto; }
+
 .chart-body {
   position: relative;
   height: 100px;
@@ -223,9 +234,11 @@
   gap: 6px;
 }
 
+/* ~27% smaller than before (was 54px/37px) — a compact KPI-style
+   ring instead of a chart-sized one; same ring-to-hole proportion. */
 .radial-ring {
-  width: 54px;
-  height: 54px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -234,8 +247,8 @@
 }
 
 .radial-ring-hole {
-  width: 37px;
-  height: 37px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: var(--bg-card);
   display: flex;
@@ -244,7 +257,7 @@
 }
 
 .radial-pct {
-  font-size: 9.5px;
+  font-size: 8.5px;
   font-weight: 700;
   color: var(--text-primary);
 }

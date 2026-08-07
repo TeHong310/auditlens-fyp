@@ -67,7 +67,7 @@
     <div class="chart-card">
       <p class="chart-title">Audit Decision Trend</p>
       <p class="chart-subtitle">Daily auditor decisions and outcomes</p>
-      <div class="chart-body">
+      <div class="chart-body chart-body-trend">
         <canvas #trendChart *ngIf="!reportSummaryLoaded || trendHasActivity"></canvas>
         <p class="chart-empty-note" *ngIf="reportSummaryLoaded && !trendHasActivity">No review activity yet</p>
         <p class="chart-loading-note" *ngIf="!reportSummaryLoaded">Loading…</p>
@@ -77,7 +77,7 @@
     <div class="chart-card">
       <p class="chart-title">Review Workload</p>
       <p class="chart-subtitle">Current auditor workload distribution</p>
-      <div class="chart-body">
+      <div class="chart-body chart-body-workload">
         <canvas #volumeChart></canvas>
         <p class="chart-loading-note" *ngIf="isLoading">Loading…</p>
       </div>
