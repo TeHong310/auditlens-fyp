@@ -89,7 +89,7 @@
     <div class="chart-card">
       <p class="chart-title">Status Breakdown</p>
       <p class="chart-subtitle">Pass / Review / Missing Doc</p>
-      <div class="chart-body chart-body-small">
+      <div class="chart-body chart-body-status">
         <p class="chart-loading-note" *ngIf="isLoading">Loading…</p>
         <div class="radial-row" *ngIf="!isLoading">
           <div class="radial-item">
@@ -117,7 +117,7 @@
     <div class="chart-card">
       <p class="chart-title">Authenticity Outcomes</p>
       <p class="chart-subtitle">Pass / Warning / Fail</p>
-      <div class="chart-body chart-body-small donut-body">
+      <div class="chart-body chart-body-donut donut-body">
         <canvas #authChart></canvas>
         <p class="chart-loading-note" *ngIf="!authenticityLoaded">Loading…</p>
         <p class="chart-empty-note" *ngIf="authenticityLoaded && !(authenticityOutcomes.pass || authenticityOutcomes.warning || authenticityOutcomes.fail)">No checks yet</p>
@@ -137,7 +137,7 @@
     <div class="chart-card">
       <p class="chart-title">Transaction Risk Distribution</p>
       <p class="chart-subtitle">Low / Medium / High risk</p>
-      <div class="chart-body chart-body-small donut-body">
+      <div class="chart-body chart-body-donut donut-body">
         <canvas #riskChart></canvas>
         <p class="chart-loading-note" *ngIf="isLoading">Loading…</p>
       </div>

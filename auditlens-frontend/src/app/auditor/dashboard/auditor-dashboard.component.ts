@@ -366,13 +366,13 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     // this is a plain sum of 3 disjoint categories, never a double
     // count. Used by the tooltip only, not plotted as its own series.
     const totalDecisions = days.map((_: any, i: number) => approved[i] + needReview[i] + sentBack[i]);
-    // suggestedMax: a tight-but-breathing-room ceiling so a quiet day
-    // (max count of 1-2) still reads as a substantial bar instead of a
-    // sliver lost in a tall, mostly-empty axis — floored at 4 so even
-    // an all-zero-or-one window doesn't look cramped, and always at
-    // least 1 above the tallest bar so it never touches the top edge.
+    // suggestedMax: just 1 unit above the tallest bar (floored at 2,
+    // down from 4) so bars actually use the canvas's now-much-taller
+    // (270px) height instead of a large forced ceiling leaving them
+    // looking short — still enough headroom that the tallest bar's own
+    // rounded top never touches the very top edge.
     const maxCount = Math.max(1, ...approved, ...needReview, ...sentBack);
-    const suggestedMax = Math.max(maxCount + 1, 4);
+    const suggestedMax = Math.max(maxCount + 1, 2);
 
     const ctx = this.trendChartRef.nativeElement.getContext('2d');
 
@@ -433,7 +433,12 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
       },
       options: {
         responsive: true,
+        // maintainAspectRatio:false means the canvas always fills its
+        // CSS container (chart-body-trend, 270px) in both dimensions —
+        // aspectRatio has no active sizing effect while that's false,
+        // but is set here to match the requested config explicitly.
         maintainAspectRatio: false,
+        aspectRatio: 3.5,
         animation,
         interaction: { mode: 'index' as const, intersect: false },
         plugins: {
@@ -566,12 +571,13 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         }]
       },
       options: {
-        cutout: '65%',
-        // Shrinks the whole ring within its already-centered canvas
-        // area (Chart.js default is 100%, i.e. fill available space) —
-        // a smaller, more compact summary donut with breathing room
-        // around it, same ring-thickness proportion (cutout unchanged).
-        radius: '72%',
+        // Smaller hole (was 65%) so the ring itself reads as more
+        // compact/solid rather than a big thin band, combined with a
+        // smaller overall radius (was 72%) shrinking the whole ring
+        // within its now also-smaller, capped chart-body-donut (160px)
+        // container — chart-body-donut's own margin:auto centers it.
+        cutout: '55%',
+        radius: '58%',
         responsive: true,
         maintainAspectRatio: false,
         plugins: { legend: { position: 'bottom' as const, labels: { boxWidth: 8, padding: 6, font: { size: 10.5 } } } }
@@ -724,10 +730,10 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         }]
       },
       options: {
-        cutout: '65%',
         // Same compact-donut treatment as Authenticity Outcomes — see
         // that chart's own comment.
-        radius: '72%',
+        cutout: '55%',
+        radius: '58%',
         responsive: true,
         maintainAspectRatio: false,
         animation: this.chartLoadAnimation(),

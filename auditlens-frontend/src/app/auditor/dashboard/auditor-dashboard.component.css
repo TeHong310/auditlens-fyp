@@ -172,9 +172,9 @@
    vertical room. Review Workload shares this same grid row, so CSS
    Grid's default align-items:stretch stretches its card to match this
    new height too — chart-body-workload lets it grow to fill that
-   already-stretched space (same fix as chart-body-small below) so it
-   doesn't end up with empty space under its own, unrelated bars. */
-.chart-body-trend { height: 190px; }
+   already-stretched space so it doesn't end up with empty space under
+   its own, unrelated bars. */
+.chart-body-trend { height: 270px; }
 .chart-body-workload { flex: 1 1 auto; }
 
 .chart-body {
@@ -185,28 +185,33 @@
 
 /* Status Breakdown / Authenticity Outcomes / Transaction Risk
    Distribution — these 3 cards share this row with Audit Findings
-   Overview, whose taller chart-body-findings (190px) now makes CSS
-   Grid's default align-items:stretch stretch every card in the row to
-   match it. chart-body-small's own height (108px) stayed fixed
-   (flex: 0 0 auto, inherited from .chart-body), so the stretched extra
-   space just sat empty below the chart. flex: 1 1 auto lets it grow
-   to fill that same already-stretched card height instead (the card's
-   own outer size is unchanged — only how this element uses the space
-   already inside it) — combined with each card's own existing
-   centering (.radial-row's height:100%+align-items:center for Status
-   Breakdown, .donut-body's align-items/justify-content:center for the
-   two donuts), the chart content now centers in the additional room
-   instead of sitting flush under the subtitle. padding-top nudges it
-   down a touch further from the subtitle specifically. */
-.chart-body-small {
-  height: 108px;
-  flex: 1 1 auto;
-  padding-top: 6px;
+   Overview, whose taller chart-body-findings (190px) makes CSS Grid's
+   default align-items:stretch stretch every card in the row to match
+   it. Rather than letting the chart itself grow to fill that stretched
+   space (which just made the same-size donut/rings sit in a bigger
+   box), these stay capped at a small fixed height so they read as
+   compact summary visuals — "margin: auto 0" (auto top+bottom margins
+   on a flex-column child) then centers just this one element within
+   whatever leftover space the stretch leaves after the title/subtitle,
+   without touching justify-content on .chart-card itself (which would
+   also shift the title/subtitle down). */
+.chart-body-status {
+  height: 120px;
+  flex: 0 0 auto;
+  margin: auto 0;
+}
+
+.chart-body-donut {
+  height: 160px;
+  flex: 0 0 auto;
+  margin: auto 0;
 }
 
 /* Audit Findings Overview only — 5 rows + a visible x-axis need more
-   vertical room than the shared chart-body-small (108px) other cards
-   in this row still use. */
+   vertical room than the other cards in this row still use (Status
+   Breakdown/Authenticity Outcomes/Transaction Risk Distribution now
+   cap themselves independently, above), and stays the row's tallest,
+   driving how much stretched space CSS Grid gives every card in it. */
 .chart-body-findings { height: 190px; }
 
 .donut-body { display: flex; align-items: center; justify-content: center; }
@@ -234,11 +239,12 @@
   gap: 6px;
 }
 
-/* ~27% smaller than before (was 54px/37px) — a compact KPI-style
-   ring instead of a chart-sized one; same ring-to-hole proportion. */
+/* Further reduced (was 40px/28px, originally 54px/37px) for a clearly
+   compact KPI-style ring, not a chart-sized one; same ring-to-hole
+   proportion. */
 .radial-ring {
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -247,8 +253,8 @@
 }
 
 .radial-ring-hole {
-  width: 28px;
-  height: 28px;
+  width: 23px;
+  height: 23px;
   border-radius: 50%;
   background: var(--bg-card);
   display: flex;
@@ -257,7 +263,7 @@
 }
 
 .radial-pct {
-  font-size: 8.5px;
+  font-size: 7.5px;
   font-weight: 700;
   color: var(--text-primary);
 }
