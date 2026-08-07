@@ -397,9 +397,11 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   }
 
   // Grouped bar chart (Approved / Need Review / Sent Back side-by-side
-  // per date) with a Total Reviewed line overlay — each bar shows its
-  // own category, the line shows the day's overall volume without
-  // needing to eyeball a stacked total.
+  // per date) with a Cumulative Reviews line overlay — each bar shows
+  // its own daily category, the line shows the running total across
+  // the 7-day window (not a same-day total, which sat right on top of
+  // the bar values and read as a misleading extra bar-height rather
+  // than a distinct trend signal).
   renderTrendChart() {
     if (!this.viewReady || !this.trendChartRef || !this.reportSummaryLoaded || !this.reportSummary) return;
     if (this.trendChartInstance) this.trendChartInstance.destroy();
@@ -410,11 +412,14 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     const approved = days.map(t => t.approved || 0);
     const needReview = days.map(t => t.need_review || 0);
     const sentBack = days.map(t => t.sent_back || 0);
-    // Total Reviewed = the 3 review_records action counts for that day
-    // added together — each review_records row has exactly one action,
-    // counted once via the backend's GROUP BY day/action, so this is a
-    // plain sum of 3 disjoint categories, never a double count.
-    const totalReviewed = days.map((_: any, i: number) => approved[i] + needReview[i] + sentBack[i]);
+    // Cumulative Reviews = running sum, across the visible window, of
+    // each day's 3 review_records action counts added together — each
+    // review_records row has exactly one action, counted once via the
+    // backend's GROUP BY day/action, so each day's own contribution is
+    // a plain sum of 3 disjoint categories (never a double count)
+    // before it's carried forward into the running total.
+    let runningTotal = 0;
+    const cumulativeReviews = days.map((_: any, i: number) => (runningTotal += approved[i] + needReview[i] + sentBack[i]));
 
     const ctx = this.trendChartRef.nativeElement.getContext('2d');
 
@@ -470,10 +475,10 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
             categoryPercentage: 0.55, barPercentage: 0.75,
           },
           {
-            type: 'line', label: 'Total Reviewed', data: totalReviewed,
+            type: 'line', label: 'Cumulative Reviews', data: cumulativeReviews,
             borderColor: CHART_PALETTE.violet, backgroundColor: 'transparent', fill: false,
-            borderWidth: 2.5, tension: 0.35,
-            pointRadius: 3, pointHoverRadius: 5,
+            borderWidth: 2, tension: 0.35,
+            pointRadius: 2.5, pointHoverRadius: 5,
             pointBackgroundColor: CHART_PALETTE.violet, pointBorderColor: CHART_PALETTE.violet,
           },
         ]
