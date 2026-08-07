@@ -30,7 +30,6 @@ export class AuditorAnomaliesComponent implements OnInit {
   };
 
   isLoading: boolean = false;
-  isRunningAnalysis: boolean = false;
   errorMessage: string = '';
   statsErrorMessage: string = '';
 
@@ -138,30 +137,6 @@ export class AuditorAnomaliesComponent implements OnInit {
       error: (err) => {
         this.isLoading = false;
         this.errorMessage = err.error?.error || 'Failed to load anomalies.';
-        this.cdr.detectChanges();
-      }
-    });
-  }
-
-  // Re-runs the EXISTING per-document detection (helpers/anomaly_
-  // detector.py's run_anomaly_detection, untouched) across every
-  // invoice — see routes/anomalies.py's POST /anomalies/run. Refreshes
-  // the page's own data automatically once the run completes, via the
-  // same loadStats()/loadAnomalies() calls ngOnInit already uses.
-  runAnalysis() {
-    if (this.isRunningAnalysis) return;
-    this.isRunningAnalysis = true;
-    this.errorMessage = '';
-    this.http.post<any>(`${this.apiUrl}/anomalies/run`, {}, { headers: this.getHeaders() }).subscribe({
-      next: () => {
-        this.isRunningAnalysis = false;
-        this.loadStats();
-        this.loadAnomalies();
-        this.cdr.detectChanges();
-      },
-      error: (err) => {
-        this.isRunningAnalysis = false;
-        this.errorMessage = err.error?.error || 'Failed to run anomaly analysis.';
         this.cdr.detectChanges();
       }
     });

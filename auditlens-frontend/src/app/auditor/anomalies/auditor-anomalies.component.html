@@ -1,10 +1,9 @@
 <div class="page-wrapper">
 
-  <!-- Header — Back to Audit Review (top-right) replaces Run Anomaly
-       Analysis ONLY when this page was reached from a specific case's
-       Audit Review Timeline (document_id + ref=audit-review in the
-       URL); the normal sidebar-accessed global list looks exactly as
-       before. -->
+  <!-- Header — Back to Audit Review (top-right) shows ONLY when this
+       page was reached from a specific case's Audit Review Timeline
+       (document_id + ref=audit-review in the URL); the normal sidebar-
+       accessed global list shows just the titles, no button. -->
   <div class="header">
     <div class="header-top">
       <div class="header-titles">
@@ -12,10 +11,6 @@
         <p class="page-subtitle" *ngIf="!caseDocumentId">AI-powered pattern analysis • {{ stats.total }} anomalies detected</p>
         <p class="page-subtitle" *ngIf="caseDocumentId">Anomaly details for this case</p>
       </div>
-      <button class="btn-run-analysis" *ngIf="!caseDocumentId" (click)="runAnalysis()" [disabled]="isRunningAnalysis">
-        <i class="ph-duotone" [ngClass]="isRunningAnalysis ? 'ph-hourglass-medium' : 'ph-arrow-clockwise'"></i>
-        {{ isRunningAnalysis ? 'Running Analysis…' : 'Run Anomaly Analysis' }}
-      </button>
       <button class="btn-run-analysis" *ngIf="caseDocumentId" (click)="backToAuditReview()">
         ← Back to Audit Review
       </button>
