@@ -397,10 +397,9 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   }
 
   // Grouped bar chart (Approved / Need Review / Sent Back side-by-side
-  // per date) — replaces the earlier stacked-bars-plus-line design,
-  // which read as cluttered. The Total Reviewed line/dataset is gone
-  // entirely — each bar's own height already tells that story without
-  // the overlay.
+  // per date) with a Total Reviewed line overlay — each bar shows its
+  // own category, the line shows the day's overall volume without
+  // needing to eyeball a stacked total.
   renderTrendChart() {
     if (!this.viewReady || !this.trendChartRef || !this.reportSummaryLoaded || !this.reportSummary) return;
     if (this.trendChartInstance) this.trendChartInstance.destroy();
@@ -411,6 +410,11 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     const approved = days.map(t => t.approved || 0);
     const needReview = days.map(t => t.need_review || 0);
     const sentBack = days.map(t => t.sent_back || 0);
+    // Total Reviewed = the 3 review_records action counts for that day
+    // added together — each review_records row has exactly one action,
+    // counted once via the backend's GROUP BY day/action, so this is a
+    // plain sum of 3 disjoint categories, never a double count.
+    const totalReviewed = days.map((_: any, i: number) => approved[i] + needReview[i] + sentBack[i]);
 
     const ctx = this.trendChartRef.nativeElement.getContext('2d');
 
@@ -464,6 +468,13 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
             backgroundColor: CHART_PALETTE.coral,
             borderRadius: 3, borderSkipped: false,
             categoryPercentage: 0.55, barPercentage: 0.75,
+          },
+          {
+            type: 'line', label: 'Total Reviewed', data: totalReviewed,
+            borderColor: CHART_PALETTE.violet, backgroundColor: 'transparent', fill: false,
+            borderWidth: 2.5, tension: 0.35,
+            pointRadius: 3, pointHoverRadius: 5,
+            pointBackgroundColor: CHART_PALETTE.violet, pointBorderColor: CHART_PALETTE.violet,
           },
         ]
       },
