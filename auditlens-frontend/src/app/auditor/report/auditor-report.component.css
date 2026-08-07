@@ -368,11 +368,6 @@
   flex-wrap: wrap;
 }
 
-.btn-export-disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
 /* Trail Card */
 .trail-card {
   background: var(--bg-card);

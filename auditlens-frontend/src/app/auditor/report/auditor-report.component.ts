@@ -123,8 +123,10 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
   // ── Pagination — frontend-only, over the already-loaded entries
   // array shared by both tables below (no new backend call; distinct
   // from the existing `pageSize` above, which is the Load More fetch
-  // batch size, not the on-screen rows-per-page). ──
-  rowsPerPage = 10;
+  // batch size, not the on-screen rows-per-page). Each table keeps its
+  // own page size so changing one never affects the other.
+  reviewRowsPerPage = 10;
+  auditTrailRowsPerPage = 5;
   currentReviewPage = 1;
   currentAuditTrailPage = 1;
 
@@ -632,7 +634,7 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
   // loaded). ──
 
   get totalAuditTrailPages(): number {
-    return Math.max(1, Math.ceil(this.entries.length / this.rowsPerPage));
+    return Math.max(1, Math.ceil(this.entries.length / this.auditTrailRowsPerPage));
   }
 
   get auditTrailPageNumbers(): number[] {
@@ -640,8 +642,8 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
   }
 
   get paginatedAuditTrail(): any[] {
-    const startIndex = (this.currentAuditTrailPage - 1) * this.rowsPerPage;
-    return this.entries.slice(startIndex, startIndex + this.rowsPerPage);
+    const startIndex = (this.currentAuditTrailPage - 1) * this.auditTrailRowsPerPage;
+    return this.entries.slice(startIndex, startIndex + this.auditTrailRowsPerPage);
   }
 
   goToAuditTrailPage(page: number) {
@@ -670,7 +672,7 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
   // its own page cursor since the two tables are independent views). ──
 
   get totalReviewPages(): number {
-    return Math.max(1, Math.ceil(this.recentActivity.length / this.rowsPerPage));
+    return Math.max(1, Math.ceil(this.recentActivity.length / this.reviewRowsPerPage));
   }
 
   get reviewPageNumbers(): number[] {
@@ -678,8 +680,8 @@ export class AuditorReportComponent implements OnInit, AfterViewInit {
   }
 
   get paginatedReviewActivity(): any[] {
-    const startIndex = (this.currentReviewPage - 1) * this.rowsPerPage;
-    return this.recentActivity.slice(startIndex, startIndex + this.rowsPerPage);
+    const startIndex = (this.currentReviewPage - 1) * this.reviewRowsPerPage;
+    return this.recentActivity.slice(startIndex, startIndex + this.reviewRowsPerPage);
   }
 
   goToReviewPage(page: number) {
