@@ -20,8 +20,8 @@ showing its dashed placeholder box.
 | Audit Evidence Passport | `audit-evidence-passport.png` |
 | Finance Home | `finance-home.png` |
 | Finance — Upload Document | `finance-upload-document.png` |
-| Finance — Transaction Packages | `finance-transaction-packages.png` |
-| Finance — OCR Review | `finance-ocr-review.png` |
+| Finance — Transaction Packages | `transaction-package.png` |
+| Finance — OCR Review | `ocr-review.png` |
 | Finance — Correction Center | `finance-correction-center.png` |
 | Finance — Correction Detail | `finance-correction-detail.png` |
 | Finance — Reports | `finance-report.png` |
