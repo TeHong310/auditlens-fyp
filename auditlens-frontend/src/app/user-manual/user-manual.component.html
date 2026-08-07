@@ -27,17 +27,44 @@
   <!-- ============================================================ -->
   <ng-container *ngIf="isFinance">
 
-    <!-- 1. Upload Document -->
-    <div class="manual-card" *ngIf="matches('upload document invoice ocr extraction data validation audit processing submit')">
+    <!-- 1. Finance Home -->
+    <div class="manual-card" *ngIf="matches('finance home dashboard overview total uploaded ocr processed under review approved correction required pending finance action upload processing trend ocr processing performance document status overview')">
+      <button class="manual-card-header" (click)="toggleSection('f-home')" [class.expanded]="isExpanded('f-home')">
+        <span class="manual-card-header-left">
+          <i class="ph-duotone ph-house"></i>
+          <span class="manual-card-title">1. Finance Home</span>
+        </span>
+        <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
+      </button>
+      <div class="manual-card-body" *ngIf="isExpanded('f-home')">
+        <p class="manual-purpose"><strong>Purpose:</strong> your at-a-glance overview of upload and OCR processing activity, shown when you log in.</p>
+
+        <ul class="manual-list">
+          <li><strong>KPI cards</strong> — Total Uploaded, OCR Processed, Under Review, Approved, Correction Required, and Pending Finance Action.</li>
+          <li><strong>Upload Processing Trend</strong> and <strong>OCR Processing Performance</strong> — monthly upload/OCR volume and extraction confidence.</li>
+          <li><strong>Document Status Overview</strong> and the other charts below it — a quick breakdown of where documents currently stand.</li>
+          <li>Quick-navigation buttons jump straight to Correction Center, Upload Document, or OCR Review.</li>
+        </ul>
+
+        <app-screenshot-placeholder src="manual/finance-home.png" label="Add real system screenshot here — Finance Home"></app-screenshot-placeholder>
+
+        <a class="manual-open-btn" routerLink="/finance/home">
+          <i class="ph-duotone ph-arrow-square-out"></i> Open Finance Home
+        </a>
+      </div>
+    </div>
+
+    <!-- 2. Upload Document -->
+    <div class="manual-card" *ngIf="matches('upload document invoice ocr extraction data validation audit processing submit drag drop zip confirm document types')">
       <button class="manual-card-header" (click)="toggleSection('f-upload')" [class.expanded]="isExpanded('f-upload')">
         <span class="manual-card-header-left">
           <i class="ph-duotone ph-upload-simple"></i>
-          <span class="manual-card-title">1. Upload Document</span>
+          <span class="manual-card-title">2. Upload Document</span>
         </span>
         <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
       </button>
       <div class="manual-card-body" *ngIf="isExpanded('f-upload')">
-        <p class="manual-purpose"><strong>Purpose:</strong> submit invoice documents to AuditLens for OCR extraction and audit review.</p>
+        <p class="manual-purpose"><strong>Purpose:</strong> submit invoice, PO, or GR documents to AuditLens for OCR extraction and audit review.</p>
 
         <p class="manual-label">Workflow</p>
         <div class="workflow-row">
@@ -48,12 +75,12 @@
         </div>
 
         <ul class="manual-list">
-          <li>Go to <strong>Upload Document</strong> and choose a PDF or image (JPG/PNG) of the invoice.</li>
-          <li>AuditLens accepts a scanned copy, a phone photo, or a digitally-generated PDF — no special formatting needed.</li>
-          <li>After upload, the document is automatically OCR/AI-extracted, then moves to <strong>OCR Review</strong> for you to confirm, and finally becomes visible to auditors for three-way matching and audit processing.</li>
+          <li>Drag files onto the dropzone or click <strong>Browse Files</strong> — PDF, JPG, JPEG, PNG, or a ZIP of these, up to 10MB each.</li>
+          <li>AuditLens tries to detect each file's document type automatically. If it can't, <strong>Confirm Document Types</strong> asks you to pick Invoice, Purchase Order, or Goods Receipt before it continues.</li>
+          <li>Once confirmed, the file is automatically OCR/AI-extracted, then moves to <strong>OCR Review</strong> for you to check, and finally becomes visible to auditors for three-way matching.</li>
         </ul>
 
-        <app-screenshot-placeholder src="manual/upload-document.png" label="Add real system screenshot here — Upload Document page"></app-screenshot-placeholder>
+        <app-screenshot-placeholder src="manual/finance-upload-document.png" label="Add real system screenshot here — Upload Document page"></app-screenshot-placeholder>
 
         <a class="manual-open-btn" routerLink="/finance/upload">
           <i class="ph-duotone ph-arrow-square-out"></i> Open Upload Document
@@ -61,17 +88,17 @@
       </div>
     </div>
 
-    <!-- 2. Transaction Package -->
-    <div class="manual-card" *ngIf="matches('transaction package invoice purchase order po goods receipt gr group')">
+    <!-- 3. Transaction Packages -->
+    <div class="manual-card" *ngIf="matches('transaction packages invoice purchase order po goods receipt gr group new transaction package relationship preview')">
       <button class="manual-card-header" (click)="toggleSection('f-package')" [class.expanded]="isExpanded('f-package')">
         <span class="manual-card-header-left">
           <i class="ph-duotone ph-package"></i>
-          <span class="manual-card-title">2. Transaction Package</span>
+          <span class="manual-card-title">3. Transaction Packages</span>
         </span>
         <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
       </button>
       <div class="manual-card-body" *ngIf="isExpanded('f-package')">
-        <p>A <strong>Transaction Package</strong> groups documents that belong to the same procurement case, so an auditor sees them together instead of as separate, disconnected uploads. A package can contain more than one invoice — e.g. when a single Purchase Order is billed across several invoices.</p>
+        <p class="manual-purpose"><strong>Purpose:</strong> group documents that belong to the same procurement case, so an auditor sees them together instead of as separate, disconnected uploads.</p>
 
         <p class="manual-label">Document relationships</p>
         <div class="doc-relationship-row">
@@ -80,14 +107,13 @@
           <span class="doc-chip"><i class="ph-duotone ph-truck"></i> Goods Receipt (GR)</span>
         </div>
 
-        <p class="manual-label">Examples</p>
         <ul class="manual-list">
-          <li><strong>Single invoice package</strong> — one invoice grouped on its own.</li>
-          <li><strong>Multiple invoice package</strong> — several invoices billed against the same order, grouped together.</li>
-          <li><strong>Invoice + PO + GR package</strong> — the full three-way set for one procurement case.</li>
+          <li>Click <strong>New Transaction Package</strong>, name it, then upload its PO(s), invoice(s), and GR(s) — each into its own upload zone — and click <strong>Create Package</strong>.</li>
+          <li>The package list shows every package's supplier, document count, status, and created date — click a row to open it, or <strong>Delete</strong> to remove it.</li>
+          <li>A package's detail page shows its documents plus a <strong>Relationship Preview</strong> — a read-only view of how they link together (matching itself happens automatically once Enterprise Matching runs).</li>
         </ul>
 
-        <app-screenshot-placeholder src="manual/transaction-package.png" label="Add real system screenshot here — Transaction Package page"></app-screenshot-placeholder>
+        <app-screenshot-placeholder src="manual/finance-transaction-packages.png" label="Add real system screenshot here — Transaction Packages page"></app-screenshot-placeholder>
 
         <a class="manual-open-btn" routerLink="/finance/transactions">
           <i class="ph-duotone ph-arrow-square-out"></i> Open Transactions
@@ -95,35 +121,40 @@
       </div>
     </div>
 
-    <!-- 3. OCR Review -->
-    <div class="manual-card" *ngIf="matches('ocr review vendor invoice number date amount line items correct confirm')">
+    <!-- 4. OCR Review -->
+    <div class="manual-card" *ngIf="matches('ocr review queue vendor invoice number date amount line items correct confirm purchase order goods receipt po status gr status')">
       <button class="manual-card-header" (click)="toggleSection('f-ocr')" [class.expanded]="isExpanded('f-ocr')">
         <span class="manual-card-header-left">
           <i class="ph-duotone ph-scan"></i>
-          <span class="manual-card-title">3. OCR Review</span>
+          <span class="manual-card-title">4. OCR Review</span>
         </span>
         <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
       </button>
       <div class="manual-card-body" *ngIf="isExpanded('f-ocr')">
-        <p class="manual-purpose"><strong>Purpose:</strong> review the invoice information AuditLens extracted automatically before it goes to audit.</p>
+        <p class="manual-purpose"><strong>Purpose:</strong> review the information AuditLens extracted automatically — across Invoices, Purchase Orders, and Goods Receipts — before it goes to audit.</p>
+
+        <ul class="manual-list">
+          <li>Three tabs — <strong>Invoice</strong>, <strong>Purchase Order</strong>, and <strong>Goods Receipt</strong> — each with its own review list.</li>
+          <li>The summary row shows how many documents Need Correction, are Waiting Review, or are Ready to Submit.</li>
+          <li>For invoices, the PO Status/GR Status columns show whether a matching PO or GR has been linked yet.</li>
+        </ul>
 
         <p class="manual-label">Fields to check</p>
         <ul class="manual-fields-list">
           <li><i class="ph-duotone ph-storefront"></i> Vendor</li>
-          <li><i class="ph-duotone ph-hash"></i> Invoice number</li>
-          <li><i class="ph-duotone ph-calendar-blank"></i> Invoice date</li>
+          <li><i class="ph-duotone ph-hash"></i> Invoice/PO/GR number</li>
+          <li><i class="ph-duotone ph-calendar-blank"></i> Date</li>
           <li><i class="ph-duotone ph-currency-circle-dollar"></i> Amount</li>
           <li><i class="ph-duotone ph-list-bullets"></i> Line items</li>
         </ul>
 
         <p class="manual-label">What to do</p>
         <ul class="manual-list">
-          <li>Review each extracted field against the original document.</li>
-          <li>Correct any value OCR read incorrectly.</li>
-          <li>Confirm the information once it's accurate.</li>
+          <li>Click <strong>Review</strong> to open a document and check each extracted field against the original.</li>
+          <li>Correct any value OCR read incorrectly, then confirm it — or <strong>Open</strong> to view the original file, or <strong>Delete</strong> to remove it.</li>
         </ul>
 
-        <app-screenshot-placeholder src="manual/ocr-review.png" label="Add real system screenshot here — OCR Review page"></app-screenshot-placeholder>
+        <app-screenshot-placeholder src="manual/finance-ocr-review.png" label="Add real system screenshot here — OCR Review page"></app-screenshot-placeholder>
 
         <a class="manual-open-btn" routerLink="/finance/ocr-review">
           <i class="ph-duotone ph-arrow-square-out"></i> Open OCR Review
@@ -131,21 +162,25 @@
       </div>
     </div>
 
-    <!-- 4. Correction Center -->
-    <div class="manual-card" *ngIf="matches('correction center auditor request missing information respond')">
+    <!-- 5. Correction Center -->
+    <div class="manual-card" *ngIf="matches('correction center auditor request missing information respond priority return reason required action overdue')">
       <button class="manual-card-header" (click)="toggleSection('f-correction')" [class.expanded]="isExpanded('f-correction')">
         <span class="manual-card-header-left">
           <i class="ph-duotone ph-arrow-u-up-left"></i>
-          <span class="manual-card-title">4. Correction Center</span>
+          <span class="manual-card-title">5. Correction Center</span>
         </span>
         <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
       </button>
       <div class="manual-card-body" *ngIf="isExpanded('f-correction')">
         <ul class="manual-list">
           <li>An auditor sends a document back here when something needs your attention — a missing document, an unclear field, or a value that needs verifying.</li>
-          <li>Open the case to see the auditor's exact reason and requested action.</li>
+          <li>The list shows each invoice's Priority, Return Reason, Required Action, and current Status — a red <strong>Overdue</strong> badge appears if the response is past due.</li>
+          <li>Open a row for its full <strong>Correction Detail</strong> page — the original invoice information alongside the auditor's exact instruction and due date.</li>
           <li>Upload the missing document or correct the flagged information, then respond so the auditor can review it again.</li>
         </ul>
+
+        <app-screenshot-placeholder src="manual/finance-correction-center.png" label="Add real system screenshot here — Correction Center page"></app-screenshot-placeholder>
+        <app-screenshot-placeholder src="manual/finance-correction-detail.png" label="Add real system screenshot here — Correction Detail page"></app-screenshot-placeholder>
 
         <a class="manual-open-btn" routerLink="/finance/corrections">
           <i class="ph-duotone ph-arrow-square-out"></i> Open Correction Center
@@ -153,20 +188,24 @@
       </div>
     </div>
 
-    <!-- 5. Reports -->
-    <div class="manual-card" *ngIf="matches('reports monitoring follow-up')">
+    <!-- 6. Reports -->
+    <div class="manual-card" *ngIf="matches('reports monitoring follow-up transaction status distribution processing trend top vendors export csv match status audit status')">
       <button class="manual-card-header" (click)="toggleSection('f-reports')" [class.expanded]="isExpanded('f-reports')">
         <span class="manual-card-header-left">
           <i class="ph-duotone ph-file-text"></i>
-          <span class="manual-card-title">5. Reports</span>
+          <span class="manual-card-title">6. Reports</span>
         </span>
         <i class="ph-duotone ph-caret-down manual-card-chevron"></i>
       </button>
       <div class="manual-card-body" *ngIf="isExpanded('f-reports')">
         <ul class="manual-list">
-          <li>Reports summarize your submitted documents and their current status at a glance.</li>
-          <li>Use them to monitor what's pending, what was sent back, and what still needs follow-up, without opening every record individually.</li>
+          <li><strong>KPI cards</strong> — Transaction Packages, Approved, Returned for Correction, Under Auditor Review, and Average OCR Confidence.</li>
+          <li><strong>Transaction Status Distribution</strong>, <strong>Processing Trend</strong> (last 14 days), and <strong>Top Vendors by Transaction Volume</strong> charts summarize activity at a glance.</li>
+          <li>The <strong>Transaction Package Report</strong> table lists every package with its Match Status, Audit Status, and latest auditor remark — click <strong>View</strong> to open one.</li>
+          <li><strong>Export CSV</strong> downloads the currently filtered report.</li>
         </ul>
+
+        <app-screenshot-placeholder src="manual/finance-report.png" label="Add real system screenshot here — Reports page"></app-screenshot-placeholder>
 
         <a class="manual-open-btn" routerLink="/finance/report">
           <i class="ph-duotone ph-arrow-square-out"></i> Open Reports

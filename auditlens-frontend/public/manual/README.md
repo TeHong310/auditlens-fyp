@@ -18,6 +18,10 @@ showing its dashed placeholder box.
 | Approval Workflow (Document Workflow Timeline) | `approval-workflow.png` |
 | Report & Log | `report-log.png` |
 | Audit Evidence Passport | `audit-evidence-passport.png` |
-| Finance — Upload Document | `upload-document.png` |
-| Finance — Transaction Package | `transaction-package.png` |
-| Finance — OCR Review | `ocr-review.png` |
+| Finance Home | `finance-home.png` |
+| Finance — Upload Document | `finance-upload-document.png` |
+| Finance — Transaction Packages | `finance-transaction-packages.png` |
+| Finance — OCR Review | `finance-ocr-review.png` |
+| Finance — Correction Center | `finance-correction-center.png` |
+| Finance — Correction Detail | `finance-correction-detail.png` |
+| Finance — Reports | `finance-report.png` |
