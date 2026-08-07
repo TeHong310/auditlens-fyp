@@ -380,38 +380,37 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   // and again from each load method's own callback (covers view-
   // ready-first) — whichever happens second is what actually draws. ──
 
-  // Audit Decision Trend — only dates with real activity are worth a
-  // bar (see redesign note below); scans the full 30-day timeline
-  // (not just a 14-day slice) so "latest 7 active dates" can reach back
-  // far enough to find them on a low-activity system, then keeps only
-  // the most recent 7 of those.
-  get trendActiveDays(): any[] {
+  // Audit Decision Trend — a fixed rolling 7-day window (the most
+  // recent 7 of the 30 days GET /auditor/report/summary already
+  // returns), every day shown regardless of activity — a day with no
+  // decisions simply renders as zero-height bars, rather than being
+  // dropped from the axis entirely (which, with only active dates
+  // shown, made bars read as oversized blocks instead of a normal
+  // enterprise trend chart).
+  get trendDays(): any[] {
     const timeline: any[] = this.reportSummary?.timeline || [];
-    const active = timeline.filter((t: any) => (t.approved || 0) + (t.need_review || 0) + (t.sent_back || 0) > 0);
-    return active.slice(-7);
+    return timeline.slice(-7);
   }
 
   get trendHasActivity(): boolean {
-    return this.trendActiveDays.length > 0;
+    return this.trendDays.some((t: any) => (t.approved || 0) + (t.need_review || 0) + (t.sent_back || 0) > 0);
   }
 
   // Grouped bar chart (Approved / Need Review / Sent Back side-by-side
   // per date) — replaces the earlier stacked-bars-plus-line design,
-  // which read as cluttered and, over a fixed 14-day window on a low-
-  // activity system, mostly empty space. Only dates that actually had a
-  // review decision are plotted at all (trendActiveDays above), and the
-  // Total Reviewed line/dataset is gone entirely — each bar's own
-  // height already tells that story without the overlay.
+  // which read as cluttered. The Total Reviewed line/dataset is gone
+  // entirely — each bar's own height already tells that story without
+  // the overlay.
   renderTrendChart() {
     if (!this.viewReady || !this.trendChartRef || !this.reportSummaryLoaded || !this.reportSummary) return;
     if (this.trendChartInstance) this.trendChartInstance.destroy();
     if (!this.trendHasActivity) return; // canvas isn't even in the DOM (*ngIf) in this case
 
-    const active = this.trendActiveDays;
-    const labels = active.map(t => this.formatShortDate(t.date));
-    const approved = active.map(t => t.approved || 0);
-    const needReview = active.map(t => t.need_review || 0);
-    const sentBack = active.map(t => t.sent_back || 0);
+    const days = this.trendDays;
+    const labels = days.map(t => this.formatShortDate(t.date));
+    const approved = days.map(t => t.approved || 0);
+    const needReview = days.map(t => t.need_review || 0);
+    const sentBack = days.map(t => t.sent_back || 0);
 
     const ctx = this.trendChartRef.nativeElement.getContext('2d');
 
@@ -448,16 +447,23 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
             type: 'bar', label: 'Approved', data: approved,
             backgroundColor: CHART_PALETTE.teal,
             borderRadius: 3, borderSkipped: false,
+            // Slimmer bars with more breathing room between them than
+            // Chart.js's defaults (0.8/0.9) — each day's 3-bar group
+            // occupies 55% of its label's width, and each bar within
+            // that group occupies 75% of its own slot.
+            categoryPercentage: 0.55, barPercentage: 0.75,
           },
           {
             type: 'bar', label: 'Need Review', data: needReview,
             backgroundColor: CHART_PALETTE.amber,
             borderRadius: 3, borderSkipped: false,
+            categoryPercentage: 0.55, barPercentage: 0.75,
           },
           {
             type: 'bar', label: 'Sent Back', data: sentBack,
             backgroundColor: CHART_PALETTE.coral,
             borderRadius: 3, borderSkipped: false,
+            categoryPercentage: 0.55, barPercentage: 0.75,
           },
         ]
       },
