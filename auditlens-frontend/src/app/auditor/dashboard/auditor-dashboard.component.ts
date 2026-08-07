@@ -79,10 +79,11 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   authenticityLoaded = false;
 
   authenticityOutcomes = { pass: 0, warning: 0, fail: 0 };
-  // Per-vendor authenticity FAIL counts (risk_level HIGH), from the SAME
-  // /authenticity call above — feeds Top Risk Suppliers' "Authenticity
-  // failure: +3" scoring component. No second call.
-  authenticityFailBySupplier: Map<string, number> = new Map();
+  // Per-vendor count of authenticity checks that came back Warning or
+  // Failure (risk_level HIGH), from the SAME /authenticity call above —
+  // feeds Top Risk Suppliers' "Authenticity Warning / Failure" signal.
+  // No second call.
+  authenticityRiskCountBySupplier: Map<string, number> = new Map();
 
   private viewReady = false;
   private trendChartInstance: any = null;
@@ -257,9 +258,10 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   }
 
   // ── Secondary: Authenticity Outcomes — feeds the Authenticity
-  // Outcomes chart below (unchanged), and ALSO builds a per-vendor FAIL
-  // count from the SAME rows (authenticityFailBySupplier) for Top Risk
-  // Suppliers' scoring — no second call. renderTopSuppliersChart() is
+  // Outcomes chart below (unchanged pass/warning/fail classification),
+  // and ALSO builds a per-vendor "Warning or Failure" check count from
+  // the SAME rows (authenticityRiskCountBySupplier) for Top Risk
+  // Suppliers below — no second call. renderTopSuppliersChart() is
   // re-triggered here too, since that chart depends on BOTH this data
   // and the transactions array from loadQueue(); whichever resolves
   // second is what actually draws it. ──
@@ -268,18 +270,21 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
       next: (res) => {
         const list = res || [];
         let pass = 0, warning = 0, fail = 0;
-        const failBySupplier = new Map<string, number>();
+        const riskCountBySupplier = new Map<string, number>();
         for (const a of list) {
+          const vendor = a.vendor_name || 'Unknown supplier';
           if (a.risk_level === 'HIGH') {
             fail++;
-            const vendor = a.vendor_name || 'Unknown supplier';
-            failBySupplier.set(vendor, (failBySupplier.get(vendor) || 0) + 1);
+            riskCountBySupplier.set(vendor, (riskCountBySupplier.get(vendor) || 0) + 1);
           }
           else if (a.authenticity_status === 'passed') pass++;
-          else warning++;
+          else {
+            warning++;
+            riskCountBySupplier.set(vendor, (riskCountBySupplier.get(vendor) || 0) + 1);
+          }
         }
         this.authenticityOutcomes = { pass, warning, fail };
-        this.authenticityFailBySupplier = failBySupplier;
+        this.authenticityRiskCountBySupplier = riskCountBySupplier;
         this.authenticityLoaded = true;
         this.cdr.detectChanges();
         this.renderAuthChart();
@@ -695,42 +700,42 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   // ── Top Risk Suppliers — replaces the old Transaction Risk
   // Distribution doughnut, whose Low/Medium/High breakdown duplicated
   // Audit Risk Distribution's own information. Groups the SAME
-  // transactions array by supplier, scoring each transaction with
-  // riskLevelFor() (shared with riskDistribution above — no second risk
-  // calculation) plus the auditor's own review outcome, then adds each
-  // supplier's authenticity failures from authenticityFailBySupplier
-  // (built in loadAuthenticity() from the SAME /authenticity call
-  // already made for Authenticity Outcomes — no new backend call). ──
+  // transactions array by supplier and counts each supplier's actual
+  // number of risk-related transactions — a plain count, not a weighted
+  // score, per "the number displayed should represent the actual count
+  // of risky transactions". ──
 
-  // High risk transaction: +3, Medium risk transaction: +2, Sent Back
-  // review: +2, Need Review status: +1 — reads riskLevelFor()/
-  // latest_review_action/workflow_status, the same fields Review
-  // Workload and Audit Risk Distribution already read off this
+  // A transaction counts once (regardless of how many of these
+  // conditions it matches) if it has High Risk / Medium Risk
+  // (riskLevelFor() — shared with riskDistribution above, no second
+  // risk calculation) / Need Review / Sent Back — the same fields
+  // Review Workload and Audit Risk Distribution already read off this
   // transaction.
-  private transactionRiskScore(t: any): number {
-    let score = 0;
+  private isRiskyTransaction(t: any): boolean {
     const level = this.riskLevelFor(t);
-    if (level === 'HIGH') score += 3;
-    else if (level === 'MEDIUM') score += 2;
-    if (t.latest_review_action === 'returned') score += 2;
-    if (t.workflow_status === 'NEED REVIEW') score += 1;
-    return score;
+    return level === 'HIGH' || level === 'MEDIUM' ||
+      t.workflow_status === 'NEED REVIEW' ||
+      t.latest_review_action === 'returned';
   }
 
-  get topRiskSuppliers(): { supplier: string; score: number }[] {
-    const scores = new Map<string, number>();
+  get topRiskSuppliers(): { supplier: string; count: number }[] {
+    const counts = new Map<string, number>();
     for (const t of this.transactions) {
+      if (!this.isRiskyTransaction(t)) continue;
       const supplier = t.supplier || 'Unknown supplier';
-      scores.set(supplier, (scores.get(supplier) || 0) + this.transactionRiskScore(t));
+      counts.set(supplier, (counts.get(supplier) || 0) + 1);
     }
-    // Authenticity failure: +3 per failed check recorded for that supplier.
-    for (const [supplier, failCount] of this.authenticityFailBySupplier) {
-      scores.set(supplier, (scores.get(supplier) || 0) + failCount * 3);
+    // Authenticity Warning / Failure: each such check recorded for that
+    // supplier also counts as one risk-related item (authenticityRiskCountBySupplier,
+    // built in loadAuthenticity() from the SAME /authenticity call
+    // already made for Authenticity Outcomes — no new backend call).
+    for (const [supplier, riskCount] of this.authenticityRiskCountBySupplier) {
+      counts.set(supplier, (counts.get(supplier) || 0) + riskCount);
     }
-    return Array.from(scores.entries())
-      .map(([supplier, score]) => ({ supplier, score }))
-      .filter(s => s.score > 0)
-      .sort((a, b) => b.score - a.score)
+    return Array.from(counts.entries())
+      .map(([supplier, count]) => ({ supplier, count }))
+      .filter(s => s.count > 0)
+      .sort((a, b) => b.count - a.count)
       .slice(0, 5);
   }
 
@@ -752,6 +757,31 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
   }
 
+  // Wraps a long supplier name onto multiple lines at word boundaries —
+  // Chart.js natively renders an array-of-strings tick label as
+  // multiple lines, sized off each LINE's own (much shorter) width
+  // rather than the full name's, so the y-axis no longer needs to
+  // reserve — or clip past — enough horizontal room for one long line.
+  // No truncation: every character of the name is kept, just wrapped.
+  private wrapSupplierLabel(name: string): string[] {
+    const maxLineLength = 22;
+    if (name.length <= maxLineLength) return [name];
+    const words = name.split(' ');
+    const lines: string[] = [];
+    let current = '';
+    for (const word of words) {
+      const next = current ? `${current} ${word}` : word;
+      if (next.length > maxLineLength && current) {
+        lines.push(current);
+        current = word;
+      } else {
+        current = next;
+      }
+    }
+    if (current) lines.push(current);
+    return lines;
+  }
+
   renderTopSuppliersChart() {
     if (!this.viewReady || !this.topSuppliersChartRef || this.isLoading || !this.authenticityLoaded) return;
     if (this.topSuppliersChartInstance) this.topSuppliersChartInstance.destroy();
@@ -759,13 +789,12 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
     const suppliers = this.topRiskSuppliers;
     if (!suppliers.length) return; // canvas isn't in the DOM here (*ngIf) — the empty state shows instead
 
-    const maxScore = suppliers[0].score;
-    const minScore = suppliers[suppliers.length - 1].score;
-    const range = maxScore - minScore || 1;
-    const barColors = suppliers.map(s => this.riskColor((maxScore - s.score) / range));
-    const maxValue = Math.max(1, ...suppliers.map(s => s.score));
+    const maxCount = suppliers[0].count;
+    const minCount = suppliers[suppliers.length - 1].count;
+    const range = maxCount - minCount || 1;
+    const barColors = suppliers.map(s => this.riskColor((maxCount - s.count) / range));
 
-    // Draws each bar's own score just past its end — same inline
+    // Draws each bar's own count just past its end — same inline
     // Chart.js plugin technique Audit Risk Distribution already uses,
     // registered only on this chart's own `plugins` array below.
     const valueLabelPlugin = {
@@ -791,9 +820,9 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
       type: 'bar',
       plugins: [valueLabelPlugin],
       data: {
-        labels: suppliers.map(s => s.supplier),
+        labels: suppliers.map(s => this.wrapSupplierLabel(s.supplier)),
         datasets: [{
-          data: suppliers.map(s => s.score),
+          data: suppliers.map(s => s.count),
           backgroundColor: barColors,
           borderRadius: 3, borderSkipped: false,
           categoryPercentage: 0.6, barPercentage: 0.5,
@@ -803,18 +832,25 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
         indexAxis: 'y' as const,
         responsive: true,
         maintainAspectRatio: false,
-        layout: { padding: { right: 18 } },
+        // Room on the right for the value label, and a touch on the
+        // left so the y-axis's own (now much shorter, wrapped) label
+        // lines don't sit flush against the card edge.
+        layout: { padding: { right: 18, left: 4 } },
         animation: this.chartLoadAnimation(),
         plugins: { legend: { display: false } },
         scales: {
           x: {
             display: true,
             beginAtZero: true,
-            suggestedMax: Math.max(maxValue + 1, 4),
+            suggestedMax: Math.max(maxCount + 1, 4),
             ticks: { stepSize: 1, font: { size: 9 }, color: '#8A8D9E' },
             grid: { color: 'rgba(255, 255, 255, 0.08)' },
           },
-          y: { ticks: { font: { size: 10.5 }, color: '#E6E7EE' }, grid: { display: false } }
+          // Smaller font + tighter line height than the other bar
+          // charts on this page — this axis now renders up to 2-3 lines
+          // per supplier (see wrapSupplierLabel above) and needs to fit
+          // that within the same per-row height they use for one.
+          y: { ticks: { font: { size: 9.5, lineHeight: 1.15 }, color: '#E6E7EE' }, grid: { display: false } }
         }
       }
     });

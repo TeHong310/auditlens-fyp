@@ -136,7 +136,7 @@
 
     <div class="chart-card">
       <p class="chart-title">Top Risk Suppliers</p>
-      <p class="chart-subtitle">Suppliers with highest audit risk exposure</p>
+      <p class="chart-subtitle">Suppliers with the highest number of risk-related transactions</p>
       <div class="chart-body chart-body-risk-bar">
         <canvas #topSuppliersChart *ngIf="!isLoading && authenticityLoaded && topRiskSuppliers.length > 0"></canvas>
         <p class="chart-loading-note" *ngIf="isLoading || !authenticityLoaded">Loading…</p>
