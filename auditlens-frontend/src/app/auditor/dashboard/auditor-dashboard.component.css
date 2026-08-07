@@ -172,7 +172,26 @@
   flex: 0 0 auto;
 }
 
-.chart-body-small { height: 108px; }
+/* Status Breakdown / Authenticity Outcomes / Transaction Risk
+   Distribution — these 3 cards share this row with Audit Findings
+   Overview, whose taller chart-body-findings (190px) now makes CSS
+   Grid's default align-items:stretch stretch every card in the row to
+   match it. chart-body-small's own height (108px) stayed fixed
+   (flex: 0 0 auto, inherited from .chart-body), so the stretched extra
+   space just sat empty below the chart. flex: 1 1 auto lets it grow
+   to fill that same already-stretched card height instead (the card's
+   own outer size is unchanged — only how this element uses the space
+   already inside it) — combined with each card's own existing
+   centering (.radial-row's height:100%+align-items:center for Status
+   Breakdown, .donut-body's align-items/justify-content:center for the
+   two donuts), the chart content now centers in the additional room
+   instead of sitting flush under the subtitle. padding-top nudges it
+   down a touch further from the subtitle specifically. */
+.chart-body-small {
+  height: 108px;
+  flex: 1 1 auto;
+  padding-top: 6px;
+}
 
 /* Audit Findings Overview only — 5 rows + a visible x-axis need more
    vertical room than the shared chart-body-small (108px) other cards
