@@ -127,10 +127,10 @@
     <div class="chart-card">
       <p class="chart-title">Audit Findings Overview</p>
       <p class="chart-subtitle">Detected findings across reviewed transactions</p>
-      <div class="chart-body chart-body-small">
-        <canvas #exceptionChart *ngIf="!isLoading && authenticityLoaded && findingsOverview.length > 0"></canvas>
+      <div class="chart-body chart-body-findings">
+        <canvas #exceptionChart *ngIf="!isLoading && authenticityLoaded && findingsTotal > 0"></canvas>
         <p class="chart-loading-note" *ngIf="isLoading || !authenticityLoaded">Loading…</p>
-        <p class="chart-empty-note" *ngIf="!isLoading && authenticityLoaded && findingsOverview.length === 0">No findings detected</p>
+        <p class="chart-empty-note" *ngIf="!isLoading && authenticityLoaded && findingsTotal === 0">No findings detected</p>
       </div>
     </div>
 

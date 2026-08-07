@@ -589,7 +589,8 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   // finding). A package can contribute to more than one bar (e.g.
   // missing a GR AND flagged by an anomaly) — this is a findings-by-
   // type count, not a mutually-exclusive bucket like Review Workload
-  // above.
+  // above. Fixed display order (not sorted by value) so the chart's
+  // row order — and each row's color — is stable across re-renders.
   get findingsOverview(): { label: string; value: number }[] {
     let missingDocs = 0, amountDiff = 0, qtyDiff = 0, anomalyDetected = 0;
     for (const t of this.transactions) {
@@ -599,43 +600,85 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
       if (t.has_material_finding) anomalyDetected++;
     }
     return [
-      { label: 'Missing Documents', value: missingDocs },
       { label: 'Amount Difference', value: amountDiff },
       { label: 'Quantity Difference', value: qtyDiff },
+      { label: 'Missing Documents', value: missingDocs },
       { label: 'Authenticity Failure', value: this.authenticityOutcomes.fail },
       { label: 'Anomaly Detected', value: anomalyDetected },
-    ].filter(c => c.value > 0).sort((a, b) => b.value - a.value);
+    ];
+  }
+
+  get findingsTotal(): number {
+    return this.findingsOverview.reduce((sum, c) => sum + c.value, 0);
   }
 
   renderExceptionChart() {
     if (!this.viewReady || !this.exceptionChartRef || this.isLoading || !this.authenticityLoaded) return;
     if (this.exceptionChartInstance) this.exceptionChartInstance.destroy();
+    if (!this.findingsTotal) return; // canvas isn't in the DOM here (*ngIf) — the "No findings detected" empty state shows instead
 
     const cats = this.findingsOverview;
-    if (!cats.length) return; // canvas isn't in the DOM here (*ngIf) — the "No findings detected" empty state shows instead
+    // Fixed per-category colors, matching the fixed row order above —
+    // not a cycling palette, so each finding type always reads as the
+    // same color.
+    const categoryColors = [CHART_PALETTE.violet, CHART_PALETTE.cyan, CHART_PALETTE.teal, CHART_PALETTE.pink, CHART_PALETTE.amber];
+    const maxValue = Math.max(1, ...cats.map(c => c.value));
 
-    // Categorical palette — these are different finding TYPES, not a
-    // severity ranking, so a varied hue per bar reads more clearly.
-    const categoryColors = [CHART_PALETTE.violet, CHART_PALETTE.cyan, CHART_PALETTE.blue, CHART_PALETTE.amber, CHART_PALETTE.pink];
+    // Draws each bar's own count just past its end — Chart.js's own
+    // plugin API (a plain object with lifecycle hooks), registered only
+    // on this chart's own `plugins` array below, not globally — no new
+    // library, no effect on any other chart on this page.
+    const valueLabelPlugin = {
+      id: 'findingsValueLabels',
+      afterDatasetsDraw(chart: any) {
+        const { ctx } = chart;
+        const meta = chart.getDatasetMeta(0);
+        meta.data.forEach((bar: any, i: number) => {
+          const value = chart.data.datasets[0].data[i];
+          ctx.save();
+          ctx.fillStyle = '#E6E7EE';
+          ctx.font = '600 10.5px Segoe UI, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(String(value), bar.x + 6, bar.y);
+          ctx.restore();
+        });
+      },
+    };
+
     const ctx = this.exceptionChartRef.nativeElement.getContext('2d');
     this.exceptionChartInstance = new Chart(ctx, {
       type: 'bar',
+      plugins: [valueLabelPlugin],
       data: {
         labels: cats.map(c => c.label),
         datasets: [{
           data: cats.map(c => c.value),
           backgroundColor: cats.map((_, i) => categoryColors[i % categoryColors.length]),
-          borderRadius: 4, borderSkipped: false,
+          borderRadius: 3, borderSkipped: false,
+          // Thinner bars with visible gaps between rows — Chart.js
+          // defaults (0.8/0.9) read as thick, near-touching blocks for
+          // a 5-row list like this.
+          categoryPercentage: 0.6, barPercentage: 0.5,
         }]
       },
       options: {
         indexAxis: 'y' as const,
         responsive: true,
         maintainAspectRatio: false,
+        // Room on the right for the value label so it never gets
+        // clipped at the canvas edge.
+        layout: { padding: { right: 18 } },
         animation: this.chartLoadAnimation(),
         plugins: { legend: { display: false } },
         scales: {
-          x: { display: false, beginAtZero: true },
+          x: {
+            display: true,
+            beginAtZero: true,
+            suggestedMax: Math.max(maxValue + 1, 4),
+            ticks: { stepSize: 1, font: { size: 9 }, color: '#8A8D9E' },
+            grid: { color: 'rgba(255, 255, 255, 0.08)' },
+          },
           y: { ticks: { font: { size: 10.5 }, color: '#E6E7EE' }, grid: { display: false } }
         }
       }
