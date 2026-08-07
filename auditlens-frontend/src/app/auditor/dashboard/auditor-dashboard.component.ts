@@ -255,7 +255,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   }
 
   // ── Secondary: Authenticity Outcomes (also feeds Audit Findings
-  // Overview's "Authenticity Risk" bar — renderExceptionChart() is
+  // Overview's "Authenticity Failure" bar — renderExceptionChart() is
   // re-triggered here too, since that chart depends on BOTH this data
   // and the transactions array from loadQueue(), whichever resolves
   // second is what actually draws it). ──
@@ -578,13 +578,18 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
   // Difference — the latter two from has_amount_mismatch/has_quantity_
   // mismatch, a small backend addition to GET /auditor/transactions
   // that just reads 2 already-fetched match_result keys, no new query),
-  // authenticity results (Authenticity Risk, reusing authenticityOutcomes.
-  // fail — the SAME aggregate the untouched Authenticity Outcomes chart
-  // already computes from GET /authenticity), and anomaly detection
-  // (Anomaly Detected, reusing has_material_finding). A package can
-  // contribute to more than one bar (e.g. missing a GR AND flagged by
-  // an anomaly) — this is a findings-by-type count, not a mutually-
-  // exclusive bucket like Review Workload above.
+  // authenticity results (Authenticity Failure, reusing
+  // authenticityOutcomes.fail — the SAME aggregate the untouched
+  // Authenticity Outcomes chart already computes from GET /authenticity.
+  // Named "Failure", not "Risk": .fail counts documents that already
+  // FAILED their authenticity check (risk_level HIGH), a confirmed
+  // outcome — "Risk" would misleadingly imply every one is a live,
+  // still-open risk rather than a completed, already-flagged check),
+  // and anomaly detection (Anomaly Detected, reusing has_material_
+  // finding). A package can contribute to more than one bar (e.g.
+  // missing a GR AND flagged by an anomaly) — this is a findings-by-
+  // type count, not a mutually-exclusive bucket like Review Workload
+  // above.
   get findingsOverview(): { label: string; value: number }[] {
     let missingDocs = 0, amountDiff = 0, qtyDiff = 0, anomalyDetected = 0;
     for (const t of this.transactions) {
@@ -597,7 +602,7 @@ export class AuditorDashboardComponent implements OnInit, AfterViewInit {
       { label: 'Missing Documents', value: missingDocs },
       { label: 'Amount Difference', value: amountDiff },
       { label: 'Quantity Difference', value: qtyDiff },
-      { label: 'Authenticity Risk', value: this.authenticityOutcomes.fail },
+      { label: 'Authenticity Failure', value: this.authenticityOutcomes.fail },
       { label: 'Anomaly Detected', value: anomalyDetected },
     ].filter(c => c.value > 0).sort((a, b) => b.value - a.value);
   }
