@@ -19460,3 +19460,57 @@ Setup/config needed:
      site.
   2. Frontend redeploy required - no new migration, no new dependency,
      no new environment variable, no backend redeploy needed.
+
+------------------------------------------------------------
+2026-08-07
+
+What changed:
+  fix: exclude deleted documents from authenticity workspace
+
+  routes/authenticity.py:
+    - GET /authenticity (Authenticity Workspace list) now joins to
+      documents and excludes: withdrawn_duplicate documents (and, since
+      PO/GR authenticity_checks rows share their invoice's own
+      document_id, every check tied to that same transaction); and
+      orphaned PO/GR authenticity_checks rows whose purchase_orders/
+      goods_receipts row no longer exists. Scoped to this ONE endpoint
+      only - GET /authenticity/<id> and POST /authenticity/<id>/recheck
+      still use the shared _SELECT_WITH_JOINS unchanged, so a hidden-
+      but-still-checked document can't be mistaken for "never checked"
+      and trigger a wasted on-demand AI re-check there.
+
+Why:
+  authenticity_checks.document_id is FK'd to documents(document_id) ON
+  DELETE CASCADE, but NOT to purchase_orders.po_id/goods_receipts.gr_id
+  - deleting a PO/GR row (e.g. a transaction package's own delete
+    action, which only hard-deletes documents it exclusively owns)
+  leaves its authenticity_checks row behind with nothing valid to join
+  to. The query's LEFT JOINs let that orphaned row through with blank
+  fields instead of excluding it, so it stayed visible - and counted -
+  in Documents Checked, Passed/Review Required/Risk Detected, the
+  Authenticity Outcome chart, Missing Evidence Analysis, and every
+  filter, all of which derive from this same single response. No
+  separate frontend fix was needed: the Workspace already re-fetches
+  fresh from this endpoint on every load, so the fix takes effect
+  immediately on refresh.
+
+Verified:
+  A rolled-back (never committed) transaction against the real local DB
+  proved the exact bug and fix: inserted a synthetic PO + its
+  authenticity_checks row, confirmed the fixed query included it;
+  deleted the PO row, confirmed the authenticity_checks row survived
+  (NOT cascade-deleted - the actual bug); confirmed the fixed query
+  then excluded it. Flask test-client GET /authenticity - status 200,
+  correct rows returned, no leaked orphans. python -c "import app" -
+  clean import. npx ng build --configuration production - clean
+  compile, no new warnings, no frontend file changed. Did not run the
+  full backend suite or Playwright, per this task's explicit
+  instruction. git diff --stat confirms only routes/authenticity.py
+  changed, 27 lines, one endpoint - no scoring/evidence/corrections/
+  re-check logic touched.
+
+Setup/config needed:
+  1. Push to GitHub - Render should auto-deploy the backend (Docker web
+     service).
+  2. Backend redeploy required - no new migration, no new dependency,
+     no new environment variable.

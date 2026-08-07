@@ -865,10 +865,35 @@ def get_authenticity_checks():
         conn   = get_db_connection()
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        query = _SELECT_WITH_JOINS
+        # Active-document filter — scoped to THIS list endpoint only
+        # (not the shared _SELECT_WITH_JOINS constant, which GET
+        # /authenticity/<id> and POST /authenticity/<id>/recheck also
+        # use: excluding a row there could make a genuinely-checked-but-
+        # now-hidden document look "never checked" and trigger a wasted
+        # on-demand AI re-check — out of scope for this fix). Excludes:
+        #   - withdrawn_duplicate documents (d.status != ...) — this ALSO
+        #     covers every authenticity_checks row for that invoice's
+        #     transaction (PO/GR checks share the invoice's own
+        #     document_id, see _SELECT_WITH_JOINS's own comment).
+        #   - orphaned PO/GR checks — authenticity_checks.document_id is
+        #     only FK'd to documents(document_id) ON DELETE CASCADE, not
+        #     to purchase_orders.po_id/goods_receipts.gr_id, so deleting
+        #     a PO/GR row (e.g. transaction-package deletion, which only
+        #     hard-deletes documents EXCLUSIVELY owned by that package)
+        #     leaves its authenticity_checks row behind with nothing to
+        #     join to — the exact "stale deleted document" bug. A
+        #     genuinely deleted INVOICE document needs no such check:
+        #     its own authenticity_checks rows are removed by the same
+        #     CASCADE automatically.
+        query = _SELECT_WITH_JOINS + '''
+            JOIN documents d ON ac.document_id = d.document_id
+            WHERE d.status != 'withdrawn_duplicate'
+              AND (ac.document_type != 'po' OR po.po_id IS NOT NULL)
+              AND (ac.document_type != 'gr' OR gr.gr_id IS NOT NULL)
+        '''
         params = []
         if status_filter != 'all' and status_filter in VALID_STATUSES:
-            query += ' WHERE ac.authenticity_status = %s'
+            query += ' AND ac.authenticity_status = %s'
             params.append(status_filter)
         query += ' ORDER BY ac.created_at DESC'
 
