@@ -5,9 +5,7 @@ import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { forkJoin, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { Chart, registerables } from 'chart.js';
-import { FormsModule } from '@angular/forms';
 import { environment } from '../../../environments/environment';
-import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
 import { FinanceUserMenuComponent } from '../shared/finance-user-menu.component';
 import { toMalaysiaDateKey } from '../../shared/datetime.util';
 
@@ -39,7 +37,7 @@ const STATUS_PRIORITY: Record<string, number> = {
 @Component({
   selector: 'app-finance-report',
   standalone: true,
-  imports: [CommonModule, FormsModule, FinanceNotificationBellComponent, FinanceUserMenuComponent],
+  imports: [CommonModule, FinanceUserMenuComponent],
   templateUrl: './finance-report.component.html',
   styleUrls: ['./finance-report.component.css']
 })
@@ -74,7 +72,6 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
 
   isLoading: boolean = false;
   chartReady: boolean = false;
-  searchText: string = '';
 
   // KPIs — all counted over grouped rows (this.documents), per "count
   // grouped packages, not individual invoices".
@@ -338,13 +335,12 @@ export class FinanceReportComponent implements OnInit, AfterViewInit {
     }
   }
 
+  // Search bar removed — this page's table shows every loaded document,
+  // unfiltered. Kept as a getter (rather than inlining this.documents at
+  // each call site) so paginatedDocuments/totalPages below don't need
+  // to change.
   get filteredDocuments() {
-    if (!this.searchText) return this.documents;
-    const q = this.searchText.toLowerCase();
-    return this.documents.filter((d: any) =>
-      d.invoiceLabel?.toLowerCase().includes(q) ||
-      d.vendorName?.toLowerCase().includes(q)
-    );
+    return this.documents;
   }
 
   renderAllCharts() {

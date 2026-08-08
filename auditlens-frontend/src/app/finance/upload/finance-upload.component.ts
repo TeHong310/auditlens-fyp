@@ -6,7 +6,6 @@ import { forkJoin, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import JSZip from 'jszip';
 import { environment } from '../../../environments/environment';
-import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
 import { FinanceUserMenuComponent } from '../shared/finance-user-menu.component';
 
 // Same "pick the most urgent member" ranking finance-home.component.ts
@@ -88,7 +87,7 @@ const MIME_BY_EXT: Record<string, string> = {
 @Component({
   selector: 'app-finance-upload',
   standalone: true,
-  imports: [CommonModule, FinanceNotificationBellComponent, FinanceUserMenuComponent],
+  imports: [CommonModule, FinanceUserMenuComponent],
   templateUrl: './finance-upload.component.html',
   styleUrls: ['./finance-upload.component.css']
 })

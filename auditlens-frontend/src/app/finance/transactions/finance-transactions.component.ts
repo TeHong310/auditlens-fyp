@@ -4,7 +4,6 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
-import { FinanceNotificationBellComponent } from '../shared/finance-notification-bell.component';
 import { FinanceUserMenuComponent } from '../shared/finance-user-menu.component';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -21,7 +20,7 @@ const STATUS_LABELS: Record<string, string> = {
 @Component({
   selector: 'app-finance-transactions',
   standalone: true,
-  imports: [CommonModule, FormsModule, FinanceNotificationBellComponent, FinanceUserMenuComponent],
+  imports: [CommonModule, FormsModule, FinanceUserMenuComponent],
   templateUrl: './finance-transactions.component.html',
   styleUrls: ['./finance-transactions.component.css']
 })

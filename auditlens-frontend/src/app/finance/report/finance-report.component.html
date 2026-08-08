@@ -7,12 +7,6 @@
       <p class="page-subtitle">Audit results and document processing summary</p>
     </div>
     <div class="header-right">
-      <div class="search-bar">
-        <i class="ph-duotone ph-magnifying-glass" style="font-size:14px; color:var(--text-muted);"></i>
-        <input type="text" placeholder="Search documents..." class="search-input"
-               [(ngModel)]="searchText" [ngModelOptions]="{standalone: true}"/>
-      </div>
-      <app-finance-notification-bell></app-finance-notification-bell>
       <app-finance-user-menu></app-finance-user-menu>
       <button class="btn-export" (click)="exportReport()">
         <i class="ph-duotone ph-download-simple" style="font-size:14px; color:white;"></i>
