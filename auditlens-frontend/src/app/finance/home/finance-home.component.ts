@@ -101,6 +101,13 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
   grDocumentIds: Set<number> = new Set();
   poGrLoaded: boolean = false;
   cyclesLoaded: boolean = false;
+  // Document Type Distribution's Invoice count comes from allDocuments
+  // (loadDocuments() below), a separate parallel request from the one
+  // that sets poGrLoaded — this flag lets computeDocumentTypeDistribution/
+  // renderDocTypeChart wait on BOTH before drawing, instead of racing
+  // ahead with allDocuments still empty whenever loadPoGrLists() happens
+  // to resolve first.
+  documentsLoaded: boolean = false;
 
   // ── Document Processing Queue grouping — reuses the SAME
   // transaction-package data Auditor Home's Transaction Review Queue
@@ -203,17 +210,29 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
         this.computeDocStatusOverview(thisMonthDocs);
         this.computePriorityFinanceItems(thisMonthDocs);
         this.computeQueueGroups();
+        this.documentsLoaded = true;
+        this.computeDocumentTypeDistribution();
 
         this.isLoading = false;
         this.cdr.detectChanges();
         this.renderUploadTrendChart();
         this.renderOcrPerfChart();
         this.renderOcrConfidenceChart();
+        this.renderDocTypeChart();
 
         const returnedThisMonth = thisMonthDocs.filter((d: any) => d.status === 'returned');
         this.loadCyclesForActionStats(returnedThisMonth);
       },
-      error: () => { this.isLoading = false; }
+      error: () => {
+        this.isLoading = false;
+        // Still flip the flag and attempt the chart on failure — allDocuments
+        // stays [] (invoice count 0), but this must not leave Document Type
+        // Distribution waiting on documentsLoaded forever just because this
+        // one request failed.
+        this.documentsLoaded = true;
+        this.computeDocumentTypeDistribution();
+        this.renderDocTypeChart();
+      }
     });
   }
 
@@ -360,6 +379,10 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
   // (loadPoGrLists above) — all filtered to this month for consistency
   // with the KPI cards and the rest of the secondary chart row.
   private computeDocumentTypeDistribution() {
+    // Needs both loadDocuments() (Invoice count) and loadPoGrLists()
+    // (PO/GR counts) to have resolved — see documentsLoaded's own
+    // comment above for why this can't just check poGrLoaded alone.
+    if (!this.documentsLoaded || !this.poGrLoaded) return;
     const inMonth = (dateStr: string) => isSameMalaysiaMonth(dateStr);
     const invoiceCount = this.allDocuments.filter((d: any) => inMonth(d.uploaded_at)).length;
     const poCount = this.poList.filter((p: any) => inMonth(p.uploaded_at)).length;
@@ -552,7 +575,7 @@ export class FinanceHomeComponent implements OnInit, AfterViewInit {
   }
 
   renderDocTypeChart() {
-    if (!this.viewReady || !this.docTypeChartRef || !this.poGrLoaded) return;
+    if (!this.viewReady || !this.docTypeChartRef || !this.poGrLoaded || !this.documentsLoaded) return;
     if (this.docTypeChartInstance) this.docTypeChartInstance.destroy();
 
     const t = this.documentTypeDistribution;

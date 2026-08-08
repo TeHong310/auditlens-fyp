@@ -152,7 +152,7 @@
       <p class="chart-subtitle">Invoice / PO / GR</p>
       <div class="chart-body chart-body-small">
         <canvas #docTypeChart></canvas>
-        <p class="chart-loading-note" *ngIf="!poGrLoaded">Loading…</p>
+        <p class="chart-loading-note" *ngIf="!poGrLoaded || !documentsLoaded">Loading…</p>
       </div>
     </div>
 
