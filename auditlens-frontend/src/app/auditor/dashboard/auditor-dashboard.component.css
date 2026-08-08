@@ -31,20 +31,6 @@
   margin-top: 2px;
 }
 
-.btn-export {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 9px 18px;
-  background: var(--accent);
-  color: var(--text-primary);
-  border: none;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
 /* ── KPI Cards — Finance Home card language ── */
 .stats-row {
   display: grid;
